@@ -1,4 +1,5 @@
-neohome
+# built binary (the one at repo root)
+/neohome
+# saved world snapshots
 world.gob
 *.gob
-/tmp/
