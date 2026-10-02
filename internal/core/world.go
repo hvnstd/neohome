@@ -50,6 +50,15 @@ type World struct {
 	Power              float64 // household power budget 0..1
 	Heating            bool
 	UtilitiesSuspended bool
+
+	// ---- workstream slots. Each pointer's SHAPE is owned by one file:
+	//   WAN  -> wan.go   (public internet / transit / ASN)
+	//   Cron -> cron.go  (world scheduler)
+	//   VMs  -> vm.go    (virtualisation)
+	// Touch only the pointer here; add fields inside the owning file.
+	WAN  *WAN
+	Cron *CronState
+	VMs  *VMHost
 }
 
 type Event struct {

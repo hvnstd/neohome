@@ -207,6 +207,9 @@ func (w *World) Tick() {
 	}
 	w.NPCSchedule()
 	w.MarketTick()
+	w.WANTick()
+	w.CronTick()
+	w.VMTick()
 }
 
 func (w *World) AssistantSkillCount() int { return w.assistSkills }
