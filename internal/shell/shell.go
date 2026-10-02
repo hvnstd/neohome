@@ -273,11 +273,18 @@ func (s *Shell) commandExists(name string) bool {
 		}
 	}
 	// BusyBox applets: only the ones the game actually implements, never a
-	// name listed just to inflate the command count.
-	if s.Dev.OS.Shell == "/bin/ash" && busyboxHas(name) {
+	// name listed just to inflate the command count. OSInfo.Shell is stored
+	// bare ("ash"), so accept both spellings — otherwise this gate never fires.
+	if isBusyboxShell(s.Dev.OS.Shell) && busyboxHas(name) {
 		return true
 	}
 	return false
+}
+
+// isBusyboxShell reports whether a shell string names the BusyBox ash. World
+// data stores it bare ("ash"); hand-written profiles may use the full path.
+func isBusyboxShell(sh string) bool {
+	return sh == "ash" || sh == "/bin/ash" || sh == "busybox ash"
 }
 
 // bbApplets is the set of BusyBox applets that have a real game implementation.

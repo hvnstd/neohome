@@ -279,11 +279,22 @@ func cmdWget(s *Shell, args []string) int {
 func httpFetch(s *Shell, args []string, tool string) int {
 	url := ""
 	output := ""
+	wantOutputNext := false
 	for _, a := range args {
-		if a == "-O" {
+		// real curl/wget accept both the attached (-oFILE / -OFILE) and the
+		// separated (-o FILE / -O FILE) forms
+		if wantOutputNext {
+			output = a
+			wantOutputNext = false
+			continue
+		}
+		if a == "-O" || a == "-o" || a == "--output" {
+			wantOutputNext = true
 			continue
 		}
 		if strings.HasPrefix(a, "-o") && len(a) > 2 {
+			output = a[2:]
+		} else if strings.HasPrefix(a, "-O") && len(a) > 2 {
 			output = a[2:]
 		} else if strings.HasPrefix(a, "--output=") {
 			output = strings.TrimPrefix(a, "--output=")
