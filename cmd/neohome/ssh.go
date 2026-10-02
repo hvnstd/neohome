@@ -2,8 +2,7 @@ package main
 
 import (
 	"bufio"
-	"crypto/ed25519"
-	"crypto/rand"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"log"
@@ -27,12 +26,19 @@ import (
 
 var ssHostOnce sync.Once
 
-func newHostKey() ssh.Signer {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+// hostSigner builds the server's signing identity from the key kept with the
+// world, so the server is the SAME machine after a restart — which is the whole
+// point of a host key.
+func hostSigner(w *core.World) ssh.Signer {
+	der, err := hostKey(w)
 	if err != nil {
 		log.Fatalf("ssh host key: %v", err)
 	}
-	s, err := ssh.NewSignerFromKey(priv)
+	key, err := x509.ParsePKCS8PrivateKey(der)
+	if err != nil {
+		log.Fatalf("ssh host key parse: %v", err)
+	}
+	s, err := ssh.NewSignerFromKey(key)
 	if err != nil {
 		log.Fatalf("ssh host key signer: %v", err)
 	}
@@ -67,7 +73,7 @@ func sshEntry(w *core.World, addr string) error {
 			return &ssh.Permissions{Extensions: map[string]string{"player": c.User()}}, nil
 		},
 	}
-	cfg.AddHostKey(newHostKey())
+	cfg.AddHostKey(hostSigner(w))
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

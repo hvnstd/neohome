@@ -32,6 +32,11 @@ type World struct {
 	CauseFault    Fault
 	Vulns         []Vuln
 
+	// The SSH host key is part of the world's identity: a server whose key
+	// changes every restart is not the same server, and every client would
+	// rightly complain. Stored as PKCS8 bytes so gob can carry it.
+	SSHHostKey []byte
+
 	Events   []Event
 	News     []string
 	MailLog  []string

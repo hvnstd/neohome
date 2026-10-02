@@ -2,29 +2,28 @@
 set -eu
 cd /workspace/neohome
 export PATH=/workspace/go/bin:$PATH GOCACHE=/workspace/gocache GOPATH=/workspace/gopath
-rm -rf tools/probe
 go build ./...
 go vet ./...
 go test ./tests/ -count=1 | tail -1
 git -c user.name="Neko" -c user.email="neko@neohome.local" add -A
 git -c user.name="Neko" -c user.email="neko@neohome.local" commit -q -F - <<'MSG'
-dhcp: a lease is real state on both ends
+persistence actually works, and the server keeps its identity
 
-The router now actually allocates addresses and records them; a client actually
-takes the address onto its interface, and loses its route when it cannot.
+The world was never being saved. Two independent bugs hid it: nothing ever
+called Save (the engine's comment claimed it did), and the shutdown handler sat
+after listen calls that block forever, so a clean exit silently lost everything.
+The world file is now written on a timer and on exit.
 
-- dhcp.go: server allocates from the pool declared in the router's own
-  dnsmasq.conf (so editing that file changes what can be handed out), sticky
-  leases, a finite pool that refuses rather than invents addresses, release
-  that frees the address again
-- udhcpc: real BusyBox DHCP client, fails loudly with no server
-- leases: the router's own lease table
-- fix ip: `ip -4 addr show eth0` errored (only args[0] was parsed, and `show`
-  was not accepted after the object)
-- fix live_full.sh: its `ssh root@router "cmd"` never ran — the password prompt
-  consumed the command line, so the router step was silently a no-op
+- worldPath(): honour NEOHOME_WORLD, so the verify scripts stop scribbling on
+  the repo's own world.gob
+- engine() really saves; shutdown save moved into its own goroutine where it can
+  actually be reached; logs "world saved to <path>"
+- SSH host key is generated once and kept in the world, so the server is the
+  same machine after a restart instead of a new one every boot
+- loadOrCreate() reports whether it loaded or started fresh
 
-67/67 tests; live ssh: udhcpc leases .50, the router's table shows it by
-hostname, stopping dnsmasq really breaks the next lease, starting it restores it.
+68/68 tests. Live: run 1 leaves a file and takes a lease, is killed, saves;
+run 2 loads it, the marker file is there and the router still shows the lease.
+key_verify.sh: the key is identical across a restart and differs between worlds.
 MSG
 git log --oneline | head -2

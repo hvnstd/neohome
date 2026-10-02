@@ -5,23 +5,42 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
-	"time"
+	"syscall"
 
 	"neohome/internal/core"
 	"neohome/internal/shell"
 )
 
 func main() {
-	w, err := core.LoadWorld("world.gob")
-	if err != nil {
-		w = core.NewWorld()
-	}
-	log.Printf("world: %d devices, %d players", len(w.Devices), len(w.Players))
+	path := worldPath()
+	w := loadOrCreate(path)
+	log.Printf("world: %d devices, %d players (%s)", len(w.Devices), len(w.Players), path)
 
-	// background engine: advances sim, runs assistant, saves periodically.
-	go engine(w)
+	// background engine: advances sim, runs assistant, and really commits the
+	// world to disk — the save is what makes any of this persist.
+	go engine(w, path)
+
+	// Commit on shutdown. This must run in its own goroutine: the listeners below
+	// block forever, so anything placed after them would never be reached and a
+	// clean exit would silently lose the world.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		w.Lock()
+		err := w.Save(path)
+		w.Unlock()
+		if err != nil {
+			log.Println("final save failed:", err)
+		} else {
+			log.Println("world saved to", path)
+		}
+		os.Exit(0)
+	}()
 
 	// Each entry binds independently: a taken telnet port must not stop the SSH
 	// door (or the reverse), and neither may take the world down.
@@ -38,6 +57,7 @@ func main() {
 	// Both entries are down (or in use): keep the world running headless so the
 	// engine still ticks and state still persists.
 	log.Println("no live entry; world continues headless")
+
 	select {}
 }
 
@@ -50,15 +70,6 @@ func acceptLoop(ln net.Listener, serve func(net.Conn)) {
 			return
 		}
 		go serve(conn)
-	}
-}
-
-func engine(w *core.World) {
-	for {
-		w.Lock()
-		w.Tick()
-		w.Unlock()
-		time.Sleep(3 * time.Second)
 	}
 }
 

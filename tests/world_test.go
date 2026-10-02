@@ -210,6 +210,56 @@ func TestShellReadsRealDiskState(t *testing.T) {
 	}
 }
 
+// Power, DHCP leases and the host key are all world state and must survive a
+// save/load cycle. If any of them silently reset, the world is not persistent —
+// it would just look persistent until the first restart.
+func TestPersistenceKeepsPowerLeaseAndKey(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+
+	// give the house power back first, then lease and cut, so the saved world has
+	// both a real outage and a real lease in it
+	l, err := pc.DHCPRenew()
+	if err != nil {
+		t.Fatalf("lease before save: %v", err)
+	}
+	nas := w.Devices["nas-alex"]
+	nas.UPS = &core.UPSInfo{ChargePct: 42, LastState: "on battery"}
+	w.CutPower("alex") // the saved world is mid-outage
+	w.SSHHostKey = []byte("test-key-material-not-a-real-key")
+
+	path := t.TempDir() + "/w.gob"
+	if err := w.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	w2, err := core.LoadWorld(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := w2.Devices["nas-alex"].UPS; got == nil || got.ChargePct != 42 {
+		t.Fatalf("UPS charge did not survive the save: %+v", got)
+	}
+	if len(w2.SSHHostKey) == 0 {
+		t.Fatal("the host key did not survive the save — the server would change identity")
+	}
+	// the lease must still be recorded on the router, and still route
+	r2 := w2.Devices["router-alex"]
+	if _, ok := r2.DHCPL[pc.Ifaces[0].MAC]; !ok {
+		t.Fatalf("the DHCP lease did not survive; router holds %d lease(s)", len(r2.DHCPL))
+	}
+	if w2.IPMap[l.IP] != "pc-alex" {
+		t.Fatalf("the leased address no longer routes to the pc after load: %q", w2.IPMap[l.IP])
+	}
+	// the outage survived too: a reloaded world is still dark
+	if w2.HouseholdPower() {
+		t.Fatal("the power cut did not survive the save")
+	}
+	if w2.Devices["pc-alex"].Powered() {
+		t.Fatal("the pc should still be dark after reloading a world saved mid-outage")
+	}
+}
+
 func TestPersistenceRoundTrip(t *testing.T) {
 	w := core.NewWorld()
 	router := w.Devices["router-alex"]
