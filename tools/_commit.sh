@@ -4,16 +4,14 @@ cd /workspace/neohome
 export PATH=/workspace/go/bin:$PATH GOCACHE=/workspace/gocache GOPATH=/workspace/gopath
 go build ./... && go vet ./... && go test ./tests/ -count=1 | tail -1
 git -c user.name="Neko" -c user.email="neko@neohome.local" add -A
-git -c user.name="Neko" -c user.email="neko@neohome.local" commit -q -m "shell history is a file on the device: evidence, in both directions
+git -c user.name="Neko" -c user.email="neko@neohome.local" commit -q -m "tmux: parse -t like tmux does, and prove the session loop live
 
-Typed commands land in the account's real history file (~/.bash_history,
-~/.ash_history, HISTFILE), loaded at login the way bash loads it. So:
-  - the attacker's trail survives the session and is readable by a defender
-  - \`history -c\` clears it, and that act is itself recorded
-  - a BusyBox box gets .ash_history, not bash's file
+\`tmux send -t <session>\` / \`attach -t\` / \`kill-session -t\` were treating
+\"-t\" as the session name and then reporting \"session not found: -t\", so
+sending into a detached session silently did nothing. One tmuxTarget() parser
+now handles \"-t name\", \"-tname\" and a bare positional name.
 
-Also fixed: /bin/bash contains the substring \"ash\", so the shell-name check
-had to test bash first or every account on a bash box got ash's history file.
-
-tools/history_verify.sh drives the whole loop over real ssh."
+tools/tmux_verify.sh drives it over real ssh: no sessions (previously a panic),
+create -> a live process appears in ps, send -> attach shows the session's own
+output with a (tmux:name) prompt, kill -> the process is gone."
 git log --oneline | head -1

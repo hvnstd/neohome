@@ -89,6 +89,29 @@ func TestTmuxSessionsAreRealProcesses(t *testing.T) {
 
 // A session must not outlive its own content silently: `ls` must not claim a
 // session is alive after it has been killed.
+// tmux spells its session target several ways and a command that ignores -t
+// silently addresses a session called "-t", which looks like it worked.
+func TestTmuxTargetParsing(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	u := pc.FindUser("alex")
+	out := &bufOut{}
+	sh := shell.NewShell(w, pc, u, out, "10.77.1.11", "xterm")
+	sh.ExecLine("tmux new -s build -d")
+	sh.ExecLine("tmux send -t build echo from-send")
+	sh.ExecLine("tmux attach -t build")
+	if !strings.Contains(out.String(), "from-send") {
+		t.Fatalf("`tmux send -t build ...` did not reach the session:\n%s", out.String())
+	}
+	// "-tbuild" (no space) is equally valid tmux syntax
+	out2 := &bufOut{}
+	sh2 := shell.NewShell(w, pc, u, out2, "10.77.1.11", "xterm")
+	sh2.ExecLine("tmux send -tbuild echo glued-form")
+	if !strings.Contains(out2.String()+strings.Join(pc.Sessions["build"].Lines, "\n"), "glued-form") {
+		t.Fatalf("`tmux send -tbuild ...` did not reach the session")
+	}
+}
+
 func TestTmuxListReportsNoSessionsHonestly(t *testing.T) {
 	w := core.NewWorld()
 	pc := w.Devices["pc-alex"]

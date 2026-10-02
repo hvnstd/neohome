@@ -50,6 +50,30 @@ func cmdTmux(s *Shell, args []string) int {
 	}
 }
 
+// tmuxTarget extracts the session name a subcommand targets, understanding the
+// real forms: "-t name", "-tname", and a bare positional name.
+func tmuxTarget(args []string) (name string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-t" && i+1 < len(args):
+			name = args[i+1]
+			i++
+		case strings.HasPrefix(a, "-t") && len(a) > 2:
+			name = a[2:]
+		case strings.HasPrefix(a, "-"):
+			// an unrelated flag: ignore it
+		default:
+			if name == "" {
+				name = a
+			} else {
+				rest = append(rest, a)
+			}
+		}
+	}
+	return
+}
+
 // tmuxNew creates a session backed by a real process on this device. The session
 // survives logout, which is the whole point.
 func tmuxNew(s *Shell, args []string) int {
@@ -124,9 +148,9 @@ func tmuxList(s *Shell) int {
 // tmuxAttach reattaches to a session and replays what it has produced — the
 // output of work that kept running while the player was away.
 func tmuxAttach(s *Shell, args []string) int {
-	name := "session"
-	if len(args) > 0 {
-		name = args[0]
+	name, _ := tmuxTarget(args)
+	if name == "" {
+		name = "session"
 	}
 	sess, ok := s.Dev.Sessions[name]
 	if !ok {
@@ -148,9 +172,9 @@ func tmuxAttach(s *Shell, args []string) int {
 // tmuxKill really ends the session's process, so a long job run under tmux dies
 // with it.
 func tmuxKill(s *Shell, args []string) int {
-	name := "session"
-	if len(args) > 0 {
-		name = args[0]
+	name, _ := tmuxTarget(args)
+	if name == "" {
+		name = "session"
 	}
 	sess, ok := s.Dev.Sessions[name]
 	if !ok {
@@ -177,12 +201,12 @@ func tmuxKill(s *Shell, args []string) int {
 
 // tmuxSend types a command into a detached session: the work runs server-side.
 func tmuxSend(s *Shell, args []string) int {
-	if len(args) < 2 {
-		fmt.Fprintln(s.Out, "usage: tmux send-keys <session> <command...>")
+	name, rest := tmuxTarget(args)
+	if name == "" || len(rest) == 0 {
+		fmt.Fprintln(s.Out, "usage: tmux send-keys [-t session] <command...>")
 		return 1
 	}
-	name := args[0]
-	line := strings.Join(args[1:], " ")
+	line := strings.Join(rest, " ")
 	sess, ok := s.Dev.Sessions[name]
 	if !ok {
 		fmt.Fprintf(s.Out, "session not found: %s\n", name)
