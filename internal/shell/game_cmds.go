@@ -13,7 +13,7 @@ func init() {
 	}{
 		{"su", cmdSu}, {"sudo", cmdSudo},
 		{"fastfetch", cmdFastfetch}, {"neofetch", cmdFastfetch},
-		{"who", cmdWho}, {"w", cmdWho}, {"history", cmdHistory}, {"clear", cmdClear},
+		{"who", cmdWho}, {"w", cmdWho}, {"clear", cmdClear}, {"history", cmdHistory},
 		{"exit", cmdExit}, {"logout", cmdExit},
 	} {
 		builtinTable[e.name] = e.fn
@@ -106,13 +106,6 @@ func cmdWho(s *Shell, args []string) int {
 	fmt.Fprintf(s.Out, "%-10s %-8s %-12s %s\n", s.User.Name, s.TTY, time.Now().Format("2006-01-02 15:04"), s.srcIP)
 	for _, l := range s.Dev.Active {
 		fmt.Fprintf(s.Out, "%-10s %-8s %-12s %s\n", l.User, l.TTY, l.At.Format("2006-01-02 15:04"), l.From)
-	}
-	return 0
-}
-
-func cmdHistory(s *Shell, args []string) int {
-	for i, h := range s.hist {
-		fmt.Fprintf(s.Out, "%4d  %s\n", i+1, h)
 	}
 	return 0
 }

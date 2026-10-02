@@ -211,6 +211,10 @@ type User struct {
 	Home   string
 	Shell  string
 	IsBot  bool
+	// HistFile is where this account's shell history is kept, as HISTFILE
+	// actually works. The file is world state: it survives the session, the
+	// account's own user can rewrite it, and it is evidence on disk.
+	HistFile string
 }
 
 type Proc struct {

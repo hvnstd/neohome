@@ -18,12 +18,14 @@ type Shell struct {
 	// capture collects what a session's shell printed, so a detached tmux session
 	// can show its output when the player reattaches.
 	capture []string
-	W       *core.World
-	Dev     *core.Device
-	User    *core.User
-	CWD     string
-	Env     map[string]string
-	Out     io.Writer
+	// histLoaded guards the one-time read of the account's history file.
+	histLoaded bool
+	W          *core.World
+	Dev        *core.Device
+	User       *core.User
+	CWD        string
+	Env        map[string]string
+	Out        io.Writer
 	// Stdin carries the previous pipeline stage's output. Commands that read
 	// stdin (grep/head/tail/sort/uniq/wc/cat) use it when given no file.
 	Stdin string
@@ -58,6 +60,31 @@ var builtinTable = map[string]Cmd{}
 // the same CRLF handling as a live session.
 func (s *Shell) SetInput(r io.Reader) { s.bufrd = bufio.NewReader(r) }
 
+// loadHistory reads the account's history file into the session, like bash does
+// when an interactive shell starts. Without this, `history` on a fresh login
+// shows nothing and the previous session's trail is invisible.
+func (s *Shell) loadHistory() {
+	if s.Dev == nil || s.Dev.FS == nil || s.User == nil {
+		return
+	}
+	hf := s.HistoryFile()
+	if hf == "" {
+		return
+	}
+	data, ok := s.Dev.FS.Read(hf)
+	if !ok {
+		return
+	}
+	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if l != "" {
+			s.hist = append(s.hist, l)
+		}
+	}
+	if s.bufrd == nil && len(s.hist) > 300 {
+		s.hist = s.hist[len(s.hist)-300:]
+	}
+}
+
 // ReadLineForTest exposes the shell's line reader for regression tests.
 func (s *Shell) ReadLineForTest() string {
 	line, _ := s.readLine()
@@ -74,6 +101,8 @@ func registerAll() {}
 // ---- prompt / loop ----
 
 func (s *Shell) PS1() string {
+	// load on first prompt: same point a real interactive shell reaches it
+	s.loadHistoryOnce()
 	suffix := "$"
 	if s.User.UID == 0 {
 		suffix = "#"
@@ -115,7 +144,7 @@ func (s *Shell) RunLoop(r io.Reader) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		s.hist = append(s.hist, line)
+		s.recordHistory(line)
 		s.ExecLine(line)
 		if s.exitFlag || s.detach {
 			return
