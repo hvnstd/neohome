@@ -15,12 +15,15 @@ type Cmd func(s *Shell, args []string) int
 
 // Shell: a game shell session bound to (device, user).
 type Shell struct {
-	W    *core.World
-	Dev  *core.Device
-	User *core.User
-	CWD  string
-	Env  map[string]string
-	Out  io.Writer
+	// capture collects what a session's shell printed, so a detached tmux session
+	// can show its output when the player reattaches.
+	capture []string
+	W       *core.World
+	Dev     *core.Device
+	User    *core.User
+	CWD     string
+	Env     map[string]string
+	Out     io.Writer
 	// Stdin carries the previous pipeline stage's output. Commands that read
 	// stdin (grep/head/tail/sort/uniq/wc/cat) use it when given no file.
 	Stdin string

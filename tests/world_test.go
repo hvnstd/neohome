@@ -28,6 +28,79 @@ func run(t *testing.T, w *core.World, dev *core.Device, user string, line string
 	return out.String()
 }
 
+// tmux must not panic, and a session must be backed by a real process that
+// keeps existing after you detach — otherwise "start it in tmux and log out" is
+// a lie and nothing survives the session.
+func TestTmuxSessionsAreRealProcesses(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	sh := func(line string) string { return run(t, w, pc, "alex", line) }
+
+	// this used to panic: Sessions was a nil map on every device
+	if out := sh("tmux new work"); !strings.Contains(out, "created session work") {
+		t.Fatalf("tmux new should create a session, got:\n%s", out)
+	}
+	if _, ok := pc.Sessions["work"]; !ok {
+		t.Fatal("the session was not recorded on the device")
+	}
+	sess := pc.Sessions["work"]
+	if sess.Proc == nil {
+		t.Fatal("a session must be backed by a real process")
+	}
+	// the process is really in the device's process table
+	found := false
+	for _, p := range pc.Procs {
+		if p.PID == sess.Proc.PID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the session's process is not in the process table")
+	}
+
+	// this used to nil-deref
+	if out := sh("tmux ls"); !strings.Contains(out, "work") {
+		t.Fatalf("tmux ls should list the session, got:\n%s", out)
+	}
+
+	// work sent to a detached session really runs on the device
+	sh("tmux send-keys work touch /home/alex/from-tmux")
+	if _, ok := pc.FS.Read("/home/alex/from-tmux"); !ok {
+		t.Fatal("a command sent to the session did not actually run on the device")
+	}
+
+	// attaching shows what the session produced
+	if out := sh("tmux attach work"); !strings.Contains(out, "from-tmux") {
+		t.Fatalf("attach should replay the session's output, got:\n%s", out)
+	}
+
+	// killing the session kills its process
+	pid := sess.Proc.PID
+	sh("tmux kill-session work")
+	if _, ok := pc.Sessions["work"]; ok {
+		t.Fatal("the session should be gone")
+	}
+	for _, p := range pc.Procs {
+		if p.PID == pid {
+			t.Fatal("killing the session left its process running")
+		}
+	}
+}
+
+// A session must not outlive its own content silently: `ls` must not claim a
+// session is alive after it has been killed.
+func TestTmuxListReportsNoSessionsHonestly(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	sh := func(line string) string { return run(t, w, pc, "alex", line) }
+	out := sh("tmux ls")
+	if !strings.Contains(out, "no server running") && !strings.Contains(out, "no sessions") {
+		if strings.Contains(out, "windows") {
+			t.Fatalf("tmux ls invented a session that was never created:\n%s", out)
+		}
+	}
+}
+
 // `ip -4 addr show eth0` is the most common networking command in the world.
 // Parsing only the first argument made it an error, which no real player would
 // accept.

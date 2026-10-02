@@ -13,7 +13,7 @@ func (w *World) addDevice(id, hostname, profile, owner string, os OSInfo, hw Har
 		OS: os, HW: hw, FS: NewVFS(), Users: map[string]*User{},
 		Services: map[string]*Service{}, Boot: w.Started.Add(-36 * time.Hour),
 		PowerOK: true, NetUp: true, DHCPL: map[string]Lease{}, Installed: map[string]*VPkg{},
-		Fail2Ban: map[string]int{},
+		Fail2Ban: map[string]int{}, Sessions: map[string]*TermSession{},
 	}
 	if lanIP != "" {
 		cidr := lanIP[:len(lanIP)-len(lastOctet(lanIP))-1] + ".0/24"

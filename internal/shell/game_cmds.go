@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"neohome/internal/core"
 )
 
 func init() {
@@ -13,7 +11,7 @@ func init() {
 		name string
 		fn   Cmd
 	}{
-		{"tmux", cmdTmux}, {"screen", cmdScreen}, {"su", cmdSu}, {"sudo", cmdSudo},
+		{"su", cmdSu}, {"sudo", cmdSudo},
 		{"fastfetch", cmdFastfetch}, {"neofetch", cmdFastfetch},
 		{"who", cmdWho}, {"w", cmdWho}, {"history", cmdHistory}, {"clear", cmdClear},
 		{"exit", cmdExit}, {"logout", cmdExit},
@@ -24,65 +22,6 @@ func init() {
 
 // tmux / screen: real background sessions surviving SSH disconnect.
 // They are stored on the DEVICE (not the shell) so they outlive the session.
-
-func cmdTmux(s *Shell, args []string) int {
-	sub := ""
-	if len(args) > 0 {
-		sub = args[0]
-	}
-	switch sub {
-	case "new":
-		name := "session"
-		if len(args) > 1 {
-			name = args[1]
-		}
-		if _, ok := s.Dev.Sessions[name]; ok {
-			fmt.Fprintf(s.Out, "sessions should be unique: %s\n", name)
-			return 1
-		}
-		s.Dev.Sessions[name] = &core.TermSession{
-			Name: name, Lines: []string{}, CWD: s.CWD, User: s.User.Name, Alive: true,
-		}
-		fmt.Fprintf(s.Out, "[tmux] created session %s\n", name)
-		return 0
-	case "ls":
-		for n, sess := range s.Dev.Sessions {
-			fmt.Fprintf(s.Out, "%s: %d windows (created %s)\n", n, 1, sess.Proc.Start.Format("15:04:05"))
-		}
-		return 0
-	case "attach":
-		name := "session"
-		if len(args) > 1 {
-			name = args[1]
-		}
-		sess, ok := s.Dev.Sessions[name]
-		if !ok {
-			fmt.Fprintf(s.Out, "no sessions\n")
-			return 1
-		}
-		for _, l := range sess.Lines {
-			fmt.Fprintln(s.Out, l)
-		}
-		fmt.Fprintf(s.Out, "[tmux] attached to %s\n", name)
-		s.InTmux = name
-		return 0
-	case "kill-session":
-		name := "session"
-		if len(args) > 1 {
-			name = args[1]
-		}
-		delete(s.Dev.Sessions, name)
-		fmt.Fprintf(s.Out, "[tmux] killed session %s\n", name)
-		return 0
-	default:
-		fmt.Fprintln(s.Out, "usage: tmux new|ls|attach|kill-session [name]")
-		return 1
-	}
-}
-
-func cmdScreen(s *Shell, args []string) int {
-	return cmdTmux(s, args)
-}
 
 func cmdSu(s *Shell, args []string) int {
 	target := "root"
