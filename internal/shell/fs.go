@@ -34,9 +34,13 @@ func init() {
 func (s *Shell) out(s_ string) { fmt.Fprint(s.Out, s_) }
 
 func cmdLs(s *Shell, args []string) int {
+	// flags come first: `ls -l /etc/shadow` names the file, not "-l"
 	p := "."
-	if len(args) > 0 {
-		p = s.abs(args[0])
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			p = s.abs(a)
+			break
+		}
 	}
 	vfs, p, _ := s.ResolveVFS(p)
 	if vfs == nil {
@@ -88,7 +92,11 @@ func lsLine(n *core.INode) string {
 	if owner == "" {
 		owner = "root"
 	}
-	return fmt.Sprintf("%s %4d %-8s %-8s %8d %s %s", perm, 4096, owner, owner, len(n.Data), n.MTime.Format("Jan 2 15:04"), path.Base(n.Path))
+	group := n.Group
+	if group == "" {
+		group = owner
+	}
+	return fmt.Sprintf("%s %4d %-8s %-8s %8d %s %s", perm, 4096, owner, group, len(n.Data), n.MTime.Format("Jan 2 15:04"), path.Base(n.Path))
 }
 
 func cmdCd(s *Shell, args []string) int {
@@ -126,9 +134,14 @@ func cmdCat(s *Shell, args []string) int {
 			s.errf("%s: %s: %s", s.Dev.Hostname, a, err)
 			continue
 		}
-		data, ok := vfs.Read(p)
-		if !ok {
+		data, exists, allowed := vfs.ReadPathAs(p, s.User)
+		if !exists {
 			s.errf("cat: %s: No such file or directory", a)
+			continue
+		}
+		if !allowed {
+			s.errf("cat: %s: Permission denied", a)
+			s.noteDenied(a, "read")
 			continue
 		}
 		fmt.Fprint(s.Out, string(data))
@@ -147,9 +160,8 @@ func cmdCp(s *Shell, args []string) int {
 		s.errf("%s: %s: %s", s.Dev.Hostname, args[0], err)
 		return 1
 	}
-	data, ok := vfs.Read(src)
+	data, ok := s.readFile(vfs, src, fmt.Sprintf("%s: %s", s.Dev.Hostname, args[0]), args[0])
 	if !ok {
-		s.errf("%s: %s: No such file or directory", s.Dev.Hostname, args[0])
 		return 1
 	}
 	dst := s.abs(args[1])
@@ -181,7 +193,10 @@ func cmdMv(s *Shell, args []string) int {
 		s.errf("%s: %s: No such file or directory", s.Dev.Hostname, args[0])
 		return 1
 	}
-	data, _ := vfs.Read(src)
+	data, ok := s.readFile(vfs, src, fmt.Sprintf("%s: %s", s.Dev.Hostname, args[0]), args[0])
+	if !ok {
+		return 1
+	}
 	dst := s.abs(args[1])
 	vfs2, dst, err2 := s.ResolveVFS(dst)
 	if vfs2 == nil {
@@ -303,9 +318,8 @@ func cmdLn(s *Shell, args []string) int {
 		s.errf("%s: %s: No such file or directory", s.Dev.Hostname, target)
 		return 1
 	}
-	data, ok := vfs.Read(src)
+	data, ok := s.readFile(vfs, src, fmt.Sprintf("%s: %s", s.Dev.Hostname, target), target)
 	if !ok {
-		s.errf("%s: %s: No such file or directory", s.Dev.Hostname, target)
 		return 1
 	}
 	dst := s.abs(link)
@@ -373,6 +387,10 @@ func cmdChown(s *Shell, args []string) int {
 }
 
 func cmdId(s *Shell, args []string) int {
+	// `id` with no args reports the current account
+	if s.User == nil {
+		return 1
+	}
 	u := s.User
 	gname := u.Name
 	if len(u.Groups) > 0 {

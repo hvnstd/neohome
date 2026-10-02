@@ -108,6 +108,97 @@ func (v *VFS) Read(p string) ([]byte, bool) {
 	return nil, false
 }
 
+// CanRead answers whether u may read p, using real Unix semantics: root reads
+// everything, the owner uses the user bits, a group member uses the group bits,
+// everyone else uses the other bits. Reading is checked because a world where
+// only writes are enforced has no confidentiality at all — /etc/shadow would be
+// readable by any account, and every "compromise" would be a fiction.
+func (v *VFS) CanRead(p string, u *User) bool {
+	if u == nil || u.UID == 0 {
+		return true
+	}
+	n, ok := v.Get(p)
+	if !ok {
+		return false
+	}
+	if n.IsDir {
+		return v.CanExec(p, u)
+	}
+	perm := n.Mode.Perm()
+	switch {
+	case n.Owner == u.Name:
+		return perm&0400 != 0
+	case inAnyGroup(u, n.Group):
+		return perm&0040 != 0
+	default:
+		return perm&0004 != 0
+	}
+}
+
+// CanExec answers whether u may traverse a directory (the x bit), which is what
+// gates reaching the paths inside it.
+func (v *VFS) CanExec(p string, u *User) bool {
+	if u == nil || u.UID == 0 {
+		return true
+	}
+	n, ok := v.Get(p)
+	if !ok {
+		return true // a missing component is handled as "no such file" elsewhere
+	}
+	perm := n.Mode.Perm()
+	switch {
+	case n.Owner == u.Name:
+		return perm&0100 != 0
+	case inAnyGroup(u, n.Group):
+		return perm&0010 != 0
+	default:
+		return perm&0001 != 0
+	}
+}
+
+// AccessiblePath reports whether u may reach p at all: every directory on the
+// way must grant x. A path whose components are unreadable is "permission
+// denied"; a path that simply is not there must still say "no such file", so
+// this is deliberately separate from whether the file exists.
+func (v *VFS) AccessiblePath(p string, u *User) bool {
+	if u == nil || u.UID == 0 {
+		return true
+	}
+	p = path.Clean(p)
+	for cur := path.Dir(p); cur != "/" && cur != "."; cur = path.Dir(cur) {
+		if !v.CanExec(cur, u) {
+			return false
+		}
+	}
+	return true
+}
+
+// ReadPathAs reads p as u, walking every component so a directory's x bit really
+// gates the files inside it. Returns (data, exists, permitted) so a caller can
+// tell "you may not read this" from "there is nothing there".
+func (v *VFS) ReadPathAs(p string, u *User) ([]byte, bool, bool) {
+	data, ok := v.Read(p)
+	if !ok {
+		return nil, false, false // no such file — NOT a permission problem
+	}
+	if !v.AccessiblePath(p, u) || !v.CanRead(p, u) {
+		return nil, true, false
+	}
+	return data, true, true
+}
+
+func inAnyGroup(u *User, group string) bool {
+	if group == "" || group == u.Name {
+		return true
+	}
+	for _, g := range u.Groups {
+		if g == group {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *VFS) Get(p string) (*INode, bool) {
 	n, ok := v.Nodes[path.Clean(p)]
 	return n, ok

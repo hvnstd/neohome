@@ -38,12 +38,26 @@ func cmdSu(s *Shell, args []string) int {
 		return 0
 	}
 	if s.User.UID != 0 {
+		if !u.IsBot && u.Pass == "" {
+			s.errf("su: Authentication failure")
+			return 1
+		}
 		fmt.Fprintf(s.Out, "Password: ")
-		s.ReadPasswordLine("")
-		s.errf("su: Authentication failure")
-		return 1
+		pw := s.ReadPasswordLine("")
+		if !s.verifyPassword(u, pw) {
+			s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+				"failed su to "+u.Name, 3)
+			s.errf("su: Authentication failure")
+			return 1
+		}
 	}
+	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+		"su "+s.User.Name+" -> "+u.Name, 1)
 	s.User = u
+	s.CWD = u.Home
+	if s.CWD == "" {
+		s.CWD = "/"
+	}
 	return 0
 }
 
@@ -54,8 +68,21 @@ func cmdSudo(s *Shell, args []string) int {
 		return 1
 	}
 	if !s.hasSudo() && s.User.UID != 0 {
-		s.errf("sudo: a terminal is required to read the password; try su first")
+		s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+			"sudo denied (not in sudoers)", 3)
+		s.errf("sudo: %s is not in the sudoers file.  This incident will be reported.", s.User.Name)
 		return 1
+	}
+	// sudo authenticates the INVOKING user with its own password
+	if s.User.UID != 0 {
+		fmt.Fprintf(s.Out, "[sudo] password for %s: ", s.User.Name)
+		pw := s.ReadPasswordLine("")
+		if !s.verifyPassword(s.User, pw) {
+			s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+				"failed sudo authentication", 3)
+			s.errf("Sorry, try again.")
+			return 1
+		}
 	}
 	root := s.Dev.FindUser("root")
 	if root == nil {

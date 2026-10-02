@@ -108,6 +108,10 @@ func NewWorld() *World {
 	mkUsers(pc, map[string]*User{
 		"root": {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
 		"alex": {Name: "alex", UID: 1000, Pass: "alex123", Groups: []string{"alex", "sudo"}, Home: "/home/alex", Shell: "/bin/bash"},
+		// An ordinary account with no sudo rights. Without one, the world has no
+		// privilege boundary to test — and no believable place for an attacker to
+		// land after guessing a weak password.
+		"guest": {Name: "guest", UID: 1001, Pass: "guest", Groups: []string{"guest"}, Home: "/home/guest", Shell: "/bin/bash"},
 	})
 	mkUsers(router, map[string]*User{
 		"root": {Name: "root", UID: 0, Pass: "admin", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},

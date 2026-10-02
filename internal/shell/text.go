@@ -141,9 +141,8 @@ func cmdGrep(s *Shell, args []string) int {
 		if vfs == nil {
 			continue
 		}
-		data, ok := vfs.Read(p)
+		data, ok := s.readFile(vfs, p, "grep", f)
 		if !ok {
-			s.errf("grep: %s: No such file or directory", f)
 			continue
 		}
 		n := scan(string(data), f)
@@ -206,9 +205,8 @@ func cmdSed(s *Shell, args []string) int {
 			s.errf("sed: %s: No such file or directory", f)
 			return 1
 		}
-		data, ok := vfs.Read(p)
+		data, ok := s.readFile(vfs, p, "sed", f)
 		if !ok {
-			s.errf("sed: %s: No such file or directory", f)
 			return 1
 		}
 		var out string
@@ -265,7 +263,7 @@ func cmdHead(s *Shell, args []string) int {
 		if vfs == nil {
 			continue
 		}
-		data, ok := vfs.Read(p)
+		data, ok := s.readFile(vfs, p, "cmdHead", p)
 		if !ok {
 			continue
 		}
@@ -315,7 +313,7 @@ func cmdTail(s *Shell, args []string) int {
 		if vfs == nil {
 			continue
 		}
-		data, ok := vfs.Read(p)
+		data, ok := s.readFile(vfs, p, "cmdTail", p)
 		if !ok {
 			continue
 		}
@@ -351,7 +349,7 @@ func cmdSort(s *Shell, args []string) int {
 		if vfs == nil {
 			continue
 		}
-		data, ok := vfs.Read(p)
+		data, ok := s.readFile(vfs, p, "cmdSort", p)
 		if !ok {
 			continue
 		}
@@ -379,7 +377,7 @@ func cmdUniq(s *Shell, args []string) int {
 		if vfs == nil {
 			continue
 		}
-		data, ok := vfs.Read(p)
+		data, ok := s.readFile(vfs, p, "cmdUniq", p)
 		if !ok {
 			continue
 		}
@@ -415,7 +413,7 @@ func cmdWc(s *Shell, args []string) int {
 		if vfs == nil {
 			continue
 		}
-		data, ok := vfs.Read(p)
+		data, ok := s.readFile(vfs, p, "cmdWc", p)
 		if !ok {
 			continue
 		}

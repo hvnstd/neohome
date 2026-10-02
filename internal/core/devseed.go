@@ -162,6 +162,64 @@ func refreshPasswd(d *Device) {
 		return
 	}
 	d.FS.Write("/etc/passwd", s, 0644, "root", "root")
+
+	// /etc/shadow is the real thing worth stealing, and it is only readable by
+	// root (0640 root:shadow). Before this existed the world held no secrets at
+	// all, so read permissions were irrelevant and every "compromise" was a
+	// fiction: there was nothing a normal account could not already read.
+	sh := ""
+	for _, n := range names {
+		u := d.Users[n]
+		sh += fmt.Sprintf("%s:%s:19000:0:99999:7:::\n", u.Name, shadowHash(u))
+	}
+	d.FS.Write("/etc/shadow", sh, 0640, "root", "shadow")
+
+	// /etc/sudoers: who may use sudo. 0440 root:root — not readable by anyone else.
+	sd := "# This file must be edited with the 'visudo' command as root.\n"
+	sd += "Defaults        env_reset\nroot    ALL=(ALL:ALL) ALL\n"
+	for _, n := range names {
+		u := d.Users[n]
+		if u.UID == 0 {
+			continue
+		}
+		if hasGroup(u, "sudo") || hasGroup(u, "admin") || hasGroup(u, "wheel") {
+			sd += fmt.Sprintf("%s    ALL=(ALL:ALL) ALL\n", u.Name)
+		}
+	}
+	d.FS.Write("/etc/sudoers", sd, 0440, "root", "root")
+}
+
+func hasGroup(u *User, g string) bool {
+	for _, x := range u.Groups {
+		if x == g {
+			return true
+		}
+	}
+	return false
+}
+
+// shadowHash renders a deterministic shadow entry the way Debian does with
+// SHA-512 crypt. The world does not run real crypt(3) against real passwords —
+// the file is simulated — but the consequence is real: only root can read it,
+// and it is what an attacker on the box is after.
+func shadowHash(u *User) string {
+	sum := 0
+	for _, c := range u.Name + ":" + u.Pass {
+		sum = sum*131 + int(c)
+		if sum < 0 {
+			sum = -sum
+		}
+		sum %= 1 << 24
+	}
+	const alpha = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	var b []byte
+	v := sum
+	for i := 0; i < 43; i++ {
+		b = append(b, alpha[v%64])
+		v = v/64 + i*7 + 11
+	}
+	salt := fmt.Sprintf("%06d", sum%1000000)
+	return "$6$" + salt + "$" + string(b)
 }
 
 func (d *Device) dnsmasqConfContent() string {

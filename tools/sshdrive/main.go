@@ -70,9 +70,18 @@ func main() {
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
 
-	// one command at a time, so each one's output is unambiguous
+	// one command at a time, so each one's output is unambiguous.
+	//
+	// An argument beginning with "@" is typed as a raw answer rather than a
+	// command: that is how a real user replies to an in-session prompt such as
+	// sudo's or su's password challenge. Without this the driver cannot test any
+	// privileged path, which is exactly the path worth testing.
 	for _, c := range cmds {
-		fmt.Fprintf(pw, "%s\r\n", c)
+		if strings.HasPrefix(c, "@") {
+			fmt.Fprintf(pw, "%s\r\n", c[1:])
+		} else {
+			fmt.Fprintf(pw, "%s\r\n", c)
+		}
 		time.Sleep(350 * time.Millisecond)
 	}
 	time.Sleep(500 * time.Millisecond)
