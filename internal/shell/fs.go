@@ -158,7 +158,7 @@ func cmdCp(s *Shell, args []string) int {
 		s.errf("%s: %s: %s", s.Dev.Hostname, args[1], err2)
 		return 1
 	}
-	if err := vfs2.WriteChecked(dst, data, s.User); err != nil {
+	if err := s.Dev.WriteGuest(dst, data, s.User); err != nil {
 		s.errf("%s: %s: %v", s.Dev.Hostname, args[1], err)
 		return 1
 	}
@@ -188,7 +188,7 @@ func cmdMv(s *Shell, args []string) int {
 		s.errf("%s: %s: %s", s.Dev.Hostname, args[1], err2)
 		return 1
 	}
-	if err := vfs2.WriteChecked(dst, data, s.User); err != nil {
+	if err := s.Dev.WriteGuest(dst, data, s.User); err != nil {
 		s.errf("%s: %s: %v", s.Dev.Hostname, args[1], err)
 		return 1
 	}

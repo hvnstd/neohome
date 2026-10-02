@@ -251,7 +251,7 @@ func (s *Shell) execOne(cmd string) bool {
 					data = append(old, data...)
 				}
 			}
-			if err := s.Dev.FS.WriteChecked(p, data, s.User); err != nil {
+			if err := s.Dev.WriteGuest(p, data, s.User); err != nil {
 				fmt.Fprintf(s.Out, "%s: %s: cannot write (%v)\r\n", s.Dev.Hostname, redirFile, err)
 				return false
 			}

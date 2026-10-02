@@ -160,7 +160,7 @@ func cmdSed(s *Shell, args []string) int {
 		}
 		if inPlace {
 			// a real config edit must go through permission checks
-			if err := vfs.WriteChecked(p, []byte(out), s.User); err != nil {
+			if err := s.Dev.WriteGuest(p, []byte(out), s.User); err != nil {
 				s.errf("sed: %s: %v", f, err)
 				return 1
 			}

@@ -19,7 +19,7 @@ if ! kill -0 "$SRV" 2>/dev/null; then
   echo "SERVER DIED:"; cat /tmp/neohome.log; exit 1
 fi
 echo "server pid=$SRV up"
-go run live_drive.go
+go run ./tools/live_drive.go
 echo "--- server log ---"
 tail -20 /tmp/neohome.log
 kill "$SRV" 2>/dev/null
