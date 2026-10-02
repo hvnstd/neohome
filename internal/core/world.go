@@ -50,6 +50,8 @@ type World struct {
 	Power              float64 // household power budget 0..1
 	Heating            bool
 	UtilitiesSuspended bool
+	PowerCut           bool // main breaker thrown
+	PowerOutTicks      int  // game-ticks the house has been dark
 
 	// ---- workstream slots. Each pointer's SHAPE is owned by one file:
 	//   WAN  -> wan.go   (public internet / transit / ASN)
@@ -86,28 +88,32 @@ type Player struct {
 }
 
 type Device struct {
-	W        *World
-	ID       string
-	Hostname string
-	Profile  string // pc|router|nas|vps|infra|core
-	Owner    string
-	OS       OSInfo
-	HW       Hardware
-	FS       *VFS
-	Users    map[string]*User
-	Procs    []*Proc
-	Services map[string]*Service
-	Ifaces   []*Iface
-	Boot     time.Time
-	PowerOK  bool
-	MeterKWh float64
-	BillDue  int64
-	Dmesg    []string
-	Firewall []FWRule
-	PortFwd  []FwdRule
-	DHCPL    map[string]Lease
-	Notes    string
-	Purposes string
+	W            *World
+	ID           string
+	Hostname     string
+	Profile      string // pc|router|nas|vps|infra|core
+	Owner        string
+	OS           OSInfo
+	HW           Hardware
+	FS           *VFS
+	Users        map[string]*User
+	Procs        []*Proc
+	Services     map[string]*Service
+	Ifaces       []*Iface
+	Boot         time.Time
+	PowerOK      bool
+	NetUp        bool     // false once the machine is dark
+	MainsDropped bool     // this device's plug is pulled
+	UPS          *UPSInfo // battery, if the machine has one
+	BootSet      []string // services that were running before the lights went out
+	MeterKWh     float64
+	BillDue      int64
+	Dmesg        []string
+	Firewall     []FWRule
+	PortFwd      []FwdRule
+	DHCPL        map[string]Lease
+	Notes        string
+	Purposes     string
 
 	Installed map[string]*VPkg
 	Mounts    []Mount
@@ -396,6 +402,10 @@ func (d *Device) GobEncode() ([]byte, error) {
 		Ifaces                       []*Iface
 		Boot                         time.Time
 		PowerOK                      bool
+		NetUp                        bool
+		MainsDropped                 bool
+		UPS                          *UPSInfo
+		BootSet                      []string
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -413,6 +423,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		ID: d.ID, Hostname: d.Hostname, Profile: d.Profile, Owner: d.Owner,
 		OS: d.OS, HW: d.HW, FS: d.FS, Users: d.Users, Procs: d.Procs, Services: d.Services,
 		Ifaces: d.Ifaces, Boot: d.Boot, PowerOK: d.PowerOK, MeterKWh: d.MeterKWh, BillDue: d.BillDue,
+		NetUp: d.NetUp, MainsDropped: d.MainsDropped, UPS: d.UPS, BootSet: d.BootSet,
 		Dmesg: d.Dmesg, Firewall: d.Firewall, PortFwd: d.PortFwd, DHCPL: d.DHCPL, Notes: d.Notes,
 		Purposes: d.Purposes, Installed: d.Installed, Mounts: d.Mounts, Sessions: d.Sessions,
 		Active: d.Active, Fail2Ban: d.Fail2Ban,
@@ -436,6 +447,10 @@ func (d *Device) GobDecode(b []byte) error {
 		Ifaces                       []*Iface
 		Boot                         time.Time
 		PowerOK                      bool
+		NetUp                        bool
+		MainsDropped                 bool
+		UPS                          *UPSInfo
+		BootSet                      []string
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -459,6 +474,7 @@ func (d *Device) GobDecode(b []byte) error {
 	d.Dmesg, d.Firewall, d.PortFwd, d.DHCPL, d.Notes = shadow.Dmesg, shadow.Firewall, shadow.PortFwd, shadow.DHCPL, shadow.Notes
 	d.Purposes, d.Installed, d.Mounts, d.Sessions = shadow.Purposes, shadow.Installed, shadow.Mounts, shadow.Sessions
 	d.Active, d.Fail2Ban = shadow.Active, shadow.Fail2Ban
+	d.NetUp, d.MainsDropped, d.UPS, d.BootSet = shadow.NetUp, shadow.MainsDropped, shadow.UPS, shadow.BootSet
 	return nil
 }
 

@@ -308,11 +308,19 @@ func Reach(src *Device, dstIP string) (string, bool) {
 	if !isIPv4(dstIP) {
 		return "unknown host", false
 	}
+	// A machine with no power has no link. This is why an outage really breaks
+	// the network instead of merely being reported.
+	if !src.Powered() {
+		return "Network is unreachable (no power)", false
+	}
 	dstID, ok := src.W.IPMap[dstIP]
 	if !ok {
 		return "No route to host", false
 	}
 	dst := src.W.Devices[dstID]
+	if !dst.Powered() {
+		return "Destination Host Unreachable (host is down)", false
+	}
 
 	sameLAN := false
 	for _, i := range src.Ifaces {
@@ -371,6 +379,15 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 		return nil, nil, "No route to host"
 	}
 	dst := src.W.Devices[dstID]
+
+	// Power is the first gate: a dark machine cannot open a socket, and a dark
+	// target cannot accept one.
+	if !src.Powered() {
+		return nil, nil, "Network is unreachable (no power)"
+	}
+	if !dst.Powered() {
+		return nil, dst, "Connection timed out (host is down)"
+	}
 
 	// is dst on src's own LAN?
 	sameLAN := false

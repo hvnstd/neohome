@@ -12,7 +12,7 @@ func (w *World) addDevice(id, hostname, profile, owner string, os OSInfo, hw Har
 		W: w, ID: id, Hostname: hostname, Profile: profile, Owner: owner,
 		OS: os, HW: hw, FS: NewVFS(), Users: map[string]*User{},
 		Services: map[string]*Service{}, Boot: w.Started.Add(-36 * time.Hour),
-		PowerOK: true, DHCPL: map[string]Lease{}, Installed: map[string]*VPkg{},
+		PowerOK: true, NetUp: true, DHCPL: map[string]Lease{}, Installed: map[string]*VPkg{},
 		Fail2Ban: map[string]int{},
 	}
 	if lanIP != "" {

@@ -111,6 +111,9 @@ func (w *World) UtilityTrouble(router *Device, acc *Account) {
 		router.Logf("warn", "isp", "service suspended: household account in arrears")
 		w.AddEvent(router.ID, "warn", "isp", "ISP suspended the household uplink — the account is in arrears")
 		w.ChatPost("#local", "mira-9", "is anyone else's internet down? mine dropped an hour ago")
+		// A suspended supply is a real outage, not just an ISP message: the
+		// house loses mains and the machines go with it.
+		w.darkenHousehold()
 	}
 }
 
@@ -136,6 +139,15 @@ func (w *World) PayUtilities(who string) (int64, error) {
 		if router != nil {
 			router.Logf("info", "isp", "service restored after payment")
 			w.AddEvent(router.ID, "info", "isp", "ISP restored the uplink after arrears were settled")
+		}
+		// power comes back with the payment, and so does the house
+		w.PowerOutTicks = 0
+		for _, id := range w.Order {
+			d := w.Devices[id]
+			if d.IsDataCenter() || d.MainsDropped || d.NetUp {
+				continue
+			}
+			d.setPowered(true, "")
 		}
 	}
 	return due, nil

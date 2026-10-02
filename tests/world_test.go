@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,6 +26,39 @@ func run(t *testing.T, w *core.World, dev *core.Device, user string, line string
 	sh := shell.NewShell(w, dev, u, out, "10.77.1.11", "xterm")
 	sh.ExecLine(line)
 	return out.String()
+}
+
+// `ps aux | grep -c crond` is how every real script counts a daemon. If -c is
+// parsed as the pattern, the count silently becomes an error message instead.
+func TestGrepOptionsInPipeline(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	pc.StartService("sshd")
+
+	sh := func(line string) string { return run(t, w, pc, "alex", line) }
+
+	if got := sh("ps aux | grep sshd"); !strings.Contains(got, "sshd") {
+		t.Fatalf("plain piped grep should find sshd, got:\n%s", got)
+	}
+	// -c must print a bare count, not treat -c as the pattern
+	out := sh("ps aux | grep -c sshd")
+	if strings.Contains(out, "No such file") || strings.Contains(out, "invalid option") {
+		t.Fatalf("grep -c in a pipeline is broken:\n%s", out)
+	}
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) == 0 {
+		t.Fatalf("grep -c printed nothing:\n%s", out)
+	}
+	if _, err := strconv.Atoi(fields[len(fields)-1]); err != nil {
+		t.Fatalf("grep -c should end with a number, got %q", fields[len(fields)-1])
+	}
+	// -i must be case-insensitive, -v must invert
+	if got := sh("echo HELLO | grep -i hello"); !strings.Contains(got, "HELLO") {
+		t.Fatalf("grep -i should match case-insensitively, got:\n%s", got)
+	}
+	if got := sh("printf 'a\nb\n' | grep -v a"); strings.Contains(got, "\na\n") {
+		t.Fatalf("grep -v should drop the matching line, got:\n%s", got)
+	}
 }
 
 // ---- the fault chain, end to end ----

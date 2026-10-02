@@ -76,6 +76,25 @@ func NewWorld() *World {
 		Hardware{"Assistant Mini-PC", 2, 2000, 2048, 32768, 1000, false, false}, "10.77.1.20")
 	asst.Notes = "assistant node"
 
+	// ---- the management controller -------------------------------------------
+	// A BMC-class box wired to the mains before the breaker, on its own battery
+	// and cellular backhaul. This is what makes `power cut` a playable move
+	// instead of an unrecoverable one: a real operator can always get back in
+	// through out-of-band management. It is also the machine that a determined
+	// attacker would love to own, which is the point.
+	bmc := w.addDevice("bmc-alex", "bmc", "bmc", "alex", OSInfo{"OpenBMC", "2.14", "6.6.7", "arm", "ash"},
+		Hardware{"NeoBMC", 1, 1200, 512, 4096, 100, false, true}, "10.77.1.250")
+	bmc.UPS = &UPSInfo{ChargePct: 100, LastState: "online"}
+	bmc.Notes = "out-of-band management controller"
+	mkUsers(bmc, map[string]*User{
+		"root":  {Name: "root", UID: 0, Pass: "alex123", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},
+		"admin": {Name: "admin", UID: 1000, Pass: "alex123", Groups: []string{"admin"}, Home: "/home/admin", Shell: "/bin/ash"},
+	})
+	bmc.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH (BMC)", Port: 22, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
+	bmc.Services["syslogd"] = &Service{Name: "syslogd", Desc: "BusyBox syslogd", Port: 0, Proto: "udp",
+		Scope: "lan", State: "running", Handler: "syslog"}
+
 	for _, d := range []*Device{pc, nas, asst} {
 		if len(d.Ifaces) > 0 {
 			d.Ifaces[0].GW = "10.77.1.1"

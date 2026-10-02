@@ -97,6 +97,12 @@ func (s *Shell) RunLoop(r io.Reader) {
 		s.bufrd = bufio.NewReader(r)
 	}
 	for {
+		// The machine may have lost power since the last prompt, whether
+		// because the player cut it or because a UPS finally ran flat.
+		if s.Dev != nil && !s.Dev.Powered() {
+			fmt.Fprintln(s.Out, "\nConnection to host lost (no power).")
+			return
+		}
 		fmt.Fprint(s.Out, s.PS1())
 		line, err := s.readLine()
 		if err == io.EOF {
@@ -164,6 +170,14 @@ func (s *Shell) readLine() (string, error) {
 }
 
 func (s *Shell) ExecLine(line string) {
+	// A shell only lives while its machine has power. This is checked here as
+	// well as in the read loop so a single command can never run on a box that
+	// has already gone dark.
+	if s.Dev != nil && !s.Dev.Powered() {
+		fmt.Fprintln(s.Out, "\nConnection to host lost (no power).")
+		s.exitFlag = true
+		return
+	}
 	s.exitFlag = false
 	for _, seg := range strings.Split(line, "&&") {
 		ok := true
@@ -287,8 +301,8 @@ var bbApplets = []string{
 	"cat", "cp", "mv", "rm", "mkdir", "ls", "cd", "pwd", "touch", "echo", "ps", "kill",
 	"top", "ip", "route", "ifconfig", "nslookup", "wget", "dmesg", "grep", "head", "tail",
 	"wc", "df", "free", "uname", "hostname", "uptime", "whoami", "id", "env", "sort",
-	"uniq", "date", "killall", "pidof", "sysctl", "logread", "ping", "traceroute",
-	"nslookup", "dig", "ss", "systemctl", "service", "reboot", "poweroff", "ifup", "ifdown",
+	"uniq", "date", "logread", "ping", "traceroute",
+	"dig", "ss", "systemctl", "service",
 }
 
 var bbSet = map[string]bool{}

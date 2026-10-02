@@ -189,6 +189,9 @@ func atoi(s string) int {
 
 func (w *World) Tick() {
 	w.TickCount++
+	// Power is resolved before anything else: if the lights went out, the rest
+	// of the tick must see a world where those machines are genuinely gone.
+	w.PowerTick()
 	w.Sim = w.Sim.Add(30 * time.Second) // 30 game-seconds per tick; no gameplay gates on it
 	for _, id := range w.Order {
 		d := w.Devices[id]

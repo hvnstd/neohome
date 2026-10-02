@@ -137,11 +137,32 @@ func runPlayerSession(w *core.World, who, ip string, out io.Writer, in io.Reader
 		fmt.Fprintf(out, "no device for %s\r\n", who)
 		return
 	}
+
+	// If the household PC has no power, the operator still has a way in: the
+	// management controller is on its own battery and cellular backhaul. Without
+	// this, `power cut` would be a one-way door and a dead battery would brick
+	// the player's own game.
+	landed := ""
+	if !pc.Powered() {
+		bmc := w.OutOfBand()
+		if bmc != nil && bmc.Powered() {
+			fmt.Fprintf(out, "home-pc is down (no power) — connecting to %s over out-of-band management\r\n", bmc.Hostname)
+			pc = bmc
+			landed = "bmc"
+		}
+	}
+
 	fmt.Fprintf(out, "Welcome, %s. NeoHome over ssh.\r\n", who)
 	_ = bufio.NewReader(in)
 	u := pc.FindUser("alex")
 	if u == nil {
 		u = &core.User{Name: "alex", UID: 1000, Home: "/home/alex", Shell: "/bin/bash"}
+	}
+	// on the controller the player lands as the controller's own operator
+	if landed == "bmc" {
+		if bu := pc.FindUser("admin"); bu != nil {
+			u = bu
+		}
 	}
 	s := shell.NewShell(w, pc, u, out, ip, "xterm-256color")
 	s.RunLoop(in)

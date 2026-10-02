@@ -51,30 +51,90 @@ func cmdFind(s *Shell, args []string) int {
 }
 
 func cmdGrep(s *Shell, args []string) int {
-	if len(args) == 0 {
-		s.errf("usage: grep PATTERN [FILE...]")
+	// Options first. Without this, `grep -c crond` reads -c as the pattern and
+	// crond as a filename, which breaks every pipeline that counts matches.
+	countOnly := false
+	invert := false
+	ignoreCase := false
+	var rest []string
+	for _, a := range args {
+		if len(a) > 1 && a[0] == '-' && !strings.HasPrefix(a, "--") {
+			for _, c := range a[1:] {
+				switch c {
+				case 'c':
+					countOnly = true
+				case 'v':
+					invert = true
+				case 'i':
+					ignoreCase = true
+				case 'n', 'l', 'h', 's', 'q':
+					// accepted and ignored: harmless for our purposes
+				default:
+					s.errf("grep: invalid option -- '%c'", c)
+					return 2
+				}
+			}
+			continue
+		}
+		rest = append(rest, a)
+	}
+	if len(rest) == 0 {
+		s.errf("usage: grep [-c|-v|-i] PATTERN [FILE...]")
 		return 2
 	}
-	pattern := args[0]
-	files := args[1:]
-	if len(files) == 0 {
-		// read stdin (pipeline) — exit 1 when nothing matched, like real grep
-		matched := false
-		for _, line := range strings.Split(strings.TrimRight(s.Stdin, "\n"), "\n") {
-			if s.Stdin == "" {
+	pattern := rest[0]
+	files := rest[1:]
+	// normalise for -i once, so both the file and stdin paths agree
+	match := func(line string) bool {
+		if ignoreCase {
+			return strings.Contains(strings.ToLower(line), strings.ToLower(pattern))
+		}
+		return strings.Contains(line, pattern)
+	}
+
+	// emit lines (or a count) for one source; returns the match count
+	scan := func(src string, withName string) int {
+		n := 0
+		for _, line := range strings.Split(src, "\n") {
+			if line == "" && src == "" {
 				break
 			}
-			if strings.Contains(line, pattern) {
+			hit := match(line)
+			if invert {
+				hit = !hit
+			}
+			if !hit {
+				continue
+			}
+			n++
+			if countOnly {
+				continue
+			}
+			if withName != "" {
+				fmt.Fprintf(s.Out, "%s:%s\n", withName, line)
+			} else {
 				fmt.Fprintln(s.Out, line)
-				matched = true
 			}
 		}
-		if !matched {
+		return n
+	}
+
+	if len(files) == 0 {
+		// read stdin (pipeline) — exit 1 when nothing matched, like real grep
+		if s.Stdin == "" {
+			return 1
+		}
+		n := scan(strings.TrimRight(s.Stdin, "\n"), "")
+		if countOnly && n > 0 {
+			fmt.Fprintln(s.Out, n)
+		}
+		if n == 0 {
 			return 1
 		}
 		return 0
 	}
-	matched := false
+
+	total := 0
 	for _, f := range files {
 		p := s.abs(f)
 		vfs, p, _ := s.ResolveVFS(p)
@@ -86,14 +146,13 @@ func cmdGrep(s *Shell, args []string) int {
 			s.errf("grep: %s: No such file or directory", f)
 			continue
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.Contains(line, pattern) {
-				fmt.Fprintf(s.Out, "%s:%s\n", f, line)
-				matched = true
-			}
+		n := scan(string(data), f)
+		if countOnly && n > 0 {
+			fmt.Fprintf(s.Out, "%s:%d\n", f, n)
 		}
+		total += n
 	}
-	if !matched {
+	if total == 0 {
 		return 1
 	}
 	return 0
