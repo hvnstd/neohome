@@ -52,7 +52,7 @@ func NewWorld() *World {
 	_ = core
 
 	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd} {
-		d.Ifaces = append(d.Ifaces, &Iface{Name: "eth1", IP: w.allocPublic(), MAC: macFor(d.ID + "-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
+		d.Ifaces = append(d.Ifaces, &Iface{Name: "eth1", IP: w.allocPublicFor(d.Profile), MAC: macFor(d.ID + "-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	}
 	pubISP := wanIP(ispDNS)
 	pubNS := wanIP(ns1)
@@ -82,7 +82,7 @@ func NewWorld() *World {
 			d.Ifaces[0].Mode = "dhcp"
 		}
 	}
-	router.Ifaces = append(router.Ifaces, &Iface{Name: "eth0", IP: w.allocPublic(), MAC: macFor("router-alex-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
+	router.Ifaces = append(router.Ifaces, &Iface{Name: "eth0", IP: w.allocPublicFor("router"), MAC: macFor("router-alex-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	pubHome := wanIP(router)
 	w.IPMap[router.Ifaces[1].IP] = router.ID
 
@@ -111,7 +111,7 @@ func NewWorld() *World {
 		Hardware{"Gaming rig", 8, 4800, 32768, 131072, 1000, false, false}, "10.88.1.11")
 	npcr := w.addDevice("npc-router", "modem-netgearish", "router", "mara", OSInfo{"StockOS", "1.0", "4.9.0", "arm", "ash"},
 		Hardware{"ISP modem", 1, 500, 64, 8, 1000, true, false}, "10.88.1.1")
-	npcr.Ifaces = append(npcr.Ifaces, &Iface{Name: "eth0", IP: w.allocPublic(), MAC: macFor("npc-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
+	npcr.Ifaces = append(npcr.Ifaces, &Iface{Name: "eth0", IP: w.allocPublicFor("router"), MAC: macFor("npc-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	w.IPMap[npcr.Ifaces[1].IP] = npcr.ID
 	if len(npcpc.Ifaces) > 0 {
 		npcpc.Ifaces[0].GW = "10.88.1.1"

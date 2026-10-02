@@ -275,16 +275,10 @@ func (s *Shell) commandExists(name string) bool {
 	// BusyBox applets: only the ones the game actually implements, never a
 	// name listed just to inflate the command count. OSInfo.Shell is stored
 	// bare ("ash"), so accept both spellings — otherwise this gate never fires.
-	if isBusyboxShell(s.Dev.OS.Shell) && busyboxHas(name) {
+	if core.IsBusyboxShell(s.Dev.OS.Shell) && busyboxHas(name) {
 		return true
 	}
 	return false
-}
-
-// isBusyboxShell reports whether a shell string names the BusyBox ash. World
-// data stores it bare ("ash"); hand-written profiles may use the full path.
-func isBusyboxShell(sh string) bool {
-	return sh == "ash" || sh == "/bin/ash" || sh == "busybox ash"
 }
 
 // bbApplets is the set of BusyBox applets that have a real game implementation.
@@ -453,6 +447,12 @@ func (s *Shell) printf(format string, a ...any) {
 // ReadPasswordLine reads silently-ish from the session input.
 func (s *Shell) ReadPasswordLine(prompt string) string {
 	fmt.Fprint(s.Out, prompt)
+	// A scripted/non-interactive session (cron, `ssh host cmd` from a probe, a
+	// bot) may have no input stream at all. Never nil-deref on that.
+	if s.bufrd == nil {
+		fmt.Fprintln(s.Out)
+		return ""
+	}
 	var b []byte
 	for {
 		c, err := s.bufrd.ReadByte()

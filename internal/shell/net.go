@@ -205,14 +205,21 @@ func cmdTraceroute(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "traceroute to %s (%s), 30 hops max\n", args[0], "unknown")
 		return 1
 	}
-	gw := s.Dev.GatewayIP()
-	hops := []string{"127.0.0.1"}
-	if gw != "" {
-		hops = append(hops, gw)
+	// The path is the world's real device graph (local gateway -> the AS that
+	// announces us -> transit -> the AS that announces them -> host), not a
+	// synthesised hop list. A destination that does not exist dies at the edge.
+	hops, _ := s.W.Trace(s.Dev, ip)
+	if len(hops) == 0 {
+		fmt.Fprintf(s.Out, "traceroute to %s (%s), 30 hops max\n", args[0], ip)
+		return 1
 	}
-	hops = append(hops, ip)
+	fmt.Fprintf(s.Out, "traceroute to %s (%s), 30 hops max\n", args[0], ip)
 	for i, h := range hops {
-		fmt.Fprintf(s.Out, "%2d  %s (%s)  %.3f ms\n", i+1, h, h, 0.4+float64(i)*0.7)
+		if h.Device != "" {
+			fmt.Fprintf(s.Out, "%2d  %-15s (%s)  %.3f ms\n", i+1, h.Device, h.IP, h.Latency)
+			continue
+		}
+		fmt.Fprintf(s.Out, "%2d  %-15s (%s)  %.3f ms\n", i+1, "*", h.IP, h.Latency)
 	}
 	return 0
 }

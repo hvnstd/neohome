@@ -7,19 +7,81 @@ import (
 
 // ---------- virtual network ----------
 
-// allocPublic hands out public IPs from documentation pools.
-func (w *World) allocPublic() string {
-	w.PublicCounter++
-	n := w.PublicCounter
-	switch {
-	case n <= 250:
-		return fmt.Sprintf("203.0.113.%d", n)
-	case n <= 500:
-		return fmt.Sprintf("198.51.100.%d", n-250)
-	default:
-		return fmt.Sprintf("192.0.2.%d", n-500)
-	}
+// publicBlocks is the world's public address space, one /24 per autonomous
+// system. Real allocation is per-prefix, and a prefix has exactly one holder —
+// that is what makes `whois` attribution truthful instead of a guess. The
+// ranges are RFC 5737 / RFC 2544 documentation space, so a game world can
+// never collide with a real host.
+var publicBlocks = []struct {
+	base string
+	asn  int
+}{
+	{"203.0.113.", asCore},      // NeoCore Transit — infra / the world's own nets
+	{"198.51.100.", asNetCrest}, // NetCrest ISP — household WAN space
+	{"192.0.2.", asNova},        // NovaPanel — VPS customers
+	{"198.18.0.", asPeer},       // Meridian — the peer network
 }
+
+// asnForProfile picks which AS's address space a new device is numbered from.
+func asnForProfile(profile string) int {
+	switch profile {
+	case "vps":
+		return asNova
+	case "router", "pc", "nas":
+		return asNetCrest
+	case "peer":
+		return asPeer
+	}
+	return asCore
+}
+
+// allocPublic hands out a public IP from the address space of the AS that
+// operates the given profile. The next free host in that /24 is found by
+// looking at what the world already has, so allocation works both before and
+// after the WAN is seeded.
+func (w *World) allocPublic() string {
+	return w.allocPublicFor("")
+}
+
+// allocPublicFor allocates from the AS that operates a device of this profile.
+func (w *World) allocPublicFor(profile string) string {
+	want := asnForProfile(profile)
+	block := publicBlocks[0]
+	for _, b := range publicBlocks {
+		if b.asn == want {
+			block = b
+			break
+		}
+	}
+	// every address already in use, anywhere in the world
+	used := map[string]bool{}
+	for _, d := range w.Devices {
+		for _, i := range d.Ifaces {
+			if i.IP != "" {
+				used[i.IP] = true
+			}
+		}
+	}
+	for n := 1; n <= 254; n++ {
+		cand := block.base + itoa(n)
+		if !used[cand] {
+			return cand
+		}
+	}
+	// that block is full: fall through to the next one rather than hand out a
+	// duplicate. A full AS is a real condition, and the address still works.
+	for _, b := range publicBlocks {
+		for n := 1; n <= 254; n++ {
+			cand := b.base + itoa(n)
+			if !used[cand] {
+				return cand
+			}
+		}
+	}
+	return block.base + "255"
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
 
 func lanNetOf(d *Device) string {
 	for _, i := range d.Ifaces {

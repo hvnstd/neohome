@@ -20,11 +20,14 @@ func (d *Device) cronUnitName() string {
 	return "cron"
 }
 
-// isBusyboxShell recognises the BusyBox shell the world writes as either
-// "ash" (OSInfo) or "/bin/ash" (a user entry).
-func isBusyboxShell(sh string) bool {
-	return sh == "ash" || sh == "/bin/ash" || sh == "busybox"
+// IsBusyboxShell recognises the BusyBox shell. World data stores it bare
+// ("ash"); hand-written profiles may use the full path, and one agent wrote
+// "busybox" — all three name the same applet, so all three are accepted.
+func IsBusyboxShell(sh string) bool {
+	return sh == "ash" || sh == "/bin/ash" || sh == "busybox" || sh == "busybox ash"
 }
+
+func isBusyboxShell(sh string) bool { return IsBusyboxShell(sh) }
 
 // EnsureCronDaemon registers the cron daemon unit if this device's image does
 // not already have one, and returns it.

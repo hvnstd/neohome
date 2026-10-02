@@ -183,7 +183,7 @@ func (w *World) ProvisionVPS(owner, plan, hostname string) (*Device, string, err
 	id := "vps-" + hostname
 	d := w.addDevice(id, hostname, "vps", owner, os, hw, "")
 	d.Boot = w.Sim
-	pub := w.allocPublic()
+	pub := w.allocPublicFor("vps")
 	d.AttachWAN(pub, "10.0.0.1")
 	seedFS(d, "vps")
 	refreshPasswd(d)
