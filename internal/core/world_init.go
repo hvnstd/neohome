@@ -177,6 +177,10 @@ func NewWorld() *World {
 	jobsd.Services["httpd"] = &Service{Name: "httpd", Desc: "job board", Port: 80, Proto: "tcp", Scope: "any", State: "running", Handler: "http-jobs", Banner: "Apache"}
 	router.Services["dnsmasq"] = &Service{Name: "dnsmasq", Desc: "DHCP+DNS forwarder", Port: 53, Proto: "udp+tcp", Scope: "lan", State: "running", Handler: "dns-forward", Conf: "/etc/dnsmasq.conf"}
 	router.Services["dropbear"] = &Service{Name: "dropbear", Desc: "SSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-dropbear_2024.85"}
+	// The consumer router still carries a legacy telnetd on 23, which is the
+	// classic weak entry point: it is a real login (see cmdTelnet), so finding
+	// the credentials here is a genuine foothold rather than a free shell.
+	router.Services["telnetd"] = &Service{Name: "telnetd", Desc: "BusyBox telnetd (legacy)", Port: 23, Proto: "tcp", Scope: "lan", State: "running", Handler: "telnet", Banner: "NeoWRT telnetd"}
 	nas.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.2"}
 	nas.Services["nginx"] = &Service{Name: "nginx", Desc: "NAS web ui", Port: 8080, Proto: "tcp", Scope: "lan", State: "running", Handler: "http-nas", Banner: "nginx"}
 	nas.Services["nfsd"] = &Service{Name: "nfsd", Desc: "NFS exports", Port: 2049, Proto: "tcp", Scope: "lan", State: "running", Handler: "nfs"}

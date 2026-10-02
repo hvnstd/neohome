@@ -4,31 +4,21 @@ cd /workspace/neohome
 export PATH=/workspace/go/bin:$PATH GOCACHE=/workspace/gocache GOPATH=/workspace/gopath
 go build ./... && go vet ./... && go test ./tests/ -count=1 | tail -1
 git -c user.name="Neko" -c user.email="neko@neohome.local" add -A
-git -c user.name="Neko" -c user.email="neko@neohome.local" commit -q -m "privilege is a boundary: /etc/shadow, /etc/sudoers, and enforced reads
+git -c user.name="Neko" -c user.email="neko@neohome.local" commit -q -m "telnet is a real login, and ss stops lying about the WAN
 
-The world had no secrets on disk and reads were never permission-checked, so
-every account could read every file and 'compromise' was a fiction.
+telnet handed out a root shell with no authentication at all, which made every
+privilege check in the world pointless: an attacker could simply telnet to the
+target and be root. It now asks for an account and a password, refuses politely
+(never revealing whether the account exists), bumps fail2ban, and records both
+the attempt and the failure.
 
-World:
-  /etc/shadow   0640 root:shadow, deterministic simulated SHA-512 entries
-  /etc/sudoers  0440 root:root, listing the accounts that may escalate
-  a 'guest' account with no sudo rights, so the boundary is testable at all
+The router also gains a legacy telnetd on 23 — the classic weak entry point, so
+finding credentials there is a genuine foothold rather than a free shell.
 
-VFS gains CanRead/CanExec + ReadPathAs, walking every path component so a
-directory's x bit really gates what is inside. Existence and permission are
-reported distinctly, so a missing file still says 'No such file' rather than
-'Permission denied'.
+ss printed LAN-scoped sockets on the router's WAN address, telling an attacker
+that the router's ssh and telnet were exposed to the internet. Dial already
+refused them from the WAN (and the firewall drops them), so this was a display
+bug that overstated the attack surface.
 
-Every reader goes through it: cat, grep, sed, head/tail, sort, uniq, wc, cp, mv.
-The grep leak was found by the new test, not by inspection.
-
-sudo now reads /etc/sudoers and authenticates the invoking user; su
-authenticates the target account. Both record refusals, so the defensive side
-sees probing rather than only successes.
-
-Also fixed: 'ls -l FILE' treated -l as the path, and ls -l printed the owner in
-the group column. tools/sshdrive can now answer in-session prompts ('@text'),
-which is what makes any privileged path testable.
-
-tools/perm_verify.sh drives all of it over real ssh."
+tools/telnet_verify.sh proves it over real ssh, without nc."
 git log --oneline | head -1

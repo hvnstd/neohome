@@ -125,11 +125,43 @@ func cmdTelnet(s *Shell, args []string) int {
 		s.errf("telnet: connect to %s: %s", host, msg)
 		return 1
 	}
-	fmt.Fprintf(s.Out, svc.Banner+"\n")
-	nested := NewShell(s.W, dst, dst.FindUser("root"), s.Out, s.srcIP, s.TTY)
-	if nested.User == nil {
-		nested.User = &core.User{Name: "nobody", UID: 65534, Home: "/nonexistent", Shell: "/usr/sbin/nologin"}
+	// A telnet endpoint asks for an account and password like any other login.
+	// It used to hand out a root shell with no authentication at all, which made
+	// the whole privilege model moot: any attacker could simply telnet to the
+	// target and be root. Real telnetd is exactly where weak credentials matter.
+	if svc.State != "running" {
+		s.errf("telnet: connect to %s: Connection refused", host)
+		return 1
 	}
+	fmt.Fprintf(s.Out, svc.Banner+"\n")
+	// telnetd may present its own login banner/account prompt
+	loginUser := "root"
+	if svc.TelnetUser != "" {
+		loginUser = svc.TelnetUser
+	}
+	fmt.Fprintf(s.Out, "%s login: ", dst.Hostname)
+	entered := strings.TrimSpace(s.ReadPasswordLine(""))
+	if entered != "" {
+		loginUser = entered
+	}
+	u := dst.FindUser(loginUser)
+	// never reveal whether the account exists
+	fmt.Fprint(s.Out, "Password: ")
+	pass := s.ReadPasswordLine("")
+	if u == nil || pass != u.Pass {
+		if s.Dev.Fail2Ban == nil {
+			s.Dev.Fail2Ban = map[string]int{}
+		}
+		s.Dev.Fail2Ban[ip]++
+		s.W.Record("auth", s.User.Name, s.srcIP, dst.ID,
+			"failed telnet login as "+loginUser, 3)
+		fmt.Fprintf(s.Out, "Login incorrect\n")
+		return 1
+	}
+	s.W.Record("auth", s.User.Name, s.srcIP, dst.ID,
+		"telnet login "+loginUser+"@"+dst.Hostname, 1)
+	fmt.Fprintf(s.Out, "Welcome to %s (%s)\n", dst.Hostname, dst.OS.Distro)
+	nested := NewShell(s.W, dst, u, s.Out, s.srcIP, s.TTY)
 	nested.RunLoop(s.bufrd)
 	return 0
 }

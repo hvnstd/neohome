@@ -183,6 +183,16 @@ func cmdSs(s *Shell, args []string) int {
 			if svc.Proto != "tcp" && !strings.Contains(svc.Proto, "tcp") {
 				continue
 			}
+			// A socket bound to the LAN must not be shown as listening on the
+			// WAN address. Dial already refuses a LAN-only service from the WAN,
+			// so printing one on 198.51.100.1 told an attacker that the router's
+			// ssh and telnet were exposed to the internet when they were not.
+			if svc.Scope == "lan" && i.Zone != "lan" {
+				continue
+			}
+			if svc.Scope == "wan" && i.Zone != "wan" {
+				continue
+			}
 			addr := i.IP
 			if svc.Scope == "any" {
 				addr = "0.0.0.0"

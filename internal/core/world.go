@@ -243,6 +243,8 @@ type Service struct {
 	PID     int
 	Conf    string
 	Banner  string
+	// TelnetUser optionally pre-fills the account a telnetd presents first.
+	TelnetUser string
 }
 
 type Task struct {
