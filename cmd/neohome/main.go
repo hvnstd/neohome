@@ -28,6 +28,16 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println("neohome telnet entry listening on :2024")
+
+	// SSH is the primary door into the world (PROJECT.md 四十五); telnet above
+	// stays as the legacy/IoT path. Both hand the session to the same virtual
+	// shell. Failure to bind :2222 must not take the world down.
+	go func() {
+		if err := sshEntry(w, ":2222"); err != nil {
+			log.Println("ssh entry unavailable:", err)
+		}
+	}()
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
