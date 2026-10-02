@@ -20,7 +20,7 @@ say() { printf '\n########## %s ##########\n' "$*"; }
 S() { go run ./tools/sshdrive/main.go alex alex123 "$1" 2>&1; }
 
 say "1. an operator works on the pc and leaves a trail"
-S 'cp /etc/shadow /tmp/loot.txt' | tail -3
+S 'cat /etc/hosts > /tmp/loot.txt' | tail -3
 
 say "2. the trail is a file, and a later session sees it"
 S 'cat /home/alex/.bash_history' | grep -E 'loot|shadow' \

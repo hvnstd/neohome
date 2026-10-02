@@ -17,7 +17,7 @@ kill -0 "$SRV" 2>/dev/null || { echo "SERVER DIED:"; cat /tmp/neohome_tmux.log; 
 say() { printf '\n########## %s ##########\n' "$*"; }
 S() { go run ./tools/sshdrive/main.go alex alex123 "$1" 2>&1; }
 
-say "1. no sessions is reported honestly (this used to panic)"
+say "1. with no sessions, the command reports that honestly"
 S 'tmux ls' | tail -3
 
 say "2. creating a detached session starts a real process"
