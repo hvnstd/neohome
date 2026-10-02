@@ -4,12 +4,19 @@ package main
 // It authenticates with a password against the world's own player records and
 // runs a scripted list of commands, printing exactly what came back.
 //
+// Like a real interactive client it keeps stdin OPEN (a pipe that is closed only
+// after the commands have been sent and drained) — closing it immediately makes
+// the server see EOF before it has read the buffered commands.
+//
 // usage: go run ./tools/sshdrive <user> <pass> <cmd> [cmd...]
 
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -45,33 +52,54 @@ func main() {
 	}
 	defer sess.Close()
 
+	var mu sync.Mutex
 	var out bytes.Buffer
-	sess.Stdout = &out
-	sess.Stderr = &out
-	sess.Stdin = bytes.NewReader([]byte(script(cmds)))
+	sess.Stdout = &tee{w: &out, mu: &mu}
+	sess.Stderr = &tee{w: &out, mu: &mu}
 
-	// request a pty like a real client, then a shell
+	// stdin stays open until we are done talking.
+	pr, pw := io.Pipe()
+	sess.Stdin = pr
+
 	_ = sess.RequestPty("xterm-256color", 40, 120, ssh.TerminalModes{})
 	if err := sess.Shell(); err != nil {
 		fmt.Println("shell:", err)
 		os.Exit(1)
 	}
+
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
+
+	// one command at a time, so each one's output is unambiguous
+	for _, c := range cmds {
+		fmt.Fprintf(pw, "%s\r\n", c)
+		time.Sleep(350 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond)
+	fmt.Fprintln(pw, "exit")
+	pw.Close()
+
 	select {
 	case <-done:
-	case <-time.After(25 * time.Second):
-		fmt.Println("(timeout)")
+	case <-time.After(20 * time.Second):
+		fmt.Println("(timeout waiting for session)")
 	}
+
+	mu.Lock()
+	defer mu.Unlock()
 	fmt.Print(out.String())
 }
 
-func script(cmds []string) string {
-	var b bytes.Buffer
-	for _, c := range cmds {
-		b.WriteString(c)
-		b.WriteString("\r\n")
-	}
-	b.WriteString("exit\r\n")
-	return b.String()
+type tee struct {
+	w  io.Writer
+	mu *sync.Mutex
+}
+
+func (t *tee) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// strip the telnet/pty CR so transcripts stay readable
+	s := strings.ReplaceAll(string(p), "\r\n", "\n")
+	_, err := t.w.Write([]byte(s))
+	return len(p), err
 }

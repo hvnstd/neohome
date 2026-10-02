@@ -74,14 +74,8 @@ func sshEntry(w *core.World, addr string) error {
 		return err
 	}
 	log.Printf("neohome ssh entry listening on %s", addr)
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Println("ssh accept:", err)
-			continue
-		}
-		go serveSSH(conn, w, cfg)
-	}
+	acceptLoop(ln, func(c net.Conn) { serveSSH(c, w, cfg) })
+	return nil
 }
 
 func serveSSH(nConn net.Conn, w *core.World, cfg *ssh.ServerConfig) {

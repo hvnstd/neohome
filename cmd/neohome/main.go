@@ -23,28 +23,33 @@ func main() {
 	// background engine: advances sim, runs assistant, saves periodically.
 	go engine(w)
 
-	ln, err := net.Listen("tcp", ":2024")
-	if err != nil {
-		log.Fatal(err)
+	// Each entry binds independently: a taken telnet port must not stop the SSH
+	// door (or the reverse), and neither may take the world down.
+	telnetLn, terr := net.Listen("tcp", ":2024")
+	if terr != nil {
+		log.Println("telnet entry unavailable:", terr)
+	} else {
+		log.Println("neohome telnet entry listening on :2024")
+		go acceptLoop(telnetLn, func(c net.Conn) { handle(c, w) })
 	}
-	log.Println("neohome telnet entry listening on :2024")
+	if err := sshEntry(w, ":2222"); err != nil {
+		log.Println("ssh entry unavailable:", err)
+	}
+	// Both entries are down (or in use): keep the world running headless so the
+	// engine still ticks and state still persists.
+	log.Println("no live entry; world continues headless")
+	select {}
+}
 
-	// SSH is the primary door into the world (PROJECT.md 四十五); telnet above
-	// stays as the legacy/IoT path. Both hand the session to the same virtual
-	// shell. Failure to bind :2222 must not take the world down.
-	go func() {
-		if err := sshEntry(w, ":2222"); err != nil {
-			log.Println("ssh entry unavailable:", err)
-		}
-	}()
-
+// acceptLoop serves connections until the listener dies.
+func acceptLoop(ln net.Listener, serve func(net.Conn)) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			log.Println("accept:", err)
-			continue
+			return
 		}
-		go handle(conn, w)
+		go serve(conn)
 	}
 }
 
