@@ -3,3 +3,7 @@
 # saved world snapshots
 world.gob
 *.gob
+# scratch helper scripts used to run the checks before a commit
+tools/_commit.sh
+tools/_sum.sh
+tools/_chk.sh
