@@ -301,7 +301,7 @@ var bbApplets = []string{
 	"cat", "cp", "mv", "rm", "mkdir", "ls", "cd", "pwd", "touch", "echo", "ps", "kill",
 	"top", "ip", "route", "ifconfig", "nslookup", "wget", "dmesg", "grep", "head", "tail",
 	"wc", "df", "free", "uname", "hostname", "uptime", "whoami", "id", "env", "sort",
-	"uniq", "date", "logread", "ping", "traceroute",
+	"uniq", "date", "logread", "ping", "traceroute", "udhcpc",
 	"dig", "ss", "systemctl", "service",
 }
 

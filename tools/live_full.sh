@@ -30,7 +30,10 @@ go run ./tools/sshdrive alex alex123 \
 echo
 echo "########## B. repair the router over ssh, the way a player would ##########"
 go run ./tools/sshdrive alex alex123 \
-  'ssh root@10.77.1.1 "cat /etc/dnsmasq.conf | grep resolv-file"' 2>&1
+  'ssh root@10.77.1.1' \
+  'admin' \
+  'cat /etc/dnsmasq.conf | grep resolv-file' \
+  'exit' 2>&1
 
 cd /workspace/neohome
 echo

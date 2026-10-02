@@ -8,21 +8,23 @@ go vet ./...
 go test ./tests/ -count=1 | tail -1
 git -c user.name="Neko" -c user.email="neko@neohome.local" add -A
 git -c user.name="Neko" -c user.email="neko@neohome.local" commit -q -F - <<'MSG'
-power: the household supply is now a real mechanic
+dhcp: a lease is real state on both ends
 
-Cutting power genuinely darkens the house: Reach/Dial refuse on a dead host,
-services report stopped, processes are gone. An outage is enforced, not narrated.
+The router now actually allocates addresses and records them; a client actually
+takes the address onto its interface, and loses its route when it cannot.
 
-- power.go: supply state (breaker / arrears / pulled plug / UPS battery),
-  enforced in net.go so a dark machine cannot open or accept a socket
-- bmc: out-of-band controller on its own battery, so `power cut` is recoverable
-  instead of a one-way door; the ssh entry lands there when the PC is dark
-- power/ups/bmc commands; a UPS is a real purchase that really runs flat
-- utility arrears now has the physical consequence of an outage
-- fix grep: -c/-v/-i were parsed as the pattern, breaking `ps aux | grep -c x`
-- drop 7 applet names that had no implementation
+- dhcp.go: server allocates from the pool declared in the router's own
+  dnsmasq.conf (so editing that file changes what can be handed out), sticky
+  leases, a finite pool that refuses rather than invents addresses, release
+  that frees the address again
+- udhcpc: real BusyBox DHCP client, fails loudly with no server
+- leases: the router's own lease table
+- fix ip: `ip -4 addr show eth0` errored (only args[0] was parsed, and `show`
+  was not accepted after the object)
+- fix live_full.sh: its `ssh root@router "cmd"` never ran — the password prompt
+  consumed the command line, so the router step was silently a no-op
 
-60/60 tests; live ssh: cut -> session dies -> reconnect to BMC -> power boot ->
-house back, and the router answers again.
+67/67 tests; live ssh: udhcpc leases .50, the router's table shows it by
+hostname, stopping dnsmasq really breaks the next lease, starting it restores it.
 MSG
-git log --oneline | head -3
+git log --oneline | head -2

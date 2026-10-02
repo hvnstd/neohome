@@ -21,17 +21,61 @@ func init() {
 }
 
 func cmdIp(s *Shell, args []string) int {
-	sub := ""
-	if len(args) > 0 {
-		sub = args[0]
+	// Real `ip` takes a family selector (-4/-6), an object, an optional `show`,
+	// and an optional device. Parsing only args[0] meant that the most common
+	// invocation in the world, `ip -4 addr show eth0`, just errored out.
+	var sub, wantDev string
+	rest := args
+	for len(rest) > 0 {
+		a := rest[0]
+		switch {
+		case a == "-4" || a == "-6" || a == "-br" || a == "-o" || a == "-brief":
+			rest = rest[1:]
+			continue
+		case a == "show" || a == "list":
+			rest = rest[1:]
+			continue
+		}
+		break
+	}
+	if len(rest) > 0 {
+		sub = rest[0]
+		rest = rest[1:]
 	}
 	// accept the common one-letter abbreviations real `ip` accepts
-	if alias, ok := map[string]string{"a": "addr", "l": "link", "r": "route", "s": "link"}[sub]; ok {
+	if alias, ok := map[string]string{"a": "addr", "l": "link", "r": "route"}[sub]; ok {
 		sub = alias
 	}
+	// `show`/`list` may also follow the object, and anything left after it is
+	// the device name: `ip -4 addr show eth0`.
+	for len(rest) > 0 && (rest[0] == "show" || rest[0] == "list") {
+		rest = rest[1:]
+	}
+	if len(rest) > 0 && rest[0] != "" {
+		wantDev = rest[0]
+	}
+
+	// a named device that does not exist is a real error
+	if wantDev != "" {
+		found := false
+		for _, i := range s.Dev.Ifaces {
+			if i.Name == wantDev {
+				found = true
+			}
+		}
+		if !found {
+			s.errf("Device \"%s\" does not exist.", wantDev)
+			return 1
+		}
+	}
+	show := func(i *core.Iface) bool { return wantDev == "" || i.Name == wantDev }
+
 	switch sub {
 	case "", "link":
 		for n, i := range s.Dev.Ifaces {
+			if !show(i) {
+				continue
+			}
 			fmt.Fprintf(s.Out, "%d: %s: <%s> mtu 1500 qdisc pfifo_fast state %s\n",
 				n+1, i.Name, updown(i.Up), updown(i.Up))
 			fmt.Fprintf(s.Out, "    link/ether %s brd ff:ff:ff:ff:ff:ff\n", i.MAC)
@@ -41,6 +85,9 @@ func cmdIp(s *Shell, args []string) int {
 		}
 	case "addr", "address":
 		for n, i := range s.Dev.Ifaces {
+			if !show(i) {
+				continue
+			}
 			fmt.Fprintf(s.Out, "%d: %s: <%s> mtu 1500 qdisc pfifo_fast state %s qlen 1000\n",
 				n+1, i.Name, updown(i.Up), updown(i.Up))
 			fmt.Fprintf(s.Out, "    link/ether %s brd ff:ff:ff:ff:ff:ff\n", i.MAC)
@@ -61,6 +108,7 @@ func cmdIp(s *Shell, args []string) int {
 		}
 	default:
 		fmt.Fprintf(s.Out, "%s: unknown arg (try: ip a, ip r, ip l)\n", sub)
+		return 1
 	}
 	return 0
 }

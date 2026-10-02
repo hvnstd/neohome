@@ -28,6 +28,29 @@ func run(t *testing.T, w *core.World, dev *core.Device, user string, line string
 	return out.String()
 }
 
+// `ip -4 addr show eth0` is the most common networking command in the world.
+// Parsing only the first argument made it an error, which no real player would
+// accept.
+func TestIPAcceptsFamilyAndDevice(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	sh := func(line string) string { return run(t, w, pc, "alex", line) }
+
+	for _, cmd := range []string{"ip -4 addr show eth0", "ip addr show eth0", "ip -4 a"} {
+		out := sh(cmd)
+		if strings.Contains(out, "unknown arg") || strings.Contains(out, "does not exist") {
+			t.Fatalf("%q should work, got:\n%s", cmd, out)
+		}
+		if !strings.Contains(out, "inet ") {
+			t.Fatalf("%q should show the interface address, got:\n%s", cmd, out)
+		}
+	}
+	// a device that does not exist is still a real error
+	if out := sh("ip addr show eth9"); !strings.Contains(out, "does not exist") {
+		t.Fatalf("a missing device should be reported, got:\n%s", out)
+	}
+}
+
 // `ps aux | grep -c crond` is how every real script counts a daemon. If -c is
 // parsed as the pattern, the count silently becomes an error message instead.
 func TestGrepOptionsInPipeline(t *testing.T) {
