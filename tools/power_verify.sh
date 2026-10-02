@@ -56,7 +56,7 @@ S "balance"
 
 echo
 echo "########## 5. the controller's battery is finite too ##########"
-go run ./tools/probe/power/main.go 2>&1 | tail -4
+S "bmc"
 
 echo
 echo "########## done ##########"
