@@ -1,0 +1,10 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: route [-ne] [-A inet[6]] [{add|del} [-net|-host] TARGET [netmask MASK]
+	[gw GATEWAY] [metric N] [mss BYTES] [window BYTES] [reject] [IFACE]]
+
+Show or edit kernel routing tables
+
+	-n	Don't resolve names
+	-e	Display other/more information
+	-A inet[6]	Select address family

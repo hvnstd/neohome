@@ -1,0 +1,20 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: cp [-arPLHpfinlsTu] SOURCE DEST
+or: cp [-arPLHpfinlsu] SOURCE... { -t DIRECTORY | DIRECTORY }
+
+Copy SOURCEs to DEST
+
+	-a	Same as -dpR
+	-R,-r	Recurse
+	-d,-P	Preserve symlinks (default if -R)
+	-L	Follow all symlinks
+	-H	Follow symlinks on command line
+	-p	Preserve file attributes if possible
+	-f	Overwrite
+	-i	Prompt before overwrite
+	-n	Don't overwrite
+	-l,-s	Create (sym)links
+	-T	Refuse to copy if DEST is a directory
+	-t DIR	Copy all SOURCEs into DIR
+	-u	Copy only newer files

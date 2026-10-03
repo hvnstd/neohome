@@ -1,0 +1,5 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: ash [-il] [-|+Cabefmnuvx] [-|+o OPT]... [-c 'SCRIPT' [ARG0 ARGS] | FILE ARGS | -s ARGS]
+
+Unix shell interpreter

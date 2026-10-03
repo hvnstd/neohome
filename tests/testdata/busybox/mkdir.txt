@@ -1,0 +1,8 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: mkdir [-m MODE] [-p] DIRECTORY...
+
+Create DIRECTORY
+
+	-m MODE	Mode
+	-p	No error if exists; make parent directories as needed

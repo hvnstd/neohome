@@ -1,0 +1,11 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: wc [-cmlwL] [FILE]...
+
+Count lines, words, and bytes for FILEs (or stdin)
+
+	-c	Count bytes
+	-m	Count characters
+	-l	Count newlines
+	-w	Count words
+	-L	Print longest line length

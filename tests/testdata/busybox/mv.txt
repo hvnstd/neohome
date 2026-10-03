@@ -1,0 +1,12 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: mv [-finT] SOURCE DEST
+or: mv [-fin] SOURCE... { -t DIRECTORY | DIRECTORY }
+
+Rename SOURCE to DEST, or move SOURCEs to DIRECTORY
+
+	-f	Don't prompt before overwriting
+	-i	Interactive, prompt before overwrite
+	-n	Don't overwrite an existing file
+	-T	Refuse to move if DEST is a directory
+	-t DIR	Move all SOURCEs into DIR

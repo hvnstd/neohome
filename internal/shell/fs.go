@@ -25,7 +25,6 @@ func init() {
 		{"echo", cmdEcho}, {"printf", cmdPrintf}, {"ln", cmdLn}, {"chmod", cmdChmod},
 		{"chown", cmdChown}, {"id", cmdId}, {"whoami", cmdWhoami}, {"hostname", cmdHostname},
 		{"uname", cmdUname}, {"env", cmdEnv}, {"set", cmdSet}, {"unset", cmdUnset},
-		{"pwd", cmdPwd}, {"pwd", cmdPwd},
 	} {
 		builtinTable[e.name] = e.fn
 	}

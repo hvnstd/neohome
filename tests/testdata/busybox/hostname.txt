@@ -1,0 +1,11 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: hostname [-sidf] [HOSTNAME | -F FILE]
+
+Show or set hostname or DNS domain name
+
+	-s	Short
+	-i	Addresses for the hostname
+	-d	DNS domain name
+	-f	Fully qualified domain name
+	-F FILE	Use FILE's content as hostname

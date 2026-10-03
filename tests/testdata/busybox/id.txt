@@ -1,0 +1,11 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: id [-ugGnr] [USER]
+
+Print information about USER or the current user
+
+	-u	User ID
+	-g	Group ID
+	-G	Supplementary group IDs
+	-n	Print names instead of numbers
+	-r	Print real ID instead of effective ID

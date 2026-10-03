@@ -1,0 +1,9 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: rm [-irf] FILE...
+
+Remove (unlink) FILEs
+
+	-i	Always prompt before removing
+	-f	Never prompt
+	-R,-r	Recurse

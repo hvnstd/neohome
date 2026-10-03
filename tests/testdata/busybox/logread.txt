@@ -1,0 +1,8 @@
+BusyBox v1.36.1 (2023-05-18 22:34:17 UTC) multi-call binary.
+
+Usage: logread [-fF]
+
+Show messages in syslogd's circular buffer
+
+	-f	Output data as log grows
+	-F	Same as -f, but dump buffer first

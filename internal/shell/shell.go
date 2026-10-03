@@ -227,14 +227,16 @@ func (s *Shell) ExecLineStatus(line string) int {
 				continue
 			}
 			if !s.execOne(sub) {
+				status = 1
 				ok = false
 				break
 			}
 		}
 		if !ok || s.exitFlag || s.detach {
-			return
+			return status
 		}
 	}
+	return status
 }
 
 func (s *Shell) execOne(cmd string) bool {
@@ -337,12 +339,17 @@ func (s *Shell) commandExists(name string) bool {
 
 // bbApplets is the set of BusyBox applets that have a real game implementation.
 // Keep this in sync with builtinTable — a name here with no builtin is a lie.
+// It must also stay within BusyBox v1.36's real applet list (see
+// tests/testdata/busybox/APPLETS.txt): a name BusyBox does not have would
+// refuse to run on a real box, so it must not be advertised here either.
+// `cd` is an ash builtin, not an applet, and `dig`/`ss`/`systemctl`/`service`
+// are not BusyBox applets — they stay reachable on every device via
+// builtinTable, but not under the BusyBox gate.
 var bbApplets = []string{
-	"cat", "cp", "mv", "rm", "mkdir", "ls", "cd", "pwd", "touch", "echo", "ps", "kill",
+	"cat", "cp", "mv", "rm", "mkdir", "ls", "pwd", "touch", "echo", "ps", "kill",
 	"top", "ip", "route", "ifconfig", "nslookup", "wget", "dmesg", "grep", "head", "tail",
 	"wc", "df", "free", "uname", "hostname", "uptime", "whoami", "id", "env", "sort",
 	"uniq", "date", "logread", "ping", "traceroute", "udhcpc",
-	"dig", "ss", "systemctl", "service",
 }
 
 var bbSet = map[string]bool{}

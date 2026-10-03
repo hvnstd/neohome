@@ -283,6 +283,8 @@ func cmdAssist(s *Shell, args []string) int {
 			fmt.Fprintf(s.Out, "tracks:   none — it can only follow explicit instructions\n")
 		}
 		return 0
+	case "guide":
+		return cmdAssistGuide(s)
 	case "tasks", "log":
 		a := s.W.AssistantNodeFor(s.W.Players[s.User.Name])
 		if a != nil {
@@ -315,8 +317,63 @@ func cmdAssist(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "assistant learned %s: %s\n", args[1], desc)
 		return 0
 	}
-	s.errf("usage: assist [status|tasks|train TRACK]")
+	s.errf("usage: assist [status|guide|tasks|train TRACK]")
 	return 1
+}
+
+func cmdAssistGuide(s *Shell) int {
+	pc := s.Dev
+	if player := s.W.Players[s.User.Name]; player != nil {
+		if playerPC := s.W.Devices[player.PC]; playerPC != nil {
+			pc = playerPC
+		}
+	}
+	if pc == nil {
+		s.errf("cannot inspect the current device")
+		return 1
+	}
+
+	host := "mirror.neohome.example"
+	ip, resolved, detail := pc.DNSAnswer(host)
+	if !resolved {
+		fmt.Fprintf(s.Out, "I checked %s from %s: %s.\n", host, pc.Hostname, detail)
+		router := s.W.RouterForPlayer(s.User.Name)
+		if router != nil {
+			fmt.Fprintf(s.Out, "Compare `ping %s` with `dig %s` to separate connectivity from name resolution.\n", router.FirstLANIP(), host)
+			fmt.Fprintf(s.Out, "Then inspect the router: `ssh root@%s` and `cat /etc/dnsmasq.conf`.\n", router.FirstLANIP())
+		} else {
+			fmt.Fprintf(s.Out, "Check `ip route` and `dig %s` to separate connectivity from name resolution.\n", host)
+		}
+		return 0
+	}
+
+	fmt.Fprintf(s.Out, "I checked %s from %s: it resolves to %s (%s).\n", host, pc.Hostname, ip, detail)
+	for _, job := range s.W.Jobs.List {
+		if job.Verify != "dns-fix" {
+			continue
+		}
+		if job.Done {
+			fmt.Fprintf(s.Out, "%s is already completed. Use `job list` to choose the next task.\n", job.ID)
+			return 0
+		}
+		verified, reason := s.W.VerifyJob(job)
+		if !verified {
+			fmt.Fprintf(s.Out, "Name resolution works, but %s is not verified yet: %s. Inspect the router service and configuration, then retry `job show %s`.\n", job.ID, reason, job.ID)
+			return 0
+		}
+		if job.Accepted == "" {
+			fmt.Fprintf(s.Out, "The DNS repair is verified. Review and accept it with `job show %s` and `job accept %s`, then claim payment with `job pay %s`.\n", job.ID, job.ID, job.ID)
+			return 0
+		}
+		if job.Accepted == s.User.Name {
+			fmt.Fprintf(s.Out, "The DNS repair is verified and %s is yours. Claim payment with `job pay %s`.\n", job.ID, job.ID)
+			return 0
+		}
+		fmt.Fprintf(s.Out, "The DNS repair is verified, but %s is assigned to %s. Use `job list` to find available work.\n", job.ID, job.Accepted)
+		return 0
+	}
+	fmt.Fprintln(s.Out, "Name resolution is working. Use `job list` to find available work.")
+	return 0
 }
 
 // ---- recon ----
@@ -744,6 +801,7 @@ func cmdVps(s *Shell, args []string) int {
 func cmdHelp(s *Shell, args []string) int {
 	fmt.Fprint(s.Out, `NeoHome — a world that keeps running whether you are watching or not.
 
+Start here:                assist guide (state-aware help)   job list
 Work on the machine:      ls cd cat cp mv rm mkdir touch echo find grep head tail
                           sort uniq wc du df chmod chown stat file which ln
 Processes:                ps top htop kill pkill nice
@@ -757,7 +815,7 @@ The world layer:
   bank [balance|history|pay]                        household wallet + assistant budget
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   mail [send TO SUBJECT|log]                        mail actually lands in mailboxes
-  assist [status|tasks|train TRACK]                 the assistant works its own node
+  assist [status|guide|tasks|train TRACK]            the assistant works its own node
   mount -t nfs host:/path /mnt/x                    NFS/SMB really resolve to a device
   vps [list|create PLAN [hostname]]                 buy a real node; it joins the internet
 
