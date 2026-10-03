@@ -267,6 +267,7 @@ func NewWorld() *World {
 	seedWAN(w)
 	seedCron(w)
 	seedVMs(w)
+	seedMail(w)
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

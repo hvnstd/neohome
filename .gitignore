@@ -7,3 +7,5 @@ world.gob
 tools/_commit.sh
 tools/_sum.sh
 tools/_chk.sh
+# agent scratch: plans and notes kept out of the project history
+.hermes/

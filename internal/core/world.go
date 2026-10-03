@@ -52,6 +52,9 @@ type World struct {
 	assistTracks    []string
 	assistantCanFix bool
 
+	// ---- workstream slots (WS-0). Shape owned by mail.go.
+	mail *MailBox
+
 	Power              float64 // household power budget 0..1
 	Heating            bool
 	UtilitiesSuspended bool

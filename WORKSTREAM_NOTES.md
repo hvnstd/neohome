@@ -65,19 +65,22 @@ Nothing else in the workstream depends on it.
 | `nas-alex` | root | `0 3 * * *` | `curl -s -o/srv/data/nightly-mirror.log http://mirror.neohome.example/debian/Release` | "the nightly backup stopped" is a real, traceable failure |
 | `asst-alex` | assistant | `*/30 * * * *` | `echo assistant-heartbeat >> /home/assistant/jobs.log` | a real file that really grows; visible with `assist tasks` |
 
-## Two fidelity bugs found in other files (NOT fixed here — not my files)
+## Two fidelity bugs found in other files — and fixed
 
-1. `internal/shell/net.go` `httpFetch` only understands the attached `-oFILE`
-   form. `curl -s -o /path URL` (space-separated) and `wget -O /path URL` both
-   mis-parse: the path is taken as the URL and the fetch fails with "empty
-   host". The seeded crontabs use the attached `-o/path` form, which is valid
-   real curl syntax and works. Fix would be in `httpFetch`: when the arg is
-   exactly `-o` or `-O`, take the NEXT arg as the output path.
-2. `internal/shell/shell.go` `commandExists` gates BusyBox applets on
-   `s.Dev.OS.Shell == "/bin/ash"`, but `OSInfo.Shell` is written as `"ash"` in
-   `world_init.go`, so `busyboxHas` is dead and the applet list is never used.
-   `core.isBusyboxShell` in `crond.go` accepts both spellings; the shell-side
-   check does not.
+Both were found by this workstream but live in files it does not own. They were
+fixed independently in `2f53472` (the cron commit itself), so the entries are
+kept here only as history — **do not re-fix them**:
+
+1. `internal/shell/net.go` `httpFetch` only understood the attached `-oFILE`
+   form; `curl -s -o /path URL` and `wget -O /path URL` mis-parsed the path as
+   the URL. **Fixed**: the arg scan now handles the separated forms too — see
+   `internal/shell/net.go:349-362` (`-o`/`-O`/`--output` take the NEXT arg;
+   `-oFILE`/`-OFILE` stay attached).
+2. `internal/shell/shell.go` `commandExists` gated BusyBox applets on
+   `s.Dev.OS.Shell == "/bin/ash"`, but `OSInfo.Shell` is written as `"ash"`, so
+   `busyboxHas` was dead. **Fixed**: the check now goes through
+   `core.IsBusyboxShell(s.Dev.OS.Shell)` (`internal/shell/shell.go:334`), which
+   accepts both spellings via the shared `bbSet` applet list.
 
 ## Not implemented on purpose
 
@@ -87,3 +90,19 @@ Nothing else in the workstream depends on it.
   the tick that fires it, so there is no previous run to overlap with.
 * `MAILTO` / job mail: the game's "mail" is world state, so job output goes to
   the device log and `/var/log/cron.log` instead of inventing a mailbox.
+
+## Status (updated 2026-10-03)
+
+Verified against `aaa2990` (the state-aware-assistant + MCP tip):
+
+* All three seeded jobs are exercised by `tests/cron_test.go`
+  (`TestSeededCronJobsAreRealAndDiagnosable` and the `TestCron*` family), and
+  the whole suite is green: `go test ./tests/` → 93 tests pass.
+* The two fidelity bugs above are no longer open — both were fixed in
+  `2f53472`. Re-check with: `grep -n 'IsBusyboxShell' internal/shell/shell.go`
+  and `sed -n '349,364p' internal/shell/net.go`.
+* Live chain: `bash tools/all_verify.sh` runs the 12 end-to-end scripts
+  (live, ssh, wan, live_full, vm, power, dhcp, key, persistence, history, tmux,
+  perm). Note both `all_verify.sh` and the individual scripts hardcode
+  `cd /workspace/neohome` — fine here (the repo is cloned at that path), but a
+  clone elsewhere needs the `cd` overridden first.
