@@ -228,7 +228,7 @@ func (w *World) WalletBalance(who string) (main, assist int64) {
 	if a := w.Bank.Accts[who]; a != nil {
 		main = a.Balance
 	}
-	if p := w.Players[who]; p != nil {
+	if p := w.Players[who]; p != nil && p.Assistant != "" {
 		if a := w.Bank.Accts["assistant"]; a != nil {
 			assist = a.Balance
 		}

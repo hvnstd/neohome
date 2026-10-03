@@ -202,15 +202,23 @@ func (s *Shell) readLine() (string, error) {
 }
 
 func (s *Shell) ExecLine(line string) {
+	s.ExecLineStatus(line)
+}
+
+// ExecLineStatus executes a virtual shell command line and returns its status.
+// It has the same parsing and execution behavior as ExecLine, while allowing
+// non-interactive callers to report success or failure accurately.
+func (s *Shell) ExecLineStatus(line string) int {
 	// A shell only lives while its machine has power. This is checked here as
 	// well as in the read loop so a single command can never run on a box that
 	// has already gone dark.
 	if s.Dev != nil && !s.Dev.Powered() {
 		fmt.Fprintln(s.Out, "\nConnection to host lost (no power).")
 		s.exitFlag = true
-		return
+		return 1
 	}
 	s.exitFlag = false
+	status := 0
 	for _, seg := range strings.Split(line, "&&") {
 		ok := true
 		for _, sub := range strings.Split(strings.TrimSpace(seg), ";") {

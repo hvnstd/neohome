@@ -2,8 +2,11 @@ package shell
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+
+	"neohome/internal/core"
 )
 
 func init() {
@@ -107,26 +110,79 @@ func (s *Shell) hasSudo() bool {
 
 func cmdFastfetch(s *Shell, args []string) int {
 	d := s.Dev
-	fmt.Fprintf(s.Out, "        %s\n", d.Hostname)
-	fmt.Fprintf(s.Out, "-----------------")
-	fmt.Fprintf(s.Out, "OS: %s %s\n", d.OS.Distro, d.OS.Ver)
+	fmt.Fprintf(s.Out, "%s@%s\n", s.User.Name, d.Hostname)
+	fmt.Fprintf(s.Out, "OS: %s %s (%s)\n", d.OS.Distro, d.OS.Ver, d.OS.Arch)
 	fmt.Fprintf(s.Out, "Host: %s (%s)\n", d.HW.Model, d.ID)
 	fmt.Fprintf(s.Out, "Kernel: %s\n", d.OS.Kernel)
 	fmt.Fprintf(s.Out, "Uptime: %s\n", d.Uptime().Round(time.Second))
+	shellName := s.User.Shell
+	if shellName == "" {
+		shellName = s.Dev.OS.Shell
+	}
+	fmt.Fprintf(s.Out, "Shell: %s\n", shellName)
 	fmt.Fprintf(s.Out, "Terminal: %s\n", s.TTY)
 	fmt.Fprintf(s.Out, "CPU: %s (%d cores @ %d MHz)\n", d.HW.Model, d.HW.Cores, d.HW.CPUMHz)
-	fmt.Fprintf(s.Out, "Memory: %d MiB in use (%d MiB free)\n", d.MemUsed(), d.HW.RAMMB-d.MemUsed())
-	fmt.Fprintf(s.Out, "Disk: %d MiB / %d MiB\n", d.FS.DiskUsedMB(), d.HW.DiskMB)
-	fmt.Fprintf(s.Out, "Packages: %d\n", len(d.Installed))
-	fmt.Fprintf(s.Out, "Processes: %d\n", len(d.Procs))
-	if ip := d.FirstLANIP(); ip != "" {
-		fmt.Fprintf(s.Out, "IP: %s\n", ip)
+	memUsed := d.MemUsed()
+	memFree := d.HW.RAMMB - memUsed
+	if memFree < 0 {
+		memFree = 0
 	}
-	if wan := d.FirstWANIP(); wan != "" {
-		fmt.Fprintf(s.Out, "IPv6: ::\n")
-		fmt.Fprintf(s.Out, "Public: %s\n", wan)
+	fmt.Fprintf(s.Out, "Memory: %d / %d MiB (%d MiB free)\n", memUsed, d.HW.RAMMB, memFree)
+	diskUsed := d.FS.DiskUsedMB()
+	diskFree := d.HW.DiskMB - diskUsed
+	if diskFree < 0 {
+		diskFree = 0
+	}
+	fmt.Fprintf(s.Out, "Disk: %d / %d MiB (%d MiB free)\n", diskUsed, d.HW.DiskMB, diskFree)
+	packages := make([]string, 0, len(d.Installed))
+	for name := range d.Installed {
+		packages = append(packages, name)
+	}
+	sort.Strings(packages)
+	if len(packages) == 0 {
+		fmt.Fprintln(s.Out, "Packages: none")
+	} else {
+		fmt.Fprintf(s.Out, "Packages: %s\n", strings.Join(packages, ", "))
+	}
+	fmt.Fprintf(s.Out, "Processes: %d\n", len(d.Procs))
+	fmt.Fprintf(s.Out, "Services: %d running\n", runningServiceCount(d))
+
+	var addresses []string
+	var hasIPv6 bool
+	for _, iface := range d.Ifaces {
+		if !iface.Up || iface.IP == "" {
+			continue
+		}
+		ifaceName := iface.Name
+		if iface.Zone != "" {
+			ifaceName += "[" + iface.Zone + "]"
+		}
+		addresses = append(addresses, ifaceName+"="+iface.IP)
+		if strings.Contains(iface.IP, ":") {
+			hasIPv6 = true
+		}
+	}
+	if len(addresses) == 0 {
+		fmt.Fprintln(s.Out, "Network: down (no active addresses)")
+	} else {
+		fmt.Fprintf(s.Out, "Network: %s\n", strings.Join(addresses, ", "))
+	}
+	if hasIPv6 {
+		fmt.Fprintln(s.Out, "IPv6: configured")
+	} else {
+		fmt.Fprintln(s.Out, "IPv6: not configured")
 	}
 	return 0
+}
+
+func runningServiceCount(d *core.Device) int {
+	count := 0
+	for _, svc := range d.Services {
+		if svc.State == "running" {
+			count++
+		}
+	}
+	return count
 }
 
 func cmdWho(s *Shell, args []string) int {

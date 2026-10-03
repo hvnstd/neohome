@@ -12,10 +12,25 @@ import (
 	"syscall"
 
 	"neohome/internal/core"
+	"neohome/internal/mcpserver"
 	"neohome/internal/shell"
 )
 
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "mcp" {
+		if len(os.Args) == 3 && os.Args[2] == "stdio" {
+			endpoint := os.Getenv("NEOHOME_MCP_URL")
+			if endpoint == "" {
+				endpoint = "http://127.0.0.1:8765/mcp"
+			}
+			if err := mcpserver.RunStdio(os.Stdin, os.Stdout, endpoint, os.Getenv("NEOHOME_MCP_TOKEN")); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+		log.Fatal("usage: neohome mcp stdio")
+	}
+
 	path := worldPath()
 	w := loadOrCreate(path)
 	log.Printf("world: %d devices, %d players (%s)", len(w.Devices), len(w.Players), path)
@@ -23,6 +38,11 @@ func main() {
 	// background engine: advances sim, runs assistant, and really commits the
 	// world to disk — the save is what makes any of this persist.
 	go engine(w, path)
+	if addr := os.Getenv("NEOHOME_MCP_ADDR"); addr != "" {
+		if err := startMCP(w, addr); err != nil {
+			log.Printf("MCP entry unavailable: %v", err)
+		}
+	}
 
 	// Commit on shutdown. This must run in its own goroutine: the listeners below
 	// block forever, so anything placed after them would never be reached and a
@@ -85,7 +105,7 @@ func handle(conn net.Conn, w *core.World) {
 	pass = strings.TrimSpace(pass)
 
 	p := w.Players[login]
-	if p == nil || p.Pass != pass {
+	if p == nil || p.MCPOnly || p.Pass == "" || p.Pass != pass {
 		fmt.Fprintln(conn, "auth failed")
 		return
 	}

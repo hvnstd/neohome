@@ -197,6 +197,10 @@ func cmdMv(s *Shell, args []string) int {
 	if !ok {
 		return 1
 	}
+	if !vfs.CanRemove(src, s.User) {
+		s.errf("%s: %s: Permission denied", s.Dev.Hostname, args[0])
+		return 1
+	}
 	dst := s.abs(args[1])
 	vfs2, dst, err2 := s.ResolveVFS(dst)
 	if vfs2 == nil {
@@ -217,16 +221,27 @@ func cmdRm(s *Shell, args []string) int {
 		s.errf("usage: rm FILE")
 		return 1
 	}
+	failed := false
 	for _, a := range args {
 		p := s.abs(a)
 		vfs, p, err := s.ResolveVFS(p)
 		if vfs == nil {
 			s.errf("%s: %s: %s", s.Dev.Hostname, a, err)
+			failed = true
+			continue
+		}
+		if !vfs.CanRemove(p, s.User) {
+			s.errf("%s: %s: Permission denied", s.Dev.Hostname, a)
+			failed = true
 			continue
 		}
 		if !vfs.Remove(p) {
 			s.errf("%s: %s: No such file or directory", s.Dev.Hostname, a)
+			failed = true
 		}
+	}
+	if failed {
+		return 1
 	}
 	return 0
 }
@@ -239,7 +254,10 @@ func cmdMkdir(s *Shell, args []string) int {
 			s.errf("%s: %s: %s", s.Dev.Hostname, a, "Stale file handle")
 			continue
 		}
-		vfs.MkdirAll(p, 0755, s.User.Name, s.User.Name)
+		if err := vfs.MkdirAllChecked(p, 0755, s.User); err != nil {
+			s.errf("%s: %s: %v", s.Dev.Hostname, a, err)
+			return 1
+		}
 	}
 	return 0
 }
@@ -254,8 +272,17 @@ func cmdTouch(s *Shell, args []string) int {
 		if vfs == nil {
 			continue
 		}
-		if !vfs.Exists(p) {
-			vfs.Write(p, "", 0644, s.User.Name, s.User.Name)
+		if n, exists := vfs.Get(p); exists {
+			if n.IsDir || !vfs.CanWriteFile(p, s.User) {
+				s.errf("%s: %s: Permission denied", s.Dev.Hostname, a)
+				return 1
+			}
+			n.MTime = s.W.Now()
+			continue
+		}
+		if err := s.Dev.WriteGuest(p, nil, s.User); err != nil {
+			s.errf("%s: %s: %v", s.Dev.Hostname, a, err)
+			return 1
 		}
 	}
 	return 0
@@ -306,9 +333,11 @@ func cmdLn(s *Shell, args []string) int {
 	link := rest[1]
 	if symlink {
 		vfs, lp, _ := s.ResolveVFS(s.abs(link))
-		if vfs != nil {
-			vfs.Symlink(target, lp)
+		if vfs == nil || !vfs.CanWriteDir(path.Dir(lp), s.User) {
+			s.errf("%s: %s: Permission denied", s.Dev.Hostname, link)
+			return 1
 		}
+		vfs.Symlink(target, lp)
 		return 0
 	}
 	// hard link: copy
@@ -328,7 +357,10 @@ func cmdLn(s *Shell, args []string) int {
 		s.errf("%s: %s: %s", s.Dev.Hostname, link, "Stale file handle")
 		return 1
 	}
-	vfs2.Write(dst, string(data), 0644, s.User.Name, s.User.Name)
+	if err := s.Dev.WriteGuest(dst, data, s.User); err != nil {
+		s.errf("%s: %s: %v", s.Dev.Hostname, link, err)
+		return 1
+	}
 	return 0
 }
 
@@ -351,7 +383,11 @@ func cmdChmod(s *Shell, args []string) int {
 		n, ok := vfs.Get(p)
 		if !ok {
 			s.errf("%s: %s: No such file or directory", s.Dev.Hostname, a)
-			continue
+			return 1
+		}
+		if s.User.UID != 0 && (n.Owner != s.User.Name || !vfs.AccessiblePath(p, s.User)) {
+			s.errf("%s: %s: Operation not permitted", s.Dev.Hostname, a)
+			return 1
 		}
 		n.Mode = (n.Mode &^ fs.FileMode(0777)) | fs.FileMode(mode)
 	}
@@ -364,6 +400,10 @@ func cmdChown(s *Shell, args []string) int {
 		return 1
 	}
 	owner := args[0]
+	if s.User.UID != 0 {
+		s.errf("%s: changing ownership: Operation not permitted", s.Dev.Hostname)
+		return 1
+	}
 	for _, a := range args[1:] {
 		p := s.abs(a)
 		vfs, p, _ := s.ResolveVFS(p)

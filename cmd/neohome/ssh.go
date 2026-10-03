@@ -53,7 +53,7 @@ func sshEntry(w *core.World, addr string) error {
 			w.Lock()
 			p := w.Players[c.User()]
 			w.Unlock()
-			if p == nil || p.Pass != string(pass) {
+			if p == nil || p.MCPOnly || p.Pass == "" || p.Pass != string(pass) {
 				return nil, fmt.Errorf("permission denied")
 			}
 			return &ssh.Permissions{Extensions: map[string]string{"player": c.User()}}, nil
@@ -67,7 +67,7 @@ func sshEntry(w *core.World, addr string) error {
 			w.Lock()
 			p := w.Players[c.User()]
 			w.Unlock()
-			if p == nil || p.Pass != answers[0] {
+			if p == nil || p.MCPOnly || p.Pass == "" || p.Pass != answers[0] {
 				return nil, fmt.Errorf("permission denied")
 			}
 			return &ssh.Permissions{Extensions: map[string]string{"player": c.User()}}, nil

@@ -91,7 +91,9 @@ func (s *Shell) appendHistoryFile(line string) {
 	}
 	prev, ok := s.Dev.FS.Read(hf)
 	if !ok {
-		s.Dev.FS.Write(hf, line+"\n", 0600, s.User.Name, s.User.Name)
+		if err := s.Dev.WriteGuest(hf, []byte(line+"\n"), s.User); err != nil {
+			s.errf("history: cannot write %s: %v", hf, err)
+		}
 		return
 	}
 	// strip HISTFILE / HISTSIZE assignments: bash does not store them
@@ -114,7 +116,9 @@ func (s *Shell) appendHistoryFile(line string) {
 		lines = lines[len(lines)-max+1:]
 		content = strings.Join(lines, "\n") + "\n"
 	}
-	s.Dev.FS.Write(hf, content+line+"\n", 0600, s.User.Name, s.User.Name)
+	if err := s.Dev.WriteGuest(hf, []byte(content+line+"\n"), s.User); err != nil {
+		s.errf("history: cannot write %s: %v", hf, err)
+	}
 }
 
 // cmdHistory prints the session history, or with `-c` clears it. `history -c`
@@ -146,7 +150,10 @@ func cmdHistory(s *Shell, args []string) int {
 		// flush memory into the file (what bash does on exit)
 		if s.Dev != nil && s.Dev.FS != nil {
 			hf := s.HistoryFile()
-			s.Dev.FS.Write(hf, strings.Join(s.hist, "\n")+"\n", 0600, s.User.Name, s.User.Name)
+			if err := s.Dev.WriteGuest(hf, []byte(strings.Join(s.hist, "\n")+"\n"), s.User); err != nil {
+				s.errf("history: cannot write %s: %v", hf, err)
+				return 1
+			}
 			fmt.Fprintf(s.Out, "history written to %s\n", hf)
 		}
 		return 0

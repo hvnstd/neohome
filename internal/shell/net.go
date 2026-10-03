@@ -379,8 +379,13 @@ func httpFetch(s *Shell, args []string, tool string) int {
 	if output != "" {
 		p := s.abs(output)
 		vfs, p, _ := s.ResolveVFS(p)
-		if vfs != nil {
-			vfs.Write(p, string(data), 0644, s.User.Name, s.User.Name)
+		if vfs == nil {
+			s.errf("%s: %s: Stale file handle", tool, output)
+			return 1
+		}
+		if err := s.Dev.WriteGuest(p, []byte(data), s.User); err != nil {
+			s.errf("%s: %s: %v", tool, output, err)
+			return 1
 		}
 		return 0
 	}

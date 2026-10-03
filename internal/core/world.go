@@ -84,6 +84,7 @@ type DNSRecord struct {
 type Player struct {
 	Name      string
 	Pass      string
+	MCPOnly   bool
 	PC        string
 	Router    string
 	NAS       string

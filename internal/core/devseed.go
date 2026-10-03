@@ -57,6 +57,7 @@ func seedFS(d *Device, kind string) {
 	for _, p := range []string{"/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/var/log", "/var/run", "/var/lib", "/var/spool/cron/crontabs", "/root", "/home", "/tmp", "/etc/systemd", "/etc/systemd/system", "/etc/systemd/system/multi-user.target.wants", "/etc/apt", "/etc/apt/sources.list.d", "/etc/init.d", "/usr/local/bin", "/usr/local/sbin"} {
 		v.MkdirAll(p, 0755, "root", "root")
 	}
+	v.Nodes["/tmp"].Mode = 01777
 	v.Write("/etc/hostname", d.Hostname+"\n", 0644, "root", "root")
 	v.Write("/etc/os-release", fmt.Sprintf("NAME=\"%s\"\nVERSION=\"%s\"\nID=%s\nVERSION_ID=\"%s\"\n", d.OS.Distro, d.OS.Ver, strings.ToLower(d.OS.Distro), d.OS.Ver), 0644, "root", "root")
 	v.Write("/etc/hosts", "127.0.0.1 localhost\n127.0.1.1 "+d.Hostname+"\n", 0644, "root", "root")

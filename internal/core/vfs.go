@@ -57,23 +57,145 @@ func (v *VFS) Write(p, content string, mode uint32, owner, group string) {
 // WriteChecked enforces permissions for a real user (redirects go through it).
 func (v *VFS) WriteChecked(p string, data []byte, u *User) error {
 	p = path.Clean(p)
+	if u == nil {
+		return fmt.Errorf("permission denied")
+	}
 	existing, has := v.Nodes[p]
-	if !strings.HasPrefix(p, "/tmp") && !strings.HasPrefix(p, "/home/"+u.Name) && u.UID != 0 {
-		if !has {
+	if has && existing.IsDir {
+		return fmt.Errorf("is a directory")
+	}
+	if !has {
+		parent, ok := v.Get(path.Dir(p))
+		if !ok || !parent.IsDir {
+			return fmt.Errorf("no such file or directory")
+		}
+	}
+	if u.UID != 0 {
+		if !v.AccessiblePath(p, u) {
 			return fmt.Errorf("permission denied")
 		}
-		if existing.Owner != u.Name && existing.Mode&0002 == 0 {
+		if has {
+			if !v.canWriteMode(existing, u) {
+				return fmt.Errorf("permission denied")
+			}
+		} else if !v.CanWriteDir(path.Dir(p), u) {
 			return fmt.Errorf("permission denied")
 		}
 	}
 	mode := uint32(0644)
 	owner := u.Name
+	group := u.Name
 	if has {
 		mode = uint32(existing.Mode.Perm())
 		owner = existing.Owner
+		group = existing.Group
 	}
-	v.WriteBytes(p, data, mode, owner, owner)
+	v.WriteBytes(p, data, mode, owner, group)
 	return nil
+}
+
+// CanWriteDir reports whether u may create or remove direct children of p.
+func (v *VFS) CanWriteDir(p string, u *User) bool {
+	if u == nil {
+		return false
+	}
+	if u.UID == 0 {
+		return true
+	}
+	p = path.Clean(p)
+	n, ok := v.Get(p)
+	if !ok || !n.IsDir || !v.AccessiblePath(p, u) {
+		return false
+	}
+	return v.canWriteMode(n, u) && v.canExecMode(n, u)
+}
+
+// CanWriteFile reports whether u may update an existing regular file.
+func (v *VFS) CanWriteFile(p string, u *User) bool {
+	if u == nil {
+		return false
+	}
+	if u.UID == 0 {
+		return true
+	}
+	n, ok := v.Get(p)
+	return ok && !n.IsDir && v.AccessiblePath(p, u) && v.canWriteMode(n, u)
+}
+
+// CanRemove reports whether u may remove p from its parent directory.
+func (v *VFS) CanRemove(p string, u *User) bool {
+	if u == nil {
+		return false
+	}
+	if u.UID == 0 {
+		return true
+	}
+	p = path.Clean(p)
+	n, ok := v.Get(p)
+	if !ok || !v.AccessiblePath(p, u) || !v.CanWriteDir(path.Dir(p), u) {
+		return false
+	}
+	parent, ok := v.Get(path.Dir(p))
+	if ok && parent.Mode&01000 != 0 && n.Owner != u.Name {
+		return false
+	}
+	return true
+}
+
+// MkdirAllChecked creates directories only when u can modify the nearest
+// existing parent directory. Existing directory trees are left unchanged.
+func (v *VFS) MkdirAllChecked(p string, mode uint32, u *User) error {
+	if u == nil {
+		return fmt.Errorf("permission denied")
+	}
+	p = path.Clean(p)
+	if n, ok := v.Get(p); ok {
+		if n.IsDir {
+			return nil
+		}
+		return fmt.Errorf("file exists")
+	}
+	parent := path.Dir(p)
+	for {
+		n, ok := v.Get(parent)
+		if ok {
+			if !n.IsDir || !v.CanWriteDir(parent, u) {
+				return fmt.Errorf("permission denied")
+			}
+			break
+		}
+		next := path.Dir(parent)
+		if next == parent {
+			return fmt.Errorf("no such file or directory")
+		}
+		parent = next
+	}
+	v.MkdirAll(p, mode, u.Name, u.Name)
+	return nil
+}
+
+func (v *VFS) canWriteMode(n *INode, u *User) bool {
+	perm := n.Mode.Perm()
+	switch {
+	case n.Owner == u.Name:
+		return perm&0200 != 0
+	case inAnyGroup(u, n.Group):
+		return perm&0020 != 0
+	default:
+		return perm&0002 != 0
+	}
+}
+
+func (v *VFS) canExecMode(n *INode, u *User) bool {
+	perm := n.Mode.Perm()
+	switch {
+	case n.Owner == u.Name:
+		return perm&0100 != 0
+	case inAnyGroup(u, n.Group):
+		return perm&0010 != 0
+	default:
+		return perm&0001 != 0
+	}
 }
 
 func (v *VFS) WriteBytes(p string, data []byte, mode uint32, owner, group string) {
@@ -240,19 +362,22 @@ func (v *VFS) List(dir string) []string {
 		if k == dir {
 			continue
 		}
-		if path.Dir(k) == dir {
+		parent := "."
+		if slash := strings.LastIndexByte(k, '/'); slash >= 0 {
+			parent = k[:slash]
+			if parent == "" {
+				parent = "/"
+			}
+		}
+		if parent == dir {
 			out = append(out, n.Path)
-		} else if dir == "/" && !strings.Contains(strings.TrimPrefix(k, "/"), "/") {
-			out = append(out, k)
 		}
 	}
-	// dedupe + sort base names by full path
-	seen := map[string]bool{}
-	var res []string
+	// Dedupe and sort returned paths.
 	sort.Strings(out)
+	res := make([]string, 0, len(out))
 	for _, p := range out {
-		if !seen[p] {
-			seen[p] = true
+		if len(res) == 0 || p != res[len(res)-1] {
 			res = append(res, p)
 		}
 	}
