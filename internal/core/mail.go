@@ -240,31 +240,45 @@ type RouteResult struct {
 func (w *World) RouteMail(from *Device, fromUser, to, subject, body string) RouteResult {
 	fromAddr := MailAddr(fromUser, from.Hostname)
 
-	// 1 + 2: is this an account somewhere in the world?
-	for _, d := range w.Devices {
-		user, local := LocalUserFor(d, to)
-		if !local {
-			continue
-		}
-		if d.ID == from.ID {
-			if err := w.DeliverLocal(d, fromAddr, user, subject, body); err != nil {
+	// 1: the recipient is on *this* machine. A local delivery never touches
+	// the network, so it is decided before anything else — and this also makes
+	// an unqualified "alex" mean the sender's own account, as it does on a
+	// real host.
+	if from != nil {
+		if user, local := LocalUserFor(from, to); local {
+			if err := w.DeliverLocal(from, fromAddr, user, subject, body); err != nil {
 				return RouteResult{Diagnostic: err.Error(), Via: "bounce"}
 			}
 			return RouteResult{Delivered: true, Via: "local", Recipient: user}
 		}
+	}
+
+	// 2: another machine in the world. Walk w.Order, not the map: with the
+	// same account name present on several hosts (a VM guest often mirrors its
+	// owner's name), map iteration order would make the recipient — and
+	// therefore whether the message is delivered at all — non-deterministic.
+	for _, id := range w.Order {
+		d := w.Devices[id]
+		if d == nil || (from != nil && d.ID == from.ID) {
+			continue
+		}
+		user, local := LocalUserFor(d, to)
+		if !local {
+			continue
+		}
 		// Remote host: the MTA there must genuinely accept. A down MTA is a
 		// queue entry, not a silent drop.
-		if r := w.relayTo(d, from, fromAddr, user, subject, body); r.Delivered {
+		r := w.relayTo(d, from, fromAddr, user, subject, body)
+		if r.Delivered {
 			return r
-		} else {
-			w.Mail().Queue = append(w.Mail().Queue, MailMsg{
-				At: w.Sim.Format("2006-01-02 15:04"), From: fromAddr,
-				To: user + "@" + d.Hostname, Subject: subject, Body: body, Device: d.ID,
-			})
-			from.Logf("warning", "smtp", "queued message for %s@%s: %s", user, d.Hostname, r.Diagnostic)
-			w.AddEvent(from.ID, "warning", "mail", "mail to %s@%s queued: %s", user, d.Hostname, r.Diagnostic)
-			return RouteResult{Queued: true, Via: "relay:" + d.ID, Recipient: user, Diagnostic: r.Diagnostic}
 		}
+		w.Mail().Queue = append(w.Mail().Queue, MailMsg{
+			At: w.Sim.Format("2006-01-02 15:04"), From: fromAddr,
+			To: user + "@" + d.Hostname, Subject: subject, Body: body, Device: d.ID,
+		})
+		from.Logf("warning", "smtp", "queued message for %s@%s: %s", user, d.Hostname, r.Diagnostic)
+		w.AddEvent(from.ID, "warning", "mail", "mail to %s@%s queued: %s", user, d.Hostname, r.Diagnostic)
+		return RouteResult{Queued: true, Via: "relay:" + d.ID, Recipient: user, Diagnostic: r.Diagnostic}
 	}
 
 	// 3: NPCs are handled by the world's own mail layer.
