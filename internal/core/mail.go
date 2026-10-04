@@ -89,6 +89,50 @@ func ReadInbox(d *Device, user string, u *User) (data []byte, exists, permitted 
 	return d.FS.ReadPathAs(MailboxPath(user), u)
 }
 
+// World.ReadInbox reads the *calling user's* mailbox on the device they are
+// logged into. This is the shell-facing entry point: `mail` with no arguments
+// must read the mailbox of the session's own account, as the real binary does,
+// not "whichever player owns this PC".
+func (w *World) ReadInbox(d *Device, user string, u *User) (data []byte, exists, permitted bool) {
+	if d == nil {
+		return nil, false, false
+	}
+	return ReadInbox(d, user, u)
+}
+
+// DeviceForPlayer returns the device a player logs into, or nil. Mail delivery
+// needs it because a mailbox belongs to an account on a machine, not to a
+// player record in the abstract.
+func DeviceForPlayer(p *Player) string {
+	if p == nil {
+		return ""
+	}
+	return p.PC
+}
+
+// LocalUserFor resolves an address to a local account on a device. It accepts
+// the forms a real MTA accepts: bare "alex", "alex@hostname", or a fully
+// qualified "alex@hostname.local". A recipient on a *different* device is not
+// local here and is reported as such, so callers do not silently deliver
+// cross-host mail into the wrong mailbox.
+func LocalUserFor(d *Device, addr string) (user string, local bool) {
+	name := addr
+	if i := strings.Index(addr, "@"); i >= 0 {
+		host := addr[i+1:]
+		name = addr[:i]
+		if host != d.Hostname && host != d.ID && host != "localhost" {
+			return "", false
+		}
+	}
+	if name == "" {
+		return "", false
+	}
+	if d.FindUser(name) == nil {
+		return "", false
+	}
+	return name, true
+}
+
 // --- exported helpers used by shell + init ---
 
 // seedMail installs the mail directories on every device the world already
@@ -168,4 +212,92 @@ func MailboxUsers(d *Device) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ---- routing (WS-0.4) ----
+
+// RouteResult reports what a delivery attempt actually did. A caller that only
+// gets "ok" cannot distinguish "delivered to a mailbox" from "handed to a queue
+// that will never drain", and those are very different worlds.
+type RouteResult struct {
+	Delivered  bool   // the message is in a mailbox now
+	Queued     bool   // accepted by an MTA that is not currently reachable
+	Via        string // "local", "relay:<device>", "npc", "bounce"
+	Recipient  string // resolved user, when Delivered
+	Diagnostic string // why it bounced or was queued
+}
+
+// RouteMail is the single outbound entry point: it decides where a message goes
+// and performs the delivery through the same gates a real MTA obeys.
+//
+// Routing rules, in order:
+//  1. local user on this device  -> deliver into that mailbox;
+//  2. account on another device  -> that device's MTA must be running and the
+//     sender must be able to reach it, otherwise the message queues (real
+//     deferred-delivery behaviour) instead of silently vanishing;
+//  3. an NPC                    -> the NPC's own mail handling;
+//  4. anything else             -> bounce with a diagnostic.
+func (w *World) RouteMail(from *Device, fromUser, to, subject, body string) RouteResult {
+	fromAddr := MailAddr(fromUser, from.Hostname)
+
+	// 1 + 2: is this an account somewhere in the world?
+	for _, d := range w.Devices {
+		user, local := LocalUserFor(d, to)
+		if !local {
+			continue
+		}
+		if d.ID == from.ID {
+			if err := w.DeliverLocal(d, fromAddr, user, subject, body); err != nil {
+				return RouteResult{Diagnostic: err.Error(), Via: "bounce"}
+			}
+			return RouteResult{Delivered: true, Via: "local", Recipient: user}
+		}
+		// Remote host: the MTA there must genuinely accept. A down MTA is a
+		// queue entry, not a silent drop.
+		if r := w.relayTo(d, from, fromAddr, user, subject, body); r.Delivered {
+			return r
+		} else {
+			w.Mail().Queue = append(w.Mail().Queue, MailMsg{
+				At: w.Sim.Format("2006-01-02 15:04"), From: fromAddr,
+				To: user + "@" + d.Hostname, Subject: subject, Body: body, Device: d.ID,
+			})
+			from.Logf("warning", "smtp", "queued message for %s@%s: %s", user, d.Hostname, r.Diagnostic)
+			w.AddEvent(from.ID, "warning", "mail", "mail to %s@%s queued: %s", user, d.Hostname, r.Diagnostic)
+			return RouteResult{Queued: true, Via: "relay:" + d.ID, Recipient: user, Diagnostic: r.Diagnostic}
+		}
+	}
+
+	// 3: NPCs are handled by the world's own mail layer.
+	for _, n := range w.NPCNames {
+		if n == to || strings.HasPrefix(to, n+"@") {
+			w.NPCMail(fromAddr, to, subject, body)
+			return RouteResult{Delivered: true, Via: "npc", Recipient: n}
+		}
+	}
+
+	// 4: bounce.
+	diag := fmt.Sprintf("no such recipient: %s", to)
+	from.Logf("warning", "smtp", "bounced message from %s: %s", fromAddr, diag)
+	w.AddEvent(from.ID, "warning", "mail", "mail from %s bounced: %s", fromAddr, diag)
+	return RouteResult{Diagnostic: diag, Via: "bounce"}
+}
+
+// relayTo performs the actual cross-host handoff, respecting every gate Dial
+// enforces: power, route, firewall and service state.
+func (w *World) relayTo(dst *Device, src *Device, from, user, subject, body string) RouteResult {
+	mta := dst.Svc("smtpd")
+	if mta == nil {
+		return RouteResult{Diagnostic: "no mail transfer agent on " + dst.Hostname, Via: "bounce"}
+	}
+	// The port must really answer before we claim the message was accepted.
+	svc, _, msg := Dial(src, dst.FirstLANIP(), mta.Port)
+	if svc == nil {
+		return RouteResult{Diagnostic: msg, Via: "bounce"}
+	}
+	// A refused submission must not leave a trace claiming success.
+	if err := w.DeliverLocal(dst, from, user, subject, body); err != nil {
+		return RouteResult{Diagnostic: err.Error(), Via: "bounce"}
+	}
+	dst.Logf("info", "smtpd", "relayed message from %s for local delivery to %s", from, user)
+	return RouteResult{Delivered: true, Via: "relay:" + dst.ID, Recipient: user}
 }

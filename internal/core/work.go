@@ -277,22 +277,55 @@ func (w *World) ReadMail(owner string) string {
 	return string(data)
 }
 
-// SendMail is the outbound path: it lands in the recipient's mailbox if the
-// recipient exists in the world, otherwise it bounces.
+// SendMail is the outbound path for callers that already know the recipient is
+// a player or an NPC (job notifications, hypervisor alerts). It routes through
+// RouteMail so every outbound message in the world takes the same path and
+// leaves the same trace.
 func (w *World) SendMail(from, to, subject, body string) error {
-	for _, p := range w.Players {
-		if p.Name == to {
-			w.DeliverMail(to, subject, "from "+from+"\n"+body)
-			return nil
+	// Submit from the machine the *sending account* lives on. Picking an
+	// arbitrary MTA would make the sender's own log tell a lie about which
+	// host relayed the message.
+	src := w.MailSourceFor(from)
+	if src == nil {
+		return fmt.Errorf("no mail host for sender %s", from)
+	}
+	res := w.RouteMail(src, from, to, subject, body)
+	switch {
+	case res.Delivered:
+		return nil
+	case res.Queued:
+		return fmt.Errorf("queued for %s: %s", to, res.Diagnostic)
+	default:
+		return fmt.Errorf("%s", res.Diagnostic)
+	}
+}
+
+// MailSourceFor finds the device that owns the sending account, so outbound
+// mail leaves from where the account actually is. World subsystems (jobs, the
+// hypervisor) pass names that live on no machine; those fall back to the first
+// mail host in the world, which is the honest origin for a world-level sender.
+func (w *World) MailSourceFor(account string) *Device {
+	if account != "" {
+		for _, d := range w.Devices {
+			if d.FindUser(account) != nil && d.Svc("smtpd") != nil {
+				return d
+			}
 		}
 	}
-	for _, n := range w.NPCNames {
-		if n == to {
-			w.NPCMail(from, to, subject, body)
-			return nil
+	// No account by that name here: a world-level sender. Prefer the player's
+	// own machine so notifications land in a place the player can actually
+	// read, and so the trace names a host a player knows.
+	if p := w.Players["alex"]; p != nil {
+		if d := w.Devices[p.PC]; d != nil {
+			return d
 		}
 	}
-	return fmt.Errorf("no such recipient: %s", to)
+	for _, id := range w.Order {
+		if d := w.Devices[id]; d != nil && d.Svc("smtpd") != nil {
+			return d
+		}
+	}
+	return nil
 }
 
 func (w *World) NPCMail(from, to, subject, body string) {

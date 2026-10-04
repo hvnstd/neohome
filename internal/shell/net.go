@@ -432,6 +432,8 @@ func serveHTTP(s *Shell, svc *core.Service, host string) string {
 		return "<html><body>NAS admin console (login required)</body></html>\n"
 	case "http-user":
 		return "<html><body><h1>Welcome to nginx!</h1></body></html>\n"
+	case "smtpd":
+		return "220 neohome ESMTP smtpd ready\n"
 	}
 	return svc.Banner + "\n"
 }

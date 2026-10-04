@@ -214,10 +214,14 @@ func cmdIRC(s *Shell, args []string) int {
 
 func cmdMail(s *Shell, args []string) int {
 	if len(args) == 0 {
-		body := s.W.ReadMail(s.User.Name)
-		if strings.TrimSpace(body) == "" {
+		body, exists, permitted := s.W.ReadInbox(s.Dev, s.User.Name, s.User)
+		if !exists {
 			fmt.Fprintln(s.Out, "no mail")
 			return 0
+		}
+		if !permitted {
+			fmt.Fprintln(s.Out, "permission denied")
+			return 1
 		}
 		fmt.Fprint(s.Out, body)
 		return 0

@@ -101,6 +101,21 @@ func NewWorld() *World {
 			d.Ifaces[0].Mode = "dhcp"
 		}
 	}
+
+	// ---- the mail transfer agent (WS-0.2) -----------------------------------
+	// A real MTA on the player's own machine, not a world-level magic: the port
+	// only answers because a daemon is running, `systemctl stop smtpd` really
+	// closes it, and it comes back with `start`. Installed on the PC and the
+	// assistant node — the NAS is a storage box, not a mail host.
+	for _, d := range []*Device{pc, asst} {
+		d.Services["smtpd"] = &Service{Name: "smtpd", Desc: "SMTP mail transfer agent", Port: 25, Proto: "tcp",
+			Scope: "lan", State: "running", Handler: "smtpd",
+			Banner: "220 neohome ESMTP smtpd ready", Conf: "/etc/mail/smtpd.conf"}
+		d.FS.MkdirAll("/etc/mail", 0755, "root", "root")
+		d.FS.Write("/etc/mail/smtpd.conf",
+			"listen on lo port 25\nlisten on eth0 port 25\n\naction \"local\" mbox\naction \"relay\" relay\n\nmatch from any for local\n",
+			0644, "root", "root")
+	}
 	router.Ifaces = append(router.Ifaces, &Iface{Name: "eth0", IP: w.allocPublicFor("router"), MAC: macFor("router-alex-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	pubHome := wanIP(router)
 	w.IPMap[router.Ifaces[1].IP] = router.ID

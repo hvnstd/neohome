@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -54,7 +55,30 @@ func TestFastfetchReflectsChangesToSimulatedState(t *testing.T) {
 	d.Services["probe"] = &core.Service{Name: "probe", State: "running"}
 
 	out := run(t, w, d, "alex", "fastfetch")
-	for _, fragment := range []string{"probe", "Processes: 3", "Services: 3 running", "eth1=2001:db8::41", "IPv6: configured"} {
+
+	// Derive the expected counts from the device instead of hardcoding them.
+	// The point of this test is that fastfetch reports *current* state, so the
+	// expectation has to be current too: seeding a device with another daemon
+	// must move the number, not silently desync the assertion from reality.
+	wantProcs, wantSvcs := 0, 0
+	for _, p := range d.Procs {
+		if p.Name != "" {
+			wantProcs++
+		}
+	}
+	for _, s := range d.Services {
+		if s.State == "running" {
+			wantSvcs++
+		}
+	}
+
+	for _, fragment := range []string{
+		"probe",
+		fmt.Sprintf("Processes: %d", wantProcs),
+		fmt.Sprintf("Services: %d running", wantSvcs),
+		"eth1=2001:db8::41",
+		"IPv6: configured",
+	} {
 		if !strings.Contains(out, fragment) {
 			t.Errorf("fastfetch did not report current simulated state %q:\n%s", fragment, out)
 		}

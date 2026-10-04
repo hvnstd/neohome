@@ -54,6 +54,16 @@ func BuildMainRepo() *Repo {
 	add(&VPkg{Name: "python3", Version: "3.12.5-3", Arch: "amd64", Desc: "interpreted high-level language (game-VM)", Size: 21000,
 		Files:    map[string]*PkgFile{"/usr/bin/python3": {Content: "", Mode: 0755, Binary: true, Owner: "root", Group: "root"}},
 		PostInst: "registers the game bytecode runner for .py files (sandboxed, capability API)"})
+	add(&VPkg{Name: "opensmtpd", Version: "6.8.2p1-1", Arch: "amd64", Desc: "small SMTP daemon (mail transport agent)", Size: 340,
+		Depends: []string{"libc"},
+		Files: map[string]*PkgFile{
+			"/usr/sbin/smtpd":                       {Content: "", Mode: 0755, Binary: true, Owner: "root", Group: "root"},
+			"/etc/mail/smtpd.conf":                  {Content: "listen on lo port 25\nlisten on eth0 port 25\n\naction \"local\" mbox\naction \"relay\" relay\n\nmatch from any for local\n", Mode: 0644, Owner: "root", Group: "root"},
+			"/etc/mail/aliases":                     {Content: "root: alex\npostmaster: alex\nabuse: alex\n", Mode: 0644, Owner: "root", Group: "root"},
+			"/etc/systemd/system/opensmtpd.service": {Content: "[Unit]\nDescription=OpenSMTPD mail transfer agent\nAfter=network.target\n[Service]\nExecStart=/usr/sbin/smtpd\n[Install]\nWantedBy=multi-user.target\n", Mode: 0644, Owner: "root", Group: "root"},
+		},
+		Service: &SvcSpec{Name: "smtpd", Desc: "SMTP mail transfer agent", Port: 25, Proto: "tcp", Scope: "lan",
+			Handler: "smtpd", Conf: "/etc/mail/smtpd.conf", Autostart: false}})
 	return r
 }
 
