@@ -251,13 +251,32 @@ func (d *Device) dnsmasqConfContent() string {
 func seedNPCFS(d *Device) {
 	seedFS(d, "pc")
 	v := d.FS
-	v.Write("/etc/vsftpd.conf", "listen=YES\nanonymous_enable=YES\nanon_upload_enable=YES\nanon_mkdir_write_enable=YES\nlocal_enable=YES\nwrite_enable=YES\n", 0644, "root", "root")
+	// The seed of the whole FTP attack surface: a real client drop, exposed to
+	// the internet by a port-forward, served by a badly configured vsftpd. The
+	// misconfiguration is the vulnerability — anon_root=/ hands anonymous
+	// sessions the entire filesystem instead of just the drop directory, and
+	// the comment is the human trace of how it happened. Everything a player
+	// can do through it is decided by this file (core/ftp.go parses it on
+	// demand, never shadows it), so `cat /etc/vsftpd.conf` is the explanation.
+	v.Write("/etc/vsftpd.conf",
+		"# temp client drop — do not leave enabled\n"+
+			"listen=YES\n"+
+			"anonymous_enable=YES\n"+
+			"anon_root=/\n"+
+			"anon_upload_enable=YES\n"+
+			"anon_mkdir_write_enable=YES\n"+
+			"local_enable=YES\n"+
+			"write_enable=YES\n", 0644, "root", "root")
 	v.MkdirAll("/home/mara", 0755, "mara", "mara")
 	v.MkdirAll("/home/mara/Desktop", 0755, "mara", "mara")
 	v.Write("/home/mara/Desktop/passwords.kdbx", "BINARY keepass: master pw not crackable\n", 0644, "mara", "mara")
 	v.MkdirAll("/home/devops", 0755, "devops", "devops")
 	v.MkdirAll("/home/devops/deploy", 0755, "devops", "devops")
-	v.Write("/home/devops/deploy/notes.md", "ftp is temp-exposed for a client drop, shut it after tonight.\nmara still uses her old uni password everywhere lol\n", 0644, "devops", "devops")
+	v.Write("/home/devops/deploy/notes.md", "ftp is temp-exposed for a client drop, shut it after tonight.\nmara still uses her old uni password everywhere lol\nthe account export is still in ~/backup, nobody reads it\n", 0644, "devops", "devops")
+	// the export the notes point at: the first FTP access objective, and the
+	// reason the world's credential-leak vuln is real rather than scripted
+	v.MkdirAll("/home/devops/backup", 0755, "devops", "devops")
+	v.Write("/home/devops/backup/accounts-2024.csv", "# exported 2024-11 for the client migration\nmara:hunter2\ndevops:Summer2024!\n", 0644, "devops", "devops")
 	v.MkdirAll("/srv/ftp/pub", 0777, "nobody", "nogroup")
 	v.Write("/srv/ftp/pub/welcome.txt", "drop files here\n", 0644, "nobody", "nogroup")
 }

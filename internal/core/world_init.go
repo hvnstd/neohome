@@ -223,6 +223,11 @@ func NewWorld() *World {
 		"root":   {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
 		"mara":   {Name: "mara", UID: 1000, Pass: "hunter2", Groups: []string{"mara"}, Home: "/home/mara", Shell: "/bin/bash"},
 		"devops": {Name: "devops", UID: 1001, Pass: "Summer2024!", Groups: []string{"devops", "sudo"}, Home: "/home/devops", Shell: "/bin/bash"},
+		// the account anonymous FTP sessions actually run as (uid 21, as on a
+		// real Debian box). It has no password and no login shell: it exists to
+		// own the drop directory, which is why FTPLogin special-cases the name
+		// "ftp"/"anonymous" before it ever consults the account records.
+		"ftp": {Name: "ftp", UID: 21, Groups: []string{"ftp"}, Home: "/srv/ftp", Shell: "/usr/sbin/nologin"},
 	})
 	// mara forwarded her ftp to the world — a genuine attack surface she set up
 	npcr.PortFwd = append(npcr.PortFwd, FwdRule{Proto: "tcp", WPort: 21, DstIP: "10.88.1.11", DPort: 21, Enable: true})

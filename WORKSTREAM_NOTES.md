@@ -21,10 +21,13 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | usb (WS-1.3) | `160b0a7` | the air gap as a tool | §"USB workstream" |
 | live-verify sweep | `ea8eb1d` | home dirs for every account; 13 scripts green | §"Verification status" |
 | LAN plan (hardcode removal) | this commit | one owner for household addresses; `AllocLANStatic` replaces the MCP const; `ValidateLAN` panics at boot on duplicates/pool-collisions; the router's dhcp-range renders from the constants | `internal/core/addr.go`, `tests/lan_test.go` |
+| FTP + reachability (WS-1.4) | this commit | real FTP sessions over the wire; the seeded drop box is reachable, attackable and defended; a port-forward is now a hole that really forwards | §"FTP workstream (WS-1.4)" |
 
 Verification status at tip: full `go test ./...` green, `go vet` clean,
-`bash tools/all_verify.sh` — all 13 scripts exit ok, suspicious counts zero
+`bash tools/all_verify.sh` — all 14 scripts exit ok, suspicious counts zero
 except `live_verify`'s single scripted-fault dnsmasq log (expected).
+`tools/ftp_verify.sh` is the one script that finds its own checkout and Go
+toolchain, so it also runs from a clone outside `/workspace`.
 
 Design debt, deliberately not built (each has a rationale in its section):
 player-side CA issuance (`openssl req`), IMAPS :993, BBS private mail, git
@@ -563,3 +566,109 @@ Ownership: `internal/core/usb.go`, `internal/shell/usb_cmds.go`,
   late-game asset; the stick is its bridge and comes first.
 * Hubs, multiple sticks per host, write-protect switches: one port, one
   stick covers every story the world currently tells.
+
+---
+
+# FTP workstream (WS-1.4) — the last of §19, and the box it needed to be real
+
+Ownership: `internal/core/ftp.go`, `internal/shell/ftp_cmds.go`,
+`tests/ftp_test.go`, `tools/ftp_verify.sh`, plus seed edits in `devseed.go`
+(the neighbour's configuration and the leaked export), `world_init.go` (the
+`ftp` account), `pkgs.go` (what `apt install vsftpd` really writes), `vuln.go`
+(the two FTP vulns' preconditions and the file they read), `world_cmds.go`
+(`applyEffect`'s FTP branches, `recon`, `scan`, `exploit`), `net.go`
+(port-forward reachability), `world.go` (`User.CheckPassword`), `bbs.go` (one
+hacker-board thread), and the `help` text.
+
+## Why this workstream existed
+
+Spec §19 lists FTP among the systems that must really work ("FTP / SFTP：真传
+文件"), and the world already *claimed* to have it in three places that did not
+add up: the seeded neighbour runs `vsftpd` behind a port-forward to the
+internet, the BBS and the vuln help told players to use `ftp -A host`, and no
+`ftp` command existed at all. The two vulns then applied their effects by
+writing into the target's VFS and reading the account records directly — an
+"exploit" that never touched a service, a port or a permission. Three separate
+lies, one workstream.
+
+## What exists now
+
+* `internal/core/ftp.go` owns the protocol: `FTPConfOf` parses the server's
+  real `/etc/vsftpd.conf` on demand (never cached anywhere, so editing the file
+  changes the next command), `FTPDaemon` finds the unit, `FTPLogin`
+  authenticates against the real account records or the anonymous policy, and
+  `FTPSession` performs LIST/CWD/RETR/STOR/MKD/DELE/SIZE as the *session
+  account* on the *server's* filesystem. Anonymous sessions are chrooted to
+  `anon_root` (or the `ftp` account's home), local sessions see `/` unless
+  `local_root` says otherwise, and every refusal is logged on the target with
+  its reason ("anon_upload_enable=NO") so the player has something to find.
+  `Closed()` answers 421 once the daemon stops, so a session cannot outlive its
+  service.
+* `internal/shell/ftp_cmds.go` is the client: `ftp [-A] [user@]host[:port]`
+  then `ls/dir`, `cd`, `pwd`, `get`, `put`, `mkdir`, `delete`, `size`, `user`,
+  `open`, `close`, `lcd`, `bye`. It prints the real dialogue (220/331/230,
+  150/226 around each transfer, 5xx on refusal) because that dialogue is the
+  state of the connection.
+* The seeded arc is now true end to end: repair the DNS fault → `whois` your
+  own WAN address for the ISP's range → `scan` it and find `21/tcp open
+  vsftpd` → `recon` (which follows the forward and names the machine behind it)
+  → `ftp -A` → read `/home/devops/deploy/notes.md` → `get
+  /home/devops/backup/accounts-2024.csv` → `user mara hunter2` → read her
+  files. `exploit` performs the same steps through the same primitives, so the
+  shortcut and the manual path can never disagree.
+
+## Reachability bugs found here (all fixed, all with tests)
+
+1. `Dial` applied the router's `matchFwd` and then judged the **pre-DNAT**
+   machine: a dark PC behind a powered router still accepted connections, and
+   a home PC's default-deny WAN policy filtered every forwarded port — so no
+   port-forward in the world could ever work. The connection is now judged on
+   the machine that really answers (power, firewall, scope), and a forward is a
+   hole the owner opened.
+2. `scan` dialled `FirstLANIP()` even when the matched address was a WAN
+   address, so scanning a public range reported nothing; it now dials the
+   address that matched.
+3. `recon`/`exploit` never followed a forward: `exploit <router-ip> …` looked
+   for the vuln on the router. `core.ForwardTarget` (plus the recon/exploit
+   changes) puts the attack on the host that answers, and recon lists
+   `21/tcp -> forwarded to darkden (10.88.1.11)`.
+4. `ssh`, `sftp`/`scp` and `telnet` compared passwords with a bare
+   `pass != u.Pass`, so an account with no stored password (a service account,
+   or root on the neighbour's PC) authenticated when the player pressed enter.
+   All credential checks now go through `User.CheckPassword`, the one rule the
+   IMAP/SMB/git paths already had.
+5. `Dial` logged every accepted connection as "via ssh-session". One honest
+   line per connection now.
+
+## Verified
+
+* `tests/ftp_test.go`: seeding (config, account, drop, export), config-driven
+  behaviour (anonymous off / upload off / mode bits / overwritten 0600 files),
+  a full anonymous session over the port-forward with a byte-identical
+  download and the server's own log lines, an upload that lands owned by `ftp`
+  and raises an alert-level world event, auth against real accounts with
+  fail2ban-style heat and leak-free refusals, the gates (unresolvable name,
+  stopped daemon, closed forward, dark host, mid-session 421), the player's own
+  packaged daemon (secure default → configured drop → confined anonymous
+  root), the exploit chain over the wire (including failure once the forward is
+  closed) and a save/load round trip.
+* Live: `bash tools/ftp_verify.sh` — 11 steps, exit 0, no suspicious lines: the
+  scripted DNS failure, the player-style repair, the whois→scan→recon chain,
+  the anonymous read, the credential export verified by a real login, mara's
+  account used through the daemon, the evidence trail, and the finale where
+  heat 13 makes her close the port-forward and the same address then times out.
+
+## Not implemented on purpose
+
+* `listen_port`: a unit's port is owned by the service record that `ss`, `scan`,
+  firewall rules and port-forwards all agree on. Honouring a second number
+  would give one fact two owners, so the directive is parsed nowhere and the
+  unit's port wins; noted here rather than half-implemented.
+* ASCII/binary `TYPE` translation: nothing in the world observes the wire, so
+  both modes are byte-exact on disk and a mode toggle would be decoration.
+* FTPS (TLS on the data channel), passive port ranges (the control connection's
+  gate is the model), `mget`/`mput` wildcards, resumable transfers, and
+  `chroot_local_user`: no storyline needs them yet.
+* The BBS thread added to the `hacker` board is one hint about the *method*
+  (an ISP's customer range), not a walkthrough; it carries no IP, because those
+  numbers have an owner.

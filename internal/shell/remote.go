@@ -76,7 +76,7 @@ func cmdSsh(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: %s\n", host, svc.Banner)
 		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
 		pass := s.ReadPasswordLine("")
-		if pass != u.Pass {
+		if !u.CheckPassword(pass) {
 			s.Dev.Fail2Ban[ip]++
 			fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
 			return 1
@@ -135,10 +135,11 @@ func cmdTelnet(s *Shell, args []string) int {
 		loginUser = entered
 	}
 	u := dst.FindUser(loginUser)
-	// never reveal whether the account exists
+	// never reveal whether the account exists, and never let a service account
+	// with no stored password authenticate by pressing enter
 	fmt.Fprint(s.Out, "Password: ")
 	pass := s.ReadPasswordLine("")
-	if u == nil || pass != u.Pass {
+	if !u.CheckPassword(pass) {
 		if s.Dev.Fail2Ban == nil {
 			s.Dev.Fail2Ban = map[string]int{}
 		}

@@ -35,8 +35,18 @@ func BuildMainRepo() *Repo {
 		Service: &SvcSpec{Name: "sshd", Desc: "OpenBSD Secure Shell server", Port: 22, Proto: "tcp", Scope: "lan",
 			Handler: "ssh", Autostart: true}})
 	add(&VPkg{Name: "vsftpd", Version: "3.0.5-1", Arch: "amd64", Desc: "the very secure FTP daemon", Size: 190,
-		Files: map[string]*PkgFile{"/usr/sbin/vsftpd": {Content: "", Mode: 0755, Binary: true, Owner: "root", Group: "root"},
-			"/etc/vsftpd.conf": {Content: "listen=YES\nanonymous_enable=NO\nlocal_enable=YES\nwrite_enable=YES\n", Mode: 0644, Owner: "root", Group: "root"}},
+		Files: map[string]*PkgFile{
+			"/usr/sbin/vsftpd": {Content: "", Mode: 0755, Binary: true, Owner: "root", Group: "root"},
+			// Debian's default: local logins only, anonymous off, writes off.
+			// What a player exposes later is their own configuration, and the
+			// FTP server they run is the same one they can attack elsewhere.
+			"/etc/vsftpd.conf": {Content: "listen=YES\nanonymous_enable=NO\nlocal_enable=YES\nwrite_enable=YES\n", Mode: 0644, Owner: "root", Group: "root"},
+			// the anonymous account and its drop directory: without a writable
+			// 0777 directory under the root, an anonymous upload has nowhere
+			// legal to land (the server's own permission checks decide)
+			"/etc/passwd.d/vsftpd-ftp": {Content: "ftp:x:21:21:ftp:/srv/ftp:/usr/sbin/nologin\n", Mode: 0644, Owner: "root", Group: "root"},
+			"/srv/ftp/pub/.keep":       {Content: "", Mode: 0644, Owner: "root", Group: "root"},
+		},
 		Service: &SvcSpec{Name: "vsftpd", Desc: "FTP daemon", Port: 21, Proto: "tcp", Scope: "lan", Handler: "ftp-user", Autostart: false}})
 	add(&VPkg{Name: "ircd", Version: "1.2.3-1", Arch: "amd64", Desc: "small IRC daemon", Size: 160,
 		Files:   map[string]*PkgFile{"/usr/sbin/ircd": {Content: "", Mode: 0755, Binary: true, Owner: "root", Group: "root"}},

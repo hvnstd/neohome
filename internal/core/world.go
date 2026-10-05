@@ -231,6 +231,18 @@ type User struct {
 	HistFile string
 }
 
+// CheckPassword is the one rule for password checks in this world: an account
+// with no stored password never authenticates by password. Service accounts
+// (www-data, ftp, nobody) exist to own files and run daemons, not to log in; a
+// direct `pass != u.Pass` comparison would hand anyone a session by pressing
+// enter at the prompt, so every credential check goes through here.
+func (u *User) CheckPassword(pw string) bool {
+	if u == nil || u.Pass == "" {
+		return false
+	}
+	return pw == u.Pass
+}
+
 type Proc struct {
 	PID   int
 	Name  string

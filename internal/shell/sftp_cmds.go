@@ -63,7 +63,7 @@ func sshLogin(s *Shell, user, host, ip string, dst *core.Device) (*core.User, in
 	if allowPass {
 		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
 		pass := s.ReadPasswordLine("")
-		if pass != u.Pass {
+		if !u.CheckPassword(pass) {
 			s.Dev.Fail2Ban[ip]++
 			fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
 			return nil, 1

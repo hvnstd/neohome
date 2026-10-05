@@ -97,6 +97,8 @@ func seedBBS(w *World) {
 			"port 23, no banner, admin/admin. check your own gateway —\nyours probably does too. do not ask how I know."},
 		{"hacker", "daemon42", "scans are logged on the target. every time.",
 			"every port you touch leaves a line in their syslog.\nact accordingly."},
+		{"hacker", "daemon42", "anonymous ftp never died, it just moved home",
+			"half the boxes I find are somebody's \"temporary\" drop: anonymous write,\na port-forward they forgot, and their notes in the parent directory.\nlook at your own ISP's customer range before you judge them."},
 	}
 	for _, th := range threads {
 		w.BBSPost(th.board, th.from, th.subject, th.body, stamp)

@@ -630,7 +630,7 @@ func (w *World) GitPush(d *Device, dir string, u *User, user, pass string) (stri
 	// authentication is against the server's own account records — the same
 	// simulated check ssh, sudo and imapd perform
 	acc := dst.FindUser(user)
-	if acc == nil || acc.Pass == "" || pass != acc.Pass {
+	if !acc.CheckPassword(pass) {
 		dst.Logf("notice", "git", "push authentication failed for %s from %s", user, d.SourceIPFor(dst))
 		return "", fmt.Errorf("fatal: authentication failed for %s", g.Host)
 	}

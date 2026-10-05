@@ -2,6 +2,7 @@ package shell
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -393,10 +394,15 @@ func cmdScan(s *Shell, args []string) int {
 	// A real scanner takes an address or a CIDR, not just a hostname. Match
 	// candidate devices by any of their interface addresses; Dial() below then
 	// decides honest reachability (routing, NAT, firewall) for each port.
+	// The address a host is scanned on is the address that matched the target:
+	// scanning a public range must probe the public address, not the host's LAN
+	// address, or a forwarded service behind a home router could never be seen.
 	var targets []*core.Device
+	addrOf := map[string]string{}
 	if ip, ok, _ := core.DNSAnswer(s.Dev, target); ok {
 		if id, found := s.W.IPMap[ip]; found {
 			targets = append(targets, s.W.Devices[id])
+			addrOf[id] = ip
 		}
 	}
 	if len(targets) == 0 {
@@ -408,6 +414,7 @@ func cmdScan(s *Shell, args []string) int {
 			for _, a := range core.DeviceAddrs(d) {
 				if core.AddrInTarget(a, target) {
 					targets = append(targets, d)
+					addrOf[id] = a
 					break
 				}
 			}
@@ -421,21 +428,25 @@ func cmdScan(s *Shell, args []string) int {
 
 	foundAny := false
 	for _, d := range targets {
+		addr := addrOf[d.ID]
+		if addr == "" {
+			addr = d.FirstLANIP()
+		}
 		open := []string{}
-			for _, p := range ports {
-				svc, dst, msg := core.Dial(s.Dev, d.FirstLANIP(), p)
-				if svc != nil && msg == "connected" {
-					open = append(open, fmt.Sprintf("%d/tcp open  %s  %s", p, svc.Name, svc.Banner))
-					// scanning is an observable act — it leaves evidence on the
-					// target, in the syslog and in the world's event stream
-					// (which is what the front-door camera records)
-					d.Logf("notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
-					s.W.AddEvent(d.ID, "notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
-				}
+		for _, p := range ports {
+			svc, dst, msg := core.Dial(s.Dev, addr, p)
+			if svc != nil && msg == "connected" {
+				open = append(open, fmt.Sprintf("%d/tcp open  %s  %s", p, svc.Name, svc.Banner))
+				// scanning is an observable act — it leaves evidence on the
+				// target, in the syslog and in the world's event stream
+				// (which is what the front-door camera records)
+				d.Logf("notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
+				s.W.AddEvent(d.ID, "notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
 			}
+		}
 		if len(open) > 0 {
 			foundAny = true
-			fmt.Fprintf(s.Out, "\nNmap scan report for %s (%s)\n", d.Hostname, d.FirstLANIP())
+			fmt.Fprintf(s.Out, "\nNmap scan report for %s (%s)\n", d.Hostname, addr)
 			fmt.Fprintf(s.Out, "Host is up (0.00%ds latency).\n", 1)
 			for _, o := range open {
 				fmt.Fprintf(s.Out, "  %s\n", o)
@@ -492,6 +503,14 @@ func cmdExploit(s *Shell, args []string) int {
 		return 1
 	}
 
+	// A forwarded port belongs to the machine behind the router, not to the
+	// router: exploit the address the player reached, against the host that
+	// really answers it. Exploiting the router would "succeed" against a
+	// service the router merely forwards.
+	if inner := core.ForwardTarget(s.Dev, ip, chosen.Port); inner != nil {
+		dst = inner
+	}
+
 	// the precondition is checked against real device state, not a flag
 	var svc *core.Service
 	for _, p := range portsOf(dst) {
@@ -517,7 +536,7 @@ func cmdExploit(s *Shell, args []string) int {
 	// it worked — apply the DECLARED EFFECT to world state, honestly
 	fmt.Fprintf(s.Out, "[*] %s\n", chosen.Name)
 	fmt.Fprintf(s.Out, "[*] target %s (%s) satisfies the precondition\n", dst.Hostname, ip)
-	effect := s.applyEffect(dst, chosen)
+	effect := s.applyEffect(dst, ip, chosen)
 	for _, l := range effect {
 		fmt.Fprintf(s.Out, " * %s\n", l)
 	}
@@ -545,29 +564,78 @@ func svcNameFor(d *core.Device, port int) string {
 	return ""
 }
 
-// applyEffect turns the vuln's declared outcome into real state changes.
-func (s *Shell) applyEffect(dst *core.Device, v *core.Vuln) []string {
+// applyEffect turns the vuln's declared outcome into real state changes — over
+// the wire, with the world's own protocol code, so an effect can only succeed
+// where the real service would really have accepted it. The FTP effects used to
+// write files straight into the target's VFS and read credentials out of the
+// account records; both now perform an anonymous session through Dial() and
+// read the credential out of the file the vuln names. Nothing here is a
+// shortcut around a service, a permission or a network gate.
+func (s *Shell) applyEffect(dst *core.Device, ip string, v *core.Vuln) []string {
 	var out []string
 	switch {
 	case strings.HasPrefix(v.Effect, "ftp-access"):
-		// anonymous write lands a real file in /srv/ftp/pub
-		dst.FS.MkdirAll("/srv/ftp/pub", 0777, "nobody", "nogroup")
-		dst.FS.Write("/srv/ftp/pub/.probe", "uploaded "+s.W.Sim.Format("15:04:05")+"\n", 0644, "nobody", "nogroup")
-		out = append(out, "anonymous write accepted: /srv/ftp/pub/.probe created")
-		out = append(out, "now readable: `ftp` the tree, or from here: cat the paths below")
-		// list what an attacker would actually now see
-		if data, ok := dst.FS.Read("/home/devops/deploy/notes.md"); ok {
-			s.stolen = append(s.stolen, "devops/notes.md")
-			out = append(out, "readable: /home/devops/deploy/notes.md")
-			_ = data
+		drop := strings.TrimPrefix(v.Effect, "ftp-access:")
+		sess, err := s.ftpEffectSession(dst, ip)
+		if err != nil {
+			out = append(out, "anonymous access failed: "+err.Error())
+			break
 		}
+		payload := "uploaded " + s.W.Sim.Format("15:04:05") + " from " + s.Dev.Hostname + "\n"
+		if err := sess.Stor(drop, []byte(payload)); err != nil {
+			sess.Close()
+			out = append(out, "anonymous upload refused: "+err.Error())
+			break
+		}
+		out = append(out, "anonymous write accepted: "+drop+" created on "+dst.Hostname)
+		out = append(out, "the drop directory is world-writable; the file is real and the daemon logged it")
+		if entries, err := sess.List(path.Dir(drop)); err == nil {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name)
+			}
+			out = append(out, "visible there now: "+strings.Join(names, " "))
+		}
+		sess.Close()
 	case strings.HasPrefix(v.Effect, "cred-leak"):
 		user := strings.TrimPrefix(v.Effect, "cred-leak:")
-		u := dst.FindUser(user)
-		if u != nil {
-			s.creds = append(s.creds, user+"@"+dst.Hostname+":"+u.Pass)
-			out = append(out, fmt.Sprintf("credential recovered: %s:%s", user, u.Pass))
+		sess, err := s.ftpEffectSession(dst, ip)
+		if err != nil {
+			out = append(out, "anonymous access failed: "+err.Error())
+			break
 		}
+		file := v.File
+		data, err := sess.Retr(file)
+		sess.Close()
+		if err != nil {
+			out = append(out, "read of "+file+" refused: "+err.Error())
+			break
+		}
+		local := "/tmp/" + path.Base(file)
+		if err := s.Dev.WriteGuest(local, data, s.User); err != nil {
+			out = append(out, "could not keep the copy locally: "+err.Error())
+			break
+		}
+		s.stolen = append(s.stolen, file)
+		out = append(out, "fetched "+file+" ("+fmt.Sprintf("%dB", len(data))+") -> "+local)
+		out = append(out, strings.TrimRight(string(data), "\n"))
+		// the credential is read out of the retrieved file, not out of the
+		// account record: if the file does not hold it, the exploit fails
+		pw := credentialFor(string(data), user)
+		if pw == "" {
+			out = append(out, "no credential for "+user+" in that file")
+			break
+		}
+		// and it must really work: a real authenticated login proves it
+		auth, err := s.W.FTPLogin(s.Dev, s.User.Name, dst, user, pw)
+		if err != nil {
+			out = append(out, "credential for "+user+" did not authenticate: "+err.Error())
+			break
+		}
+		auth.Close()
+		s.creds = append(s.creds, user+"@"+dst.Hostname+":"+pw)
+		out = append(out, "credential recovered and verified: "+user+":"+pw)
+		out = append(out, "use it yourself: ftp "+dst.Hostname+" then `user "+user+"`")
 	case strings.HasPrefix(v.Effect, "root-shell"):
 		s.creds = append(s.creds, "root@"+dst.Hostname+":"+dst.FindUser("root").Pass)
 		out = append(out, "root credentials: "+dst.FindUser("root").Pass)
@@ -576,14 +644,49 @@ func (s *Shell) applyEffect(dst *core.Device, v *core.Vuln) []string {
 	return out
 }
 
+// ftpEffectSession opens an anonymous FTP session for an exploit effect: DNS
+// was already resolved by the caller, and Dial() still has to let the
+// connection through (power, routing, the router's port-forward, the firewall
+// and the daemon's service state), so an exploit cannot succeed against a host
+// the player cannot actually reach.
+func (s *Shell) ftpEffectSession(dst *core.Device, ip string) (*core.FTPSession, error) {
+	svc, port := core.FTPDaemon(dst)
+	if svc == nil || svc.State != "running" {
+		return nil, fmt.Errorf("no FTP daemon is running on %s", dst.Hostname)
+	}
+	got, _, msg := core.Dial(s.Dev, ip, port)
+	if got == nil || got.Name != svc.Name {
+		return nil, fmt.Errorf("cannot reach %s:%d (%s)", dst.Hostname, port, msg)
+	}
+	return s.W.FTPLogin(s.Dev, s.User.Name, dst, "anonymous", "anonymous@")
+}
+
+// credentialFor reads "user:password" out of a leaked export, ignoring
+// comments — the same thing a player does with their eyes.
+func credentialFor(export, user string) string {
+	for _, line := range strings.Split(export, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if u, pw, ok := strings.Cut(line, ":"); ok && u == user && pw != "" {
+			return pw
+		}
+	}
+	return ""
+}
+
 func cmdRecon(s *Shell, args []string) int {
 	host := ""
 	if len(args) > 0 {
 		host = args[0]
 	}
 	var target *core.Device
+	ip := ""
 	if host != "" {
-		ip, ok, how := core.DNSAnswer(s.Dev, host)
+		var ok bool
+		var how string
+		ip, ok, how = core.DNSAnswer(s.Dev, host)
 		if !ok {
 			s.errf("cannot resolve %s: %s", host, how)
 			return 1
@@ -597,7 +700,7 @@ func cmdRecon(s *Shell, args []string) int {
 		return 1
 	}
 
-	fmt.Fprintf(s.Out, "recon on %s (%s)\n", target.Hostname, target.FirstLANIP())
+	fmt.Fprintf(s.Out, "recon on %s (%s)\n", target.Hostname, ip)
 	fmt.Fprintf(s.Out, "  profile:  %s\n", target.Profile)
 	fmt.Fprintf(s.Out, "  os:       %s %s (%s, %s)\n", target.OS.Distro, target.OS.Ver, target.OS.Kernel, target.OS.Arch)
 	if target.FirstWANIP() != "" {
@@ -605,6 +708,8 @@ func cmdRecon(s *Shell, args []string) int {
 	}
 	fmt.Fprintf(s.Out, "  uptime:   %s\n", target.Uptime().Round(1e9))
 
+	// The address the player reached is the one probed: on a public address that
+	// is the WAN side, on a LAN address the LAN side.
 	// services actually reachable from where the player stands right now
 	fmt.Fprintf(s.Out, "\nreachable services from your position:\n")
 	any := false
@@ -612,7 +717,7 @@ func cmdRecon(s *Shell, args []string) int {
 		if svc.State != "running" {
 			continue
 		}
-		_, _, msg := core.Dial(s.Dev, target.FirstLANIP(), svc.Port)
+		_, _, msg := core.Dial(s.Dev, ip, svc.Port)
 		if msg == "connected" {
 			any = true
 			fmt.Fprintf(s.Out, "  %-8s %d/tcp  %-12s %s\n", svc.Name, svc.Port, svc.State, svc.Banner)
@@ -622,20 +727,52 @@ func cmdRecon(s *Shell, args []string) int {
 		fmt.Fprintln(s.Out, "  (nothing reachable — check local firewall/scope rules)")
 	}
 
+	// A home router's port-forwards are owner-opened holes: recon has to name
+	// the machine each one lands on, because that machine — not the router — is
+	// what the player can actually attack.
+	var behind []*core.Device
+	for _, f := range target.PortFwd {
+		if !f.Enable {
+			continue
+		}
+		svc, inner, msg := core.Dial(s.Dev, ip, f.WPort)
+		if svc == nil || msg != "connected" {
+			fmt.Fprintf(s.Out, "  %d/tcp -> %s (unreachable now: %s)\n", f.WPort, f.DstIP, msg)
+			continue
+		}
+		behind = append(behind, inner)
+		fmt.Fprintf(s.Out, "  %d/tcp -> forwarded to %s (%s): %s running\n",
+			f.WPort, inner.Hostname, inner.FirstLANIP(), svc.Name)
+	}
+
+	// vulnerabilities, checked against the host that really answers the port
+	check := []*core.Device{target}
+	check = append(check, behind...)
 	fmt.Fprintf(s.Out, "\nknown vulnerabilities matching this host:\n")
 	anyV := false
-	for _, v := range core.Vulns() {
-		var svc *core.Service
-		if v.Port == 21 {
-			svc = target.Svc("vsftpd")
-		} else if v.Port == 22 {
-			if svc = target.Svc("dropbear"); svc == nil {
-				svc = target.Svc("sshd")
+	svcFor := func(d *core.Device, v core.Vuln) *core.Service {
+		switch v.Port {
+		case 21:
+			return d.Svc("vsftpd")
+		case 22:
+			if svc := d.Svc("dropbear"); svc != nil {
+				return svc
 			}
+			return d.Svc("sshd")
 		}
-		if v.Detect(target, svc) {
+		return nil
+	}
+	for _, d := range check {
+		for _, v := range core.Vulns() {
+			if !v.Detect(d, svcFor(d, v)) {
+				continue
+			}
 			anyV = true
-			fmt.Fprintf(s.Out, "  [%s] %s\n      %s\n      hint: %s\n", v.ID, v.Name, v.Desc, v.Help)
+			where := d.Hostname
+			if d.ID == target.ID {
+				where = "here"
+			}
+			fmt.Fprintf(s.Out, "  [%s] %s (%s)\n      %s\n      hint: %s\n", v.ID, v.Name, where, v.Desc, v.Help)
 		}
 	}
 	if !anyV {
@@ -850,7 +987,7 @@ Work on the machine:      ls cd cat cp mv rm mkdir touch echo find grep head tai
 Processes:                ps top htop kill pkill nice
 Network:                  ip ifconfig route ss ping traceroute dig nslookup curl wget openssl
 Services & packages:      systemctl service apt apk pacman dnf
-Remote:                   ssh scp sftp telnet        Sessions: tmux screen
+Remote:                   ssh scp sftp ftp telnet     Sessions: tmux screen
 System info:              fastfetch uname hostname uptime whoami id env free lscpu lsblk dmesg
 
 The world layer:
@@ -870,6 +1007,7 @@ The world layer:
   mount -t nfs host:/path /mnt/x                    NFS/SMB really resolve to a device
   mount -t cifs //host/share /mnt/x [-o user=U]     SMB: real smb.conf shares, guest or authenticated
   smbclient -L host                                 what the server really shares
+  ftp [-A] [user@]host[:port]                        real FTP session (ls/get/put); -A is anonymous
   vps [list|create PLAN [hostname]]                 buy a real node; it joins the internet
 
   recon <host>      what is actually reachable + what is actually vulnerable

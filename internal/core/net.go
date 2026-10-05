@@ -414,6 +414,8 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	}
 
 	// home/office router applies port-forward translation for WAN traffic
+	forwarded := false
+	outer := dst
 	if dst.Profile != "core" && dst.Profile != "vps" && dst.Profile != "infra" && fromWAN {
 		r := dst.W.routerFor(dst)
 		if r != nil {
@@ -426,11 +428,23 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 				dst = src.W.Devices[id]
 			}
 			port = fwd.DPort
+			forwarded = true
 		}
 	}
 
-	// target firewall INPUT
-	if dst.FWDropInput(fromWAN, port) {
+	// A forward lands the connection on a different machine, and every gate
+	// below judges THAT machine: a dark box behind a powered router must still
+	// time out, or the world would answer from a host it reports as off.
+	if dst != outer && !dst.Powered() {
+		return nil, dst, "Connection timed out (host is down)"
+	}
+
+	// target firewall INPUT. An explicit rule always applies; the default-deny
+	// WAN policy applies to traffic that arrives on its own. A port-forward is a
+	// hole the owner opened, and the reason exposed home services are this
+	// world's attack surface (§14/§28) — without this, every forward would be a
+	// dead rule, because a home PC's default policy drops WAN input.
+	if dst.FWDropInput(fromWAN && !forwarded, port) {
 		return nil, dst, "Connection timed out (filtered)"
 	}
 
@@ -449,10 +463,46 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 			return nil, dst, "Connection refused (service bound to LAN only)"
 		}
 		// success — record evidence on the target
-		dst.Logf("info", strings.TrimSuffix(s.Name, ""), "connection accepted from %s (%s:%d) via ssh-session", src.Hostname, src.sourceIPFor(dst), port)
+		// one honest line per accepted connection, whatever the protocol: this
+		// is the record forensics and the IDS later read
+		dst.Logf("info", s.Name, "connection accepted from %s (%s:%d)", src.Hostname, src.sourceIPFor(dst), port)
 		return s, dst, "connected"
 	}
 	return nil, dst, "Connection refused"
+}
+
+// ForwardTarget answers which device a connection to (ip, port) really lands on:
+// the device that owns the address, unless an enabled port-forward on the router
+// in front of it DNATs that port to a machine behind it. Recon, scanning and the
+// exploit paths must follow this, or a forwarded service would look like a
+// service on the router and its vulnerabilities would be invisible — the same
+// reason Dial() lands the connection on the inner host.
+func ForwardTarget(src *Device, ip string, port int) *Device {
+	if src == nil || src.W == nil {
+		return nil
+	}
+	id, ok := src.W.IPMap[ip]
+	if !ok {
+		return nil
+	}
+	d := src.W.Devices[id]
+	if d == nil {
+		return d
+	}
+	r := src.W.routerFor(d)
+	if r == nil {
+		return d
+	}
+	fwd := r.matchFwd(port)
+	if fwd == nil {
+		return d
+	}
+	if iid, ok := src.W.IPMap[fwd.DstIP]; ok {
+		if inner := src.W.Devices[iid]; inner != nil {
+			return inner
+		}
+	}
+	return d
 }
 
 // svcListensOn reports whether the service accepts a connection on port:
