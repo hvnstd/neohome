@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT + SMB
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT + SMB + phone
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -438,3 +438,74 @@ aware redirect fix in `shell.go`.
   make. Real SMB would pin the mount credentials to every file op; that
   needs the mount user threaded through ResolveVFS and its callers.
 * SMB printer shares, DFS, and signing/sealing: no storyline needs them.
+
+---
+
+# Phone workstream (WS-1.2) — the pocket computer
+
+Ownership: `internal/core/sms.go`, `internal/shell/sms_cmds.go`,
+`tests/sms_test.go`, plus the phone devices and their profile in
+`world_init.go`/`devseed.go`, the `SMSTick` call in `engine.go`, the
+`World.SMS` pointer, and the deposit-receipt call in `work.go`'s PayJob.
+
+## The design, and what exists
+
+* Spec §15 lists Phone as a household device; §209 says a phone is "just
+  another default profile". So `phone-alex` (and mara's `phone-mara`) are
+  real devices: battery hardware, a pocket terminal (`sshd`, Termux-style —
+  `ssh alex@phone`), contacts in `~/.contacts`, messages as files in the
+  phone's own `/var/spool/sms/`.
+* SMS delivery is deliberately NOT a network dial: it rides the cellular
+  radio, so it keeps working with the router dark — the one honest
+  property that distinguishes it from every other channel in the world.
+  The gates that remain are the phone's own battery and the recipient's.
+* `sms list|read N|send WHO TEXT` works only on a phone. NPC owners reply
+  immediately, keyword-driven, the same convention as IRC and the BBS;
+  mara's answers are in character and state-aware.
+* Banks text on deposits: `PayJob` sends a receipt to the phone on file
+  (deposits only, as real banks do; no phone, no SMS).
+* Batteries drain one percent per 480 ticks; 15% warns; 0% really powers
+  the phone off — sshd stops, messages bounce ("phone switched off") —
+  until `phone charge` (the dock) restores it.
+
+## Verified
+
+* `tests/sms_test.go`: device seeding (contacts, spool, battery hardware),
+  send/receive with a real reply, unknown contact/number refusals,
+  cellular-outlives-the-router, the deposit receipt end-to-end through
+  `PayJob` on job J-101, and the battery/charge lifecycle including the
+  dead-phone send/receive refusals.
+
+## Not implemented on purpose
+
+* The phone survives the house losing power for SMS, but `ssh phone`
+  during a blackout still fails the Dial power gate — the power model has
+  no per-device battery runtime yet (the BMC's UPS is the only precedent).
+  Wiring `HW.Battery` into `Device.Powered()` is a power-model change that
+  belongs to its own workstream.
+* MMS, calls, app stores: the world is text.
+
+---
+
+# USB design (WS-1.3, designed here — not yet built)
+
+The spec mentions USB only in the Phase 1 list; the physical layer (§42)
+and the air-gapped storage (§41) are where it becomes gameplay. Design:
+
+* A USB stick is a *device* with profile `usb`: its own small VFS, no
+  network interfaces at all, and an attachment point (`AttachedTo string`
+  on the device or a registry in the owning file). Unattached, it exists
+  in the world but no machine sees it.
+* Plugging in is a physical act on a machine you have a session on:
+  `usb plug STICK` / `usb unplug` (or `eject`). On attach, the host gets a
+  `/dev/sda1` block device entry; `mount -t vfat /dev/sda1 /mnt/usb` uses
+  the existing Mount machinery with a new twist — a *local* block device,
+  not a remote host (ResolveVFS must learn FSTy `vfat` mapped to the
+  stick's VFS, not a device-id route).
+* The payoff is the air gap: files copied to the stick travel with it.
+  Plug it into the basement box (§41) and its data is there — the only
+  bridge between the air-gapped machine and the network, which is exactly
+  the dual-edged property the spec wants: honest offline backup, and the
+  classic malware delivery vector for a storyline.
+* Non-goals for v1: USB hubs, several sticks at once, write-protect
+  switches, USB debugging over the phone.

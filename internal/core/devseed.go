@@ -87,7 +87,7 @@ func seedFS(d *Device, kind string) {
 		if d.W != nil {
 			for _, id := range d.W.Order {
 				dev := d.W.Devices[id]
-				if dev == nil || dev.Profile != "pc" && dev.Profile != "nas" && dev.Profile != "iot" {
+				if dev == nil || dev.Profile != "pc" && dev.Profile != "nas" && dev.Profile != "iot" && dev.Profile != "phone" {
 					continue
 				}
 				for _, a := range dev.Ifaces {
@@ -136,6 +136,11 @@ func seedFS(d *Device, kind string) {
 		v.Write("/home/assistant/tasks.md", "# assistant workspace\nskills: dns-troubleshoot(level 1), shell(level 1), sysadmin(level 1)\nloyalty: absolute. budget: household sub-account.\n", 0644, "assistant", "assistant")
 		v.Write("/home/assistant/jobs.log", "2026-09-30 ran 'apk update' for olduser laptop job — incomplete\n", 0644, "assistant", "assistant")
 		v.MkdirAll("/var/log", 0750, "root", "root")
+	case "phone":
+		// a pocket computer: message spool, contacts, and a terminal banner
+		v.Write("/etc/resolv.conf", "nameserver 10.77.1.1\n", 0644, "root", "root")
+		v.MkdirAll(SMSSpoolDir, 0755, "root", "root")
+		v.Write("/etc/motd", "Welcome to NeoDroid (pocket terminal).\n", 0644, "root", "root")
 	case "infra":
 		v.Write("/etc/resolv.conf", "nameserver 10.0.0.3\n", 0644, "root", "root")
 		v.Write("/etc/motd", "Managed infrastructure node. All actions logged to central SIEM.\n", 0644, "root", "root")

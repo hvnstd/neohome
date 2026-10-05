@@ -183,6 +183,20 @@ func NewWorld() *World {
 	lokd.Services["lockd"] = &Service{Name: "lockd", Desc: "front door lock", Port: 8899, Proto: "tcp",
 		Scope: "lan", State: "running", Handler: "lockd", Banner: "NeoLock/2.1", Conf: "/etc/lockd.conf"}
 
+	// ---- the household phone (WS-1.2) ---------------------------------------
+	// Spec §15/§209: a phone is just another device profile — a battery-
+	// powered pocket computer on the Wi-Fi with a terminal, a message spool,
+	// and a cellular radio that keeps SMS alive when the router is not.
+	phone := w.addDevice("phone-alex", "phone", "phone", "alex", OSInfo{"NeoDroid", "15", "6.6.20", "aarch64", "bash"},
+		Hardware{"Pocket Computer", 8, 2400, 8192, 131072, 0, false, true}, "10.77.1.21")
+	mkUsers(phone, map[string]*User{
+		"root": {Name: "root", UID: 0, Pass: "admin", Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
+		"alex": {Name: "alex", UID: 1000, Pass: "alex123", Groups: []string{"alex"}, Home: "/home/alex", Shell: "/bin/bash"},
+	})
+	seedFS(phone, "phone")
+	phone.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH (pocket terminal)", Port: 22, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
+
 	// ---- NPC neighbour ----
 	npcpc := w.addDevice("npc-pc", "darkden", "pc", "mara", OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
 		Hardware{"Gaming rig", 8, 4800, 32768, 131072, 1000, false, false}, "10.88.1.11")
@@ -207,6 +221,14 @@ func NewWorld() *World {
 	npcpc.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan",
 		State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
 	npcpc.Users["mara"].Home = "/home/mara"
+	// mara carries a phone as well: her side of the SMS conversation, on her
+	// own battery and her own cellular radio
+	nphone := w.addDevice("phone-mara", "mara-phone", "phone", "mara", OSInfo{"NeoDroid", "15", "6.6.20", "aarch64", "bash"},
+		Hardware{"Pocket Computer", 8, 2400, 8192, 131072, 0, false, true}, "10.88.1.50")
+	mkUsers(nphone, map[string]*User{
+		"mara": {Name: "mara", UID: 1000, Pass: "hunter2", Groups: []string{"mara"}, Home: "/home/mara", Shell: "/bin/bash"},
+	})
+	seedFS(nphone, "phone")
 	seedNPCFS(npcpc)
 
 	// ---- DNS zone ----
@@ -352,6 +374,7 @@ func NewWorld() *World {
 	seedBBS(w)
 	seedGit(w)
 	seedIoT(w)
+	seedSMS(w)
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

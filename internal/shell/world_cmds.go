@@ -846,6 +846,8 @@ The world layer:
   git clone|status|log|commit|pull|push             real repositories on git.neohome.example, https with push auth
   camera [list|view N]                              front-door clips, recorded from real household events
   lock [status|lock|unlock [PIN]|batteries]         the front door: owner app or PIN; wrong codes are evidence
+  sms [list|read N|send WHO TEXT]                   on your phone — cellular, survives a dead router
+  phone [status|charge]                             battery and the charger dock
   mail [send TO SUBJECT|log]                        mail actually lands in mailboxes
   mutt [-f mailbox [N]]                             open any mailbox: local mbox or imap://user@host/INBOX
   assist [status|guide|tasks|train TRACK]            the assistant works its own node

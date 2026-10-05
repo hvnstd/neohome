@@ -225,6 +225,10 @@ func LoadWorld(path string) (*World, error) {
 		// camera and lock devices exist
 		seedIoT(w)
 	}
+	if w.SMS == nil {
+		// saves from before phones existed; a no-op unless phone devices exist
+		seedSMS(w)
+	}
 	return w, nil
 }
 

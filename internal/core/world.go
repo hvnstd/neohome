@@ -68,6 +68,7 @@ type World struct {
 	//   TLS  -> tls.go   (certificate authorities / issued certs)
 	//   BBS  -> bbs.go   (bulletin board: boards, posts, NPC replies)
 	//   IoT  -> iot.go   (front-door camera recordings + smart lock)
+	//   SMS  -> sms.go   (phones: registry, spools, batteries)
 	// Touch only the pointer here; add fields inside the owning file.
 	WAN  *WAN
 	Cron *CronState
@@ -75,6 +76,7 @@ type World struct {
 	TLS  *TLSState
 	BBS  *BBS
 	IoT  *IoT
+	SMS  *SMS
 }
 
 type Event struct {

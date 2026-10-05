@@ -171,6 +171,10 @@ func (w *World) PayJob(who, id string) (int64, string, error) {
 	acc.Balance += j.Pay
 	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: j.Pay, Memo: "job " + j.ID + " — " + j.Title, Balance: acc.Balance})
 	w.AddEvent("world", "info", "bank", "paid %s for %s: %d cents", who, j.ID, j.Pay)
+	// banks text you when money arrives — a deposit receipt to the phone on
+	// file, and none when there is no phone
+	w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s). balance %d.%02d",
+		j.Pay/100, j.Pay%100, j.ID, acc.Balance/100, acc.Balance%100))
 	return j.Pay, why, nil
 }
 
