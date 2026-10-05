@@ -24,7 +24,7 @@ go test ./...                                    # only neohome/tests has tests
 go test ./tests -run TestName -v                 # single test, e.g. -run TestTmuxSessionsAreRealProcesses
 ```
 
-Fast unit path (no server): `core.NewWorld()` + `shell.NewShell(w, dev, user, out, ip, tty)` + `ExecLine` — see `run()` helper in `tests/world_test.go:19`.
+Fast unit path (no server): `core.NewWorld()` + `shell.NewShell(w, dev, user, out, ip, tty)` + `ExecLine` — see the `run()` helper in `tests/world_test.go:19`, and `runWithStdin` (same file) when the command reads passwords or an interactive body from stdin.
 
 ## Adding a subsystem (pattern)
 
@@ -39,6 +39,7 @@ Locking: live server shares one `*World`; hold `w.Lock()` around `Tick`/`Save`/s
 
 ## Gotchas
 
-- `tools/*_verify.sh` hardcode `cd /workspace/neohome`, which does not exist in this environment (repo is at `/workspaces/264638881/neohome`). Run with an overridden workdir or fix the `cd` first; `all_verify.sh` chains them all. `killsrv.sh` kills by process-name pattern (`neohome`/`nh_*`).
+- `tools/*_verify.sh` hardcode `cd /workspace/neohome` — fine when the repo is cloned at that path (it is in this environment); a clone elsewhere needs the `cd` overridden first. `all_verify.sh` chains all 13 scripts and reports a `suspicious` count per script; review any non-zero (expected-error patterns — the scripted DNS fault's own dnsmasq log is legitimately "suspicious" in `live_verify`). `killsrv.sh` kills by process-name pattern (`neohome`/`nh_*`).
+- LAN static IPs: `10.77.1.41` is reserved for MCP device provisioning (`internal/core/mcp.go` hardcodes it); the DHCP pool is `.50–.200`. Pick household statics outside both (current: .11–.43 range below .50).
 - Ignored outputs: `/neohome` binary, `world.gob`/`*.gob`, `tools/_*.sh` scratch (see `.gitignore`) — never commit these.
 - Live ports `:2024`/`:2222` may already be bound; entries degrade independently (server stays headless, engine keeps ticking).

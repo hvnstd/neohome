@@ -1,4 +1,38 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT + SMB + phone + usb
+# Workstream notes
+
+One section per workstream, oldest first. Each section owns its files; check
+ownership there before touching cross-cutting files (`world.go` pointers,
+`engine.go` tick calls, `world_init.go` seeds, `resolver.go` backcompat).
+
+## Index (status 2026-10-05, tip `ea8eb1d`)
+
+| Workstream | Commit | What it added | Where |
+|---|---|---|---|
+| cron + VM | `8ef6438`/`2f53472` | world scheduler, daemon-gated jobs, VMs | first section below |
+| mail (WS-0.2–0.5) | `d2ba08c`/`38350e6` | smtpd daemon, routed delivery, job mail | (see `internal/core/mail.go`) |
+| TLS + https | `0cca5f2` | real CAs, issued certs, enforced https, openssl | §"TLS workstream" |
+| IMAP (WS-0.6) | `75b7900` | the reading half of mail; mutt | §"IMAP workstream" |
+| BBS (WS-0.7) | `3c1ab3e` | the community board as a social system | §"BBS workstream" |
+| git (WS-0.8) | `e957d12` | loose-object repositories over https | §"Git workstream" |
+| sftp/scp (WS-0.9) | `5a2bdf8` | real transfers, stubs removed — spec §19 complete | §"SFTP workstream" |
+| IoT (WS-1.0) | `69c6adf` | camera recordings, smart lock | §"IoT workstream" |
+| SMB (WS-1.1) | `9e8835c` | real shares, mount-aware redirects | §"SMB workstream" |
+| phone (WS-1.2) | `1363d10` | pocket computer, cellular SMS | §"Phone workstream" |
+| usb (WS-1.3) | `160b0a7` | the air gap as a tool | §"USB workstream" |
+| live-verify sweep | `ea8eb1d` | home dirs for every account; 13 scripts green | §"Verification status" |
+
+Verification status at tip: full `go test ./...` green, `go vet` clean,
+`bash tools/all_verify.sh` — all 13 scripts exit ok, suspicious counts zero
+except `live_verify`'s single scripted-fault dnsmasq log (expected).
+
+Design debt, deliberately not built (each has a rationale in its section):
+player-side CA issuance (`openssl req`), IMAPS :993, BBS private mail, git
+branches/merge, sftp recursion, the §41 air-gapped vault (the USB stick is
+its bridge), battery runtime in `Device.Powered()` for phones, PoE switch.
+
+---
+
+# Workstream notes — scheduler (cron) + VM
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -91,21 +125,21 @@ kept here only as history — **do not re-fix them**:
 * `MAILTO` / job mail: the game's "mail" is world state, so job output goes to
   the device log and `/var/log/cron.log` instead of inventing a mailbox.
 
-## Status (updated 2026-10-03)
+## Status (updated 2026-10-05)
 
-Verified against `aaa2990` (the state-aware-assistant + MCP tip):
+Verified against `ea8eb1d` (the current tip):
 
 * All three seeded jobs are exercised by `tests/cron_test.go`
   (`TestSeededCronJobsAreRealAndDiagnosable` and the `TestCron*` family), and
-  the whole suite is green: `go test ./tests/` → 93 tests pass.
+  the whole suite is green (`go test ./tests/` — 146 tests pass at this tip).
 * The two fidelity bugs above are no longer open — both were fixed in
   `2f53472`. Re-check with: `grep -n 'IsBusyboxShell' internal/shell/shell.go`
   and `sed -n '349,364p' internal/shell/net.go`.
-* Live chain: `bash tools/all_verify.sh` runs the 12 end-to-end scripts
-  (live, ssh, wan, live_full, vm, power, dhcp, key, persistence, history, tmux,
-  perm). Note both `all_verify.sh` and the individual scripts hardcode
-  `cd /workspace/neohome` — fine here (the repo is cloned at that path), but a
-  clone elsewhere needs the `cd` overridden first.
+* Live chain: `bash tools/all_verify.sh` runs the 13 end-to-end scripts
+  (live, ssh, wan, live_full, vm, power, dhcp, key, persistence, history,
+  tmux, perm, tls). Note both `all_verify.sh` and the individual scripts
+  hardcode `cd /workspace/neohome` — fine here (the repo is cloned at that
+  path), but a clone elsewhere needs the `cd` overridden first.
 
 ---
 
