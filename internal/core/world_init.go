@@ -1,6 +1,9 @@
 package core
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Fault describes the currently planted causal problem (debuggable, fixable).
 type Fault struct {
@@ -389,4 +392,15 @@ func NewWorld() *World {
 	return w
 }
 
-func mkUsers(d *Device, m map[string]*User) { d.Users = m }
+// mkUsers installs an account table and makes sure every real account has
+// its home directory — useradd -m, not a shell whose history file can
+// never exist. System accounts (nologin, /nonexistent) get nothing.
+func mkUsers(d *Device, m map[string]*User) {
+	d.Users = m
+	for _, u := range m {
+		if u.Home == "" || u.Home == "/nonexistent" || strings.HasSuffix(u.Shell, "nologin") {
+			continue
+		}
+		d.FS.MkdirAll(u.Home, 0755, u.Name, u.Name)
+	}
+}
