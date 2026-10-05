@@ -251,6 +251,10 @@ func NewWorld() *World {
 	nas.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.2"}
 	nas.Services["nginx"] = &Service{Name: "nginx", Desc: "NAS web ui", Port: 8080, Proto: "tcp", Scope: "lan", State: "running", Handler: "http-nas", Banner: "nginx"}
 	nas.Services["nfsd"] = &Service{Name: "nfsd", Desc: "NFS exports", Port: 2049, Proto: "tcp", Scope: "lan", State: "running", Handler: "nfs"}
+	// the Windows half of the household file sharing (WS-1.1): the shares
+	// are whatever /etc/samba/smb.conf really says
+	nas.Services["smbd"] = &Service{Name: "smbd", Desc: "Samba file shares", Port: 445, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "smb", Banner: "Samba", Conf: "/etc/samba/smb.conf"}
 	asst.Services["sshd"] = &Service{Name: "sshd", Desc: "assistant node", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
 	pc.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan", State: "stopped", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
 	// syslog daemons: without one there is nothing for logread/journalctl to

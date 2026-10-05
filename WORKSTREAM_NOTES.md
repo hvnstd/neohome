@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT + SMB
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -386,3 +386,55 @@ to existing target-side logs (scan in `world_cmds.go`).
   reachability) is enforced; a switch device adds nothing yet.
 * Video: the world is text; a clip is a structured, honest rendering of
   the events it recorded.
+
+---
+
+# SMB workstream (WS-1.1) — the Windows half of file sharing
+
+Ownership: `internal/core/smb.go`, `internal/shell/smb_cmds.go`,
+`tests/smb_test.go`, plus the smbd service and smb.conf on the NAS
+(`world_init.go`/`devseed.go`), the rewritten `cmdMount`, and the mount-
+aware redirect fix in `shell.go`.
+
+## What was wrong before
+
+* `cmdMount` already had a smb/cifs branch — but no smbd existed anywhere,
+  so it was a dead branch, and a "successful" mount would have been an
+  unauthenticated one with no share semantics at all (`//host/share` was
+  not even parseable).
+* Shell redirects (`>`, `>>`) bypassed the mounts entirely: `echo x >>
+  /mnt/data/f` silently wrote a *local* file instead of the server's.
+  Redirects now resolve through `ResolveVFS` like every other write, with
+  the local path keeping the guest disk-full gate.
+
+## What exists now
+
+* The NAS runs `smbd` on 445 (LAN), and its shares are exactly what
+  `/etc/samba/smb.conf` says — parsed on demand by `core.SMBShares`, never
+  shadowed: `[data]` (guest, the same content NFS exports) and `[media]`
+  (`guest ok = no`, `valid users = alex`), backed by real files.
+* `mount -t cifs //nas/share /mnt/x [-o user=NAME]`: the share must exist
+  in the server's configuration; non-guest shares prompt for a password
+  and authenticate against the server's account records with the share's
+  valid-users ACL on top (root is a real NAS account and is still refused
+  on the media share). After the mount, the existing machinery does the
+  work: ls/cat/cp/redirects resolve through the mount, the smbd state is
+  re-checked on every access (stop the daemon → "Stale file handle"), and
+  writes land on the NAS through the server's own permission checks.
+* `smbclient -L HOST` lists what the server really shares — the recon
+  step before the mount.
+
+## Verified
+
+* `tests/smb_test.go`: share parsing, guest mount with real reads/writes
+  through the mount, auth and ACL refusals (wrong password, foreign
+  account, valid-users), unknown share, smbclient listing, service-state
+  gating including the stale-file-handle window.
+
+## Not implemented on purpose
+
+* Per-file operations under the mount act as the session user against the
+  server's filesystem — the same simplification the NFS mounts already
+  make. Real SMB would pin the mount credentials to every file op; that
+  needs the mount user threaded through ResolveVFS and its callers.
+* SMB printer shares, DFS, and signing/sealing: no storyline needs them.

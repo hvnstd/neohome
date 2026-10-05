@@ -301,13 +301,28 @@ func (s *Shell) execOne(cmd string) bool {
 		rc := fn(sub, args)
 		if sb.Len() > 0 {
 			p := s.abs(redirFile)
+			// redirects go through the mounts like every other write: a file
+			// on an NFS/SMB share is written on the server, honestly
+			vfs, rp, rerr := s.ResolveVFS(p)
+			if vfs == nil {
+				fmt.Fprintf(s.Out, "%s: %s: %s\r\n", s.Dev.Hostname, redirFile, rerr)
+				return false
+			}
 			data := []byte(sb.String())
 			if appendMode {
-				if old, ok := s.Dev.FS.Read(p); ok {
+				if old, ok := vfs.Read(rp); ok {
 					data = append(old, data...)
 				}
 			}
-			if err := s.Dev.WriteGuest(p, data, s.User); err != nil {
+			// local writes keep the guest disk-full gate; mounted writes are
+			// permission-checked by the server's filesystem
+			var err error
+			if vfs == s.Dev.FS {
+				err = s.Dev.WriteGuest(p, data, s.User)
+			} else {
+				err = vfs.WriteChecked(rp, data, s.User)
+			}
+			if err != nil {
 				fmt.Fprintf(s.Out, "%s: %s: cannot write (%v)\r\n", s.Dev.Hostname, redirFile, err)
 				return false
 			}
@@ -446,7 +461,7 @@ func (s *Shell) ResolveVFS(p string) (*core.VFS, string, string) {
 				return s.Dev.FS, p, ""
 			}
 			svcName := "nfsd"
-			if m.FSTy == "smb" {
+			if m.FSTy == "smb" || m.FSTy == "cifs" {
 				svcName = "smbd"
 			}
 			if sv := d.Svc(svcName); sv == nil || sv.State != "running" {

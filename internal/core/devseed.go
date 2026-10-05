@@ -110,6 +110,17 @@ func seedFS(d *Device, kind string) {
 		v.MkdirAll("/srv/data", 0777, "root", "root")
 		v.Write("/srv/data/backups.tar.gz", "BINARY", 0644, "root", "root")
 		v.Write("/srv/data/photos/vacation.txt", "42 photos (placeholder)\n", 0644, "alex", "alex")
+		// the SMB side of "SMB / NFS: 真共享文件" (WS-1.1): two shares, one
+		// guest, one with an account + valid-users ACL
+		v.MkdirAll("/etc/samba", 0755, "root", "root")
+		v.Write("/etc/samba/smb.conf",
+			"[global]\n   workgroup = HOME\n   server string = nas\n\n"+
+				"[data]\n   path = /srv/data\n   guest ok = yes\n\n"+
+				"[media]\n   path = /srv/media\n   guest ok = no\n   valid users = alex\n",
+			0644, "root", "root")
+		v.MkdirAll("/srv/media/photos", 0755, "alex", "alex")
+		v.Write("/srv/media/index.txt", "family media share — photos and home video\n", 0644, "alex", "alex")
+		v.Write("/srv/media/photos/holiday-2026.txt", "128 photos (placeholder)\n", 0644, "alex", "alex")
 		v.MkdirAll("/srv/www", 0755, "root", "root")
 		v.Write("/srv/www/index.html", "<html><body>NAS admin console (login required)</body></html>", 0644, "root", "root")
 		v.Write("/etc/apt/sources.list", "deb http://mirror.neohome.example/debian bookworm main\n", 0644, "root", "root")

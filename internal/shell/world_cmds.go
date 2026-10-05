@@ -677,51 +677,72 @@ func cmdMount(s *Shell, args []string) int {
 		}
 		return 0
 	}
-	src := args[0]
-	if len(args) < 2 {
-		s.errf("usage: mount -t nfs nas:/srv/data /mnt/data")
-		return 1
-	}
-	fsTy := "nfs"
-	if len(args) > 2 && args[0] == "-t" {
-		fsTy = args[1]
-		src = args[2]
-		if len(args) < 4 {
-			s.errf("usage: mount -t nfs nas:/srv/data /mnt/data")
-			return 1
+	fsTy := ""
+	src := ""
+	dst := ""
+	opts := map[string]string{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-t":
+			if i+1 >= len(args) {
+				s.errf("usage: mount -t nfs nas:/srv/data /mnt/data | mount -t cifs //nas/data /mnt/data [-o user=NAME]")
+				return 1
+			}
+			i++
+			fsTy = args[i]
+		case "-o":
+			if i+1 >= len(args) {
+				s.errf("usage: mount -o user=NAME ...")
+				return 1
+			}
+			i++
+			for _, kv := range strings.Split(args[i], ",") {
+				if j := strings.Index(kv, "="); j >= 0 {
+					opts[kv[:j]] = kv[j+1:]
+				}
+			}
+		default:
+			if src == "" {
+				src = args[i]
+			} else if dst == "" {
+				dst = args[i]
+			}
 		}
 	}
-	dst := args[len(args)-1]
-	parts := strings.SplitN(src, ":", 2)
-	if len(parts) != 2 {
-		s.errf("bad source: %s (want host:/path)", src)
+	if src == "" || dst == "" {
+		s.errf("usage: mount -t nfs nas:/srv/data /mnt/data | mount -t cifs //nas/data /mnt/data [-o user=NAME]")
 		return 1
 	}
-	host, path := parts[0], parts[1]
-	ip, ok, how := core.DNSAnswer(s.Dev, host)
+	// //host/share is cifs by construction, the way mount.cifs is picked
+	if strings.HasPrefix(src, "//") {
+		fsTy = "cifs"
+	}
+	if fsTy == "" {
+		fsTy = "nfs"
+	}
+	if fsTy == "cifs" || fsTy == "smb" {
+		return mountSMB(s, src, dst, opts)
+	}
+
+	ip, ok, how := core.DNSAnswer(s.Dev, strings.SplitN(src, ":", 2)[0])
 	if !ok {
-		s.errf("cannot resolve %s: %s", host, how)
+		s.errf("cannot resolve %s: %s", strings.SplitN(src, ":", 2)[0], how)
 		return 1
 	}
 	id, found := s.W.IPMap[ip]
 	if !found {
-		s.errf("no route to %s", host)
+		s.errf("no route to %s", strings.SplitN(src, ":", 2)[0])
 		return 1
 	}
-	srv := s.W.Devices[id]
-	svcName := "nfsd"
-	if fsTy == "smb" || fsTy == "cifs" {
-		svcName = "smbd"
-	}
-	svc, _, msg := core.Dial(s.Dev, ip, map[string]int{"nfsd": 2049, "smbd": 445}[svcName])
+	host, path := strings.SplitN(src, ":", 2)[0], strings.SplitN(src, ":", 2)[1]
+	svc, _, msg := core.Dial(s.Dev, ip, 2049)
 	if svc == nil || msg != "connected" {
 		s.errf("mount: %s:%s: %s", host, path, msg)
-		fmt.Fprintf(s.Out, "  is %s running on %s? try: ssh %s then systemctl status %s\n", svcName, host, host, svcName)
+		fmt.Fprintf(s.Out, "  is nfsd running on %s? try: ssh %s then systemctl status nfsd\n", host, host)
 		return 1
 	}
 	s.Dev.Mounts = append(s.Dev.Mounts, core.Mount{Src: id + ":" + path, Dst: s.abs(dst), FSTy: fsTy})
 	fmt.Fprintf(s.Out, "mounted %s:%s on %s (type %s)\n", host, path, s.abs(dst), fsTy)
-	_ = srv
 	return 0
 }
 
@@ -829,6 +850,8 @@ The world layer:
   mutt [-f mailbox [N]]                             open any mailbox: local mbox or imap://user@host/INBOX
   assist [status|guide|tasks|train TRACK]            the assistant works its own node
   mount -t nfs host:/path /mnt/x                    NFS/SMB really resolve to a device
+  mount -t cifs //host/share /mnt/x [-o user=U]     SMB: real smb.conf shares, guest or authenticated
+  smbclient -L host                                 what the server really shares
   vps [list|create PLAN [hostname]]                 buy a real node; it joins the internet
 
   recon <host>      what is actually reachable + what is actually vulnerable
