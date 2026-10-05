@@ -28,6 +28,22 @@ func run(t *testing.T, w *core.World, dev *core.Device, user string, line string
 	return out.String()
 }
 
+// runWithStdin runs one command line with the given lines available on the
+// session's stdin — passwords and interactive command bodies, the way a
+// live session feeds them.
+func runWithStdin(t *testing.T, w *core.World, dev *core.Device, user string, line string, stdin ...string) string {
+	t.Helper()
+	u := dev.FindUser(user)
+	if u == nil {
+		t.Fatalf("user %s not found on %s", user, dev.Hostname)
+	}
+	out := &bufOut{}
+	sh := shell.NewShell(w, dev, u, out, "10.77.1.11", "xterm")
+	sh.SetInput(strings.NewReader(strings.Join(stdin, "\n") + "\n"))
+	sh.ExecLine(line)
+	return out.String()
+}
+
 // tmux must not panic, and a session must be backed by a real process that
 // keeps existing after you detach — otherwise "start it in tmux and log out" is
 // a lie and nothing survives the session.

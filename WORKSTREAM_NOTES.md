@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -294,3 +294,48 @@ httpsHosts list.
   merge semantics must exist, and that is not needed by any storyline yet.
 * SSH transport: the dumb-http path with TLS covers the story; a git
   protocol daemon would be a second listener for no narrative gain.
+
+---
+
+# SFTP workstream (WS-0.9) — closing spec §19's communication list
+
+Ownership: `internal/core/sftp.go`, `internal/shell/sftp_cmds.go`,
+`tests/sftp_test.go`, plus the removal of the old stubs from
+`internal/shell/remote.go`.
+
+## What replaced the stub
+
+* `sftp` used to say "use scp for file transfer in this build", and `scp`
+  was literally `cmdCp` — a `scp pc-file nas-file` silently wrote a local
+  file. Both are real now. This was the last item of spec §19's required
+  communication systems (DNS, WHOIS, HTTP, HTTPS, SMTP, IMAP, IRC, BBS,
+  FTP, SFTP, Git, Job Board, Banking, Package Repository).
+* `core/sftp.go` holds the transfer primitives, two devices and two
+  accounts at a time: a fetch reads the remote file *as the remote account*
+  (denied reads are logged on the remote) and writes locally *as the
+  session account* through WriteChecked; a put mirrors it. Nothing can be
+  fetched that the remote account cannot read, and nothing can land where
+  the destination account cannot write.
+* `sftp [user@]host` is a real interactive session: password prompt, then
+  ls/lls/cd/pwd/lpwd/get/put/quit over the session's stdin. `scp` gained
+  its real `[user@]host:path` syntax (local-to-local still routes to cp;
+  two remote endpoints are refused).
+* Authentication is the exact cmdSsh model, shared through `sshLogin`:
+  unknown user and wrong password are indistinguishable, failures feed
+  fail2ban, `PasswordAuthentication no` is honored, and sessions plus
+  transfers are logged on the server.
+
+## Verified
+
+* `tests/sftp_test.go`: a full session (auth, remote listing, fetch with
+  byte-identical result, upload owned by the remote account, server-side
+  logs), auth refusals feeding fail2ban until the ban trips, honest
+  permission failures (/etc/shadow, /root, missing files), scp both
+  directions plus the local-cp and two-remote refusals, and sshd service
+  gating.
+
+## Not implemented on purpose
+
+* sftp directory recursion (-r), permissions/uid commands, and resumable
+  transfers: no storyline needs them; what exists covers the spec's
+  "真提供远程 Shell / 文件传输" honestly.

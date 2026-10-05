@@ -96,18 +96,8 @@ func cmdSsh(s *Shell, args []string) int {
 	return 0
 }
 
-func cmdScp(s *Shell, args []string) int {
-	if len(args) < 2 {
-		s.errf("usage: scp SRC DST")
-		return 1
-	}
-	return cmdCp(s, args)
-}
-
-func cmdSftp(s *Shell, args []string) int {
-	fmt.Fprintln(s.Out, "sftp> use scp for file transfer in this build")
-	return 0
-}
+// cmdScp and cmdSftp live in sftp_cmds.go: real authenticated transfers
+// over the same channel cmdSsh opens.
 
 func cmdTelnet(s *Shell, args []string) int {
 	if len(args) < 1 {
