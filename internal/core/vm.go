@@ -221,7 +221,7 @@ func seedVMs(w *World) {
 	srv := w.addDevice("srv-alex", "basement", "server", "alex",
 		OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
 		Hardware{"Rack Server", 8, 2600, 16384, 512000, 1000, false, false},
-		"10.77.1.21")
+		lanIP(21))
 	seedFS(srv, "server")
 	mkUsers(srv, map[string]*User{
 		"root": {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},

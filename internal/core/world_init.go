@@ -79,13 +79,13 @@ func NewWorld() *World {
 
 	// ---- the household ----
 	pc := w.addDevice("pc-alex", "home-pc", "pc", "alex", OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
-		Hardware{"Generic Desktop", 4, 3200, 8192, 65536, 1000, false, false}, "10.77.1.11")
+		Hardware{"Generic Desktop", 4, 3200, 8192, 65536, 1000, false, false}, lanIP(11))
 	router := w.addDevice("router-alex", "gateway", "router", "alex", OSInfo{"NeoWRT", "24.10", "5.15.160", "mips", "ash"},
-		Hardware{"Archer C7 (stock)", 1, 800, 128, 16, 1000, true, false}, "10.77.1.1")
+		Hardware{"Archer C7 (stock)", 1, 800, 128, 16, 1000, true, false}, LANGateway)
 	nas := w.addDevice("nas-alex", "nas", "nas", "alex", OSInfo{"Debian", "12", "6.1.0", "x86_64", "bash"},
-		Hardware{"NAS Box", 2, 1600, 2048, 409600, 1000, false, false}, "10.77.1.30")
+		Hardware{"NAS Box", 2, 1600, 2048, 409600, 1000, false, false}, lanIP(30))
 	asst := w.addDevice("asst-alex", "assistant", "pc", "alex", OSInfo{"Alpine", "3.20", "6.6.20", "x86_64", "ash"},
-		Hardware{"Assistant Mini-PC", 2, 2000, 2048, 32768, 1000, false, false}, "10.77.1.20")
+		Hardware{"Assistant Mini-PC", 2, 2000, 2048, 32768, 1000, false, false}, lanIP(20))
 	asst.Notes = "assistant node"
 
 	// ---- the management controller -------------------------------------------
@@ -95,7 +95,7 @@ func NewWorld() *World {
 	// through out-of-band management. It is also the machine that a determined
 	// attacker would love to own, which is the point.
 	bmc := w.addDevice("bmc-alex", "bmc", "bmc", "alex", OSInfo{"OpenBMC", "2.14", "6.6.7", "arm", "ash"},
-		Hardware{"NeoBMC", 1, 1200, 512, 4096, 100, false, true}, "10.77.1.250")
+		Hardware{"NeoBMC", 1, 1200, 512, 4096, 100, false, true}, lanIP(250))
 	bmc.UPS = &UPSInfo{ChargePct: 100, LastState: "online"}
 	bmc.Notes = "out-of-band management controller"
 	mkUsers(bmc, map[string]*User{
@@ -109,7 +109,7 @@ func NewWorld() *World {
 
 	for _, d := range []*Device{pc, nas, asst} {
 		if len(d.Ifaces) > 0 {
-			d.Ifaces[0].GW = "10.77.1.1"
+			d.Ifaces[0].GW = LANGateway
 			d.Ifaces[0].Mode = "dhcp"
 		}
 	}
@@ -170,9 +170,9 @@ func NewWorld() *World {
 	// onto the NAS, and a smart lock whose state is real. Both ship with the
 	// classic weak default password, because IoT does.
 	cam := w.addDevice("cam-alex", "cam-front", "iot", "alex", OSInfo{"NeoIoT", "3.1", "5.15.160", "arm", "ash"},
-		Hardware{"PoE Door Cam", 1, 400, 128, 1024, 10, false, false}, "10.77.1.40")
+		Hardware{"PoE Door Cam", 1, 400, 128, 1024, 10, false, false}, lanIP(40))
 	lokd := w.addDevice("lock-alex", "lock-front", "iot", "alex", OSInfo{"NeoIoT", "3.1", "5.15.160", "arm", "ash"},
-		Hardware{"Smart Lock", 1, 120, 64, 512, 5, false, false}, "10.77.1.43")
+		Hardware{"Smart Lock", 1, 120, 64, 512, 5, false, false}, lanIP(43))
 	mkUsers(cam, map[string]*User{
 		"root": {Name: "root", UID: 0, Pass: "admin", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},
 	})
@@ -191,7 +191,7 @@ func NewWorld() *World {
 	// powered pocket computer on the Wi-Fi with a terminal, a message spool,
 	// and a cellular radio that keeps SMS alive when the router is not.
 	phone := w.addDevice("phone-alex", "phone", "phone", "alex", OSInfo{"NeoDroid", "15", "6.6.20", "aarch64", "bash"},
-		Hardware{"Pocket Computer", 8, 2400, 8192, 131072, 0, false, true}, "10.77.1.21")
+		Hardware{"Pocket Computer", 8, 2400, 8192, 131072, 0, false, true}, lanIP(22))
 	mkUsers(phone, map[string]*User{
 		"root": {Name: "root", UID: 0, Pass: "admin", Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
 		"alex": {Name: "alex", UID: 1000, Pass: "alex123", Groups: []string{"alex"}, Home: "/home/alex", Shell: "/bin/bash"},
@@ -387,6 +387,10 @@ func NewWorld() *World {
 	seedIoT(w)
 	seedSMS(w)
 	seedUSB(w)
+
+	// the LAN plan is checked before the world can be used: a static inside
+	// the DHCP band or two devices on one address panics right here
+	w.ValidateLAN()
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

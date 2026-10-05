@@ -20,6 +20,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | phone (WS-1.2) | `1363d10` | pocket computer, cellular SMS | §"Phone workstream" |
 | usb (WS-1.3) | `160b0a7` | the air gap as a tool | §"USB workstream" |
 | live-verify sweep | `ea8eb1d` | home dirs for every account; 13 scripts green | §"Verification status" |
+| LAN plan (hardcode removal) | this commit | one owner for household addresses; `AllocLANStatic` replaces the MCP const; `ValidateLAN` panics at boot on duplicates/pool-collisions; the router's dhcp-range renders from the constants | `internal/core/addr.go`, `tests/lan_test.go` |
 
 Verification status at tip: full `go test ./...` green, `go vet` clean,
 `bash tools/all_verify.sh` — all 13 scripts exit ok, suspicious counts zero

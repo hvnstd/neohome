@@ -10,7 +10,6 @@ import (
 func (w *World) EnsureMCPPlayer() (*Device, *User, error) {
 	const playerName = "mcp-agent"
 	const deviceID = "mcp-agent-pc"
-	const address = "10.77.1.41"
 
 	if w == nil {
 		return nil, nil, fmt.Errorf("world is nil")
@@ -51,14 +50,17 @@ func (w *World) EnsureMCPPlayer() (*Device, *User, error) {
 	if w.Devices[deviceID] != nil {
 		return nil, nil, fmt.Errorf("MCP device ID %q is already in use", deviceID)
 	}
-	if _, used := w.IPMap[address]; used {
-		return nil, nil, fmt.Errorf("MCP device address %s is already in use", address)
+	// the address is allocated, not carried: the LAN plan lives in addr.go
+	// and the allocator cannot hand out an address twice
+	address, err := w.AllocLANStatic()
+	if err != nil {
+		return nil, nil, fmt.Errorf("provisioning MCP device: %v", err)
 	}
 
 	d := w.addDevice(deviceID, "mcp-agent", "pc", playerName,
 		OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
 		Hardware{"Virtual Agent Workstation", 2, 2400, 4096, 32768, 1000, false, false}, address)
-	d.Ifaces[0].GW = "10.77.1.1"
+	d.Ifaces[0].GW = LANGateway
 	d.Ifaces[0].Mode = "static"
 	d.Users[playerName] = &User{
 		Name: playerName, UID: 1000, Groups: []string{playerName},
@@ -66,7 +68,7 @@ func (w *World) EnsureMCPPlayer() (*Device, *User, error) {
 	}
 	seedFS(d, "pc")
 	d.FS.MkdirAll("/home/"+playerName, 0755, playerName, playerName)
-	d.FS.Write("/etc/resolv.conf", "nameserver 10.77.1.1\n", 0644, "root", "root")
+	d.FS.Write("/etc/resolv.conf", "nameserver "+LANGateway+"\n", 0644, "root", "root")
 	refreshPasswd(d)
 
 	w.Players[playerName] = &Player{

@@ -383,7 +383,7 @@ func cmdAssistGuide(s *Shell) int {
 // ---- recon ----
 
 func cmdScan(s *Shell, args []string) int {
-	target := "10.77.1.0/24"
+	target := core.LANSubnet + "0/24"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		target = args[0]
 	}

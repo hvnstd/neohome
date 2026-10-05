@@ -1,9 +1,117 @@
 package core
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
+
+// ---- the household LAN plan ----
+//
+// One place owns the numbers. The router's address, the DHCP band it
+// really hands out (its dnsmasq.conf renders from these constants), and
+// every seeded static come from here; runtime provisioning (the MCP
+// character) asks AllocLANStatic instead of carrying a magic address.
+// validateLAN runs at boot, so a seed mistake dies loudly in NewWorld and
+// in every test instead of surfacing as a mysterious address collision.
+
+const (
+	// LANSubnet is the household subnet all these numbers live in.
+	LANSubnet = "10.77.1."
+	// LANGateway is the household router.
+	LANGateway = LANSubnet + "1"
+	// LANDHCPFirst / LANDHCPLast are the dnsmasq dhcp-range bounds; every
+	// static must stay outside this band or a lease will eventually collide.
+	LANDHCPFirst = 50
+	LANDHCPLast  = 200
+)
+
+// lanIP renders a household address from its last octet.
+func lanIP(lastOctet int) string { return fmt.Sprintf("%s%d", LANSubnet, lastOctet) }
+
+// lanLastOctet returns the last octet for household-LAN addresses, -1 for
+// anything else (WAN addresses, the ISP backbone, the NPC LAN).
+func lanLastOctet(ip string) int {
+	if !strings.HasPrefix(ip, LANSubnet) {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(ip, LANSubnet))
+	if err != nil || n < 0 || n > 255 {
+		return -1
+	}
+	return n
+}
+
+// inDHCPPool reports whether a last octet falls inside the DHCP band.
+func inDHCPPool(lastOctet int) bool {
+	return lastOctet >= LANDHCPFirst && lastOctet <= LANDHCPLast
+}
+
+// AllocLANStatic returns the lowest free static address on the household
+// LAN: outside the DHCP band, not the gateway, and not used by any device
+// interface or mapped address. There is no free pick: callers that cannot
+// take the answer must not provision.
+func (w *World) AllocLANStatic() (string, error) {
+	used := map[int]bool{}
+	take := func(ip string) {
+		if o := lanLastOctet(ip); o > 0 {
+			used[o] = true
+		}
+	}
+	for _, id := range w.Order {
+		d := w.Devices[id]
+		if d == nil {
+			continue
+		}
+		for _, i := range d.Ifaces {
+			take(i.IP)
+		}
+	}
+	for ip := range w.IPMap {
+		take(ip)
+	}
+	for o := 2; o <= 254; o++ {
+		if inDHCPPool(o) || used[o] {
+			continue
+		}
+		return lanIP(o), nil
+	}
+	return "", fmt.Errorf("household LAN has no free static address")
+}
+
+// ValidateLAN fails the boot when the household LAN plan is broken: a
+// static inside the DHCP band, two devices sharing one address, or an
+// unusable address. Seed mistakes are programming errors — they should
+// panic here, at boot and in every test.
+func (w *World) ValidateLAN() {
+	seen := map[string]string{}
+	for _, id := range w.Order {
+		d := w.Devices[id]
+		if d == nil {
+			continue
+		}
+		for _, i := range d.Ifaces {
+			if i.IP == "" {
+				continue
+			}
+			o := lanLastOctet(i.IP)
+			if o < 0 {
+				continue // another network (WAN, ISP backbone, NPC LAN)
+			}
+			if o == 0 || o == 255 {
+				panic(fmt.Sprintf("world seed: %s has unusable household address %s", id, i.IP))
+			}
+			if inDHCPPool(o) {
+				panic(fmt.Sprintf("world seed: %s static %s sits inside the DHCP band (%s-%s) — a lease will collide",
+					id, i.IP, lanIP(LANDHCPFirst), lanIP(LANDHCPLast)))
+			}
+			if prev, dup := seen[i.IP]; dup {
+				panic(fmt.Sprintf("world seed: %s and %s share household address %s", prev, id, i.IP))
+			}
+			seen[i.IP] = id
+		}
+	}
+}
 
 // DeviceAddrs lists every address this device answers on: LAN, WAN, loopback.
 func DeviceAddrs(d *Device) []string {
