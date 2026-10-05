@@ -723,6 +723,21 @@ func cmdMount(s *Shell, args []string) int {
 	if fsTy == "cifs" || fsTy == "smb" {
 		return mountSMB(s, src, dst, opts)
 	}
+	// a vfat source is a locally plugged usb stick, via its device node
+	if fsTy == "vfat" || strings.HasPrefix(src, "/dev/") {
+		if !strings.HasPrefix(src, "/dev/") {
+			s.errf("usage: mount -t vfat /dev/sda1 /mnt/usb")
+			return 1
+		}
+		stick, err := s.W.USBStickFromNode(s.Dev, src)
+		if err != nil {
+			s.errf("mount: %v", err)
+			return 1
+		}
+		s.Dev.Mounts = append(s.Dev.Mounts, core.Mount{Src: stick.ID + ":/", Dst: s.abs(dst), FSTy: "vfat"})
+		fmt.Fprintf(s.Out, "mounted %s on %s (type vfat)\n", src, s.abs(dst))
+		return 0
+	}
 
 	ip, ok, how := core.DNSAnswer(s.Dev, strings.SplitN(src, ":", 2)[0])
 	if !ok {
@@ -848,6 +863,7 @@ The world layer:
   lock [status|lock|unlock [PIN]|batteries]         the front door: owner app or PIN; wrong codes are evidence
   sms [list|read N|send WHO TEXT]                   on your phone — cellular, survives a dead router
   phone [status|charge]                             battery and the charger dock
+  usb [list|plug STICK|unplug] + mount -t vfat      the stick and its files travel between machines
   mail [send TO SUBJECT|log]                        mail actually lands in mailboxes
   mutt [-f mailbox [N]]                             open any mailbox: local mbox or imap://user@host/INBOX
   assist [status|guide|tasks|train TRACK]            the assistant works its own node

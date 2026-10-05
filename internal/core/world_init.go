@@ -197,6 +197,14 @@ func NewWorld() *World {
 	phone.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH (pocket terminal)", Port: 22, Proto: "tcp",
 		Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
 
+	// ---- the household USB stick (WS-1.3) -----------------------------------
+	// A stick is a device with a filesystem and no interfaces: in a drawer
+	// until someone plugs it in, and the only bridge between machines that
+	// never talk (§41's air gap, in miniature).
+	stick := w.addDevice("usb-alex", "usb-stick", "usb", "alex",
+		OSInfo{"FAT32", "1.0", "-", "none", "none"},
+		Hardware{"USB Stick", 0, 0, 0, 32768, 0, false, false}, "")
+	_ = stick
 	// ---- NPC neighbour ----
 	npcpc := w.addDevice("npc-pc", "darkden", "pc", "mara", OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
 		Hardware{"Gaming rig", 8, 4800, 32768, 131072, 1000, false, false}, "10.88.1.11")
@@ -375,6 +383,7 @@ func NewWorld() *World {
 	seedGit(w)
 	seedIoT(w)
 	seedSMS(w)
+	seedUSB(w)
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

@@ -229,6 +229,10 @@ func LoadWorld(path string) (*World, error) {
 		// saves from before phones existed; a no-op unless phone devices exist
 		seedSMS(w)
 	}
+	if w.USB == nil {
+		// saves from before sticks existed; a no-op unless a stick exists
+		seedUSB(w)
+	}
 	return w, nil
 }
 

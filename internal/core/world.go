@@ -69,6 +69,7 @@ type World struct {
 	//   BBS  -> bbs.go   (bulletin board: boards, posts, NPC replies)
 	//   IoT  -> iot.go   (front-door camera recordings + smart lock)
 	//   SMS  -> sms.go   (phones: registry, spools, batteries)
+	//   USB  -> usb.go   (sticks: attachment, device nodes)
 	// Touch only the pointer here; add fields inside the owning file.
 	WAN  *WAN
 	Cron *CronState
@@ -77,6 +78,7 @@ type World struct {
 	BBS  *BBS
 	IoT  *IoT
 	SMS  *SMS
+	USB  *USB
 }
 
 type Event struct {

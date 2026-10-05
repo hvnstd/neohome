@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT + SMB + phone
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT + SMB + phone + usb
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -487,25 +487,44 @@ Ownership: `internal/core/sms.go`, `internal/shell/sms_cmds.go`,
 
 ---
 
-# USB design (WS-1.3, designed here — not yet built)
+# USB workstream (WS-1.3) — the air gap, as a tool
 
-The spec mentions USB only in the Phase 1 list; the physical layer (§42)
-and the air-gapped storage (§41) are where it becomes gameplay. Design:
+Ownership: `internal/core/usb.go`, `internal/shell/usb_cmds.go`,
+`tests/usb_test.go`, plus the stick device in `world_init.go`, the
+`World.USB` pointer, the vfat branches in `ResolveVFS` and `cmdMount`.
 
-* A USB stick is a *device* with profile `usb`: its own small VFS, no
-  network interfaces at all, and an attachment point (`AttachedTo string`
-  on the device or a registry in the owning file). Unattached, it exists
-  in the world but no machine sees it.
-* Plugging in is a physical act on a machine you have a session on:
-  `usb plug STICK` / `usb unplug` (or `eject`). On attach, the host gets a
-  `/dev/sda1` block device entry; `mount -t vfat /dev/sda1 /mnt/usb` uses
-  the existing Mount machinery with a new twist — a *local* block device,
-  not a remote host (ResolveVFS must learn FSTy `vfat` mapped to the
-  stick's VFS, not a device-id route).
-* The payoff is the air gap: files copied to the stick travel with it.
-  Plug it into the basement box (§41) and its data is there — the only
-  bridge between the air-gapped machine and the network, which is exactly
-  the dual-edged property the spec wants: honest offline backup, and the
-  classic malware delivery vector for a storyline.
-* Non-goals for v1: USB hubs, several sticks at once, write-protect
-  switches, USB debugging over the phone.
+## What exists (as designed, with one correction)
+
+* The stick is a real device (`usb-alex`, profile `usb`) with a filesystem
+  and **no network interfaces** — unattached it exists in the world and no
+  machine sees it. It starts in a drawer with its old contents intact.
+* `usb plug usb-alex` (from any session) attaches it to that machine and
+  creates a real, self-describing device node `/dev/sda1` whose content
+  names the backing stick. The act lands in the kernel log and the world
+  event stream — the front-door camera records a stick being plugged in.
+* `mount -t vfat /dev/sda1 /mnt/usb` reads the node, resolves the stick,
+  and mounts its filesystem through the standard Mount machinery; every
+  access re-checks the attachment, so `usb unplug` while mounted yields an
+  honest "Stale file handle", and the stick keeps every byte.
+* The physical rules hold: a stick is in one machine at a time (plugging
+  it elsewhere is refused until it is unplugged there), one port per
+  machine, and the port is reusable after eject.
+* Correction to the design note: a fresh VFS root is created root-owned,
+  which would have made every stick read-only; since FAT32 has no
+  ownership model, `seedUSB` hands the filesystem root to the stick's
+  owner. That is the honest representation of a FAT stick.
+
+## Verified
+
+* `tests/usb_test.go`: stick seeding (no interfaces, unattached, contents),
+  the full journey — plug, node file, kernel log, mount, read, write,
+  unplug-while-mounted staleness, carry to the NAS with the write intact,
+  two-machine and one-port refusals — and save/load persistence of both
+  the attachment and the files.
+
+## Not implemented on purpose
+
+* The air-gapped vault itself (§41): the spec marks Offline Storage as a
+  late-game asset; the stick is its bridge and comes first.
+* Hubs, multiple sticks per host, write-protect switches: one port, one
+  stick covers every story the world currently tells.

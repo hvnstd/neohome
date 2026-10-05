@@ -460,6 +460,15 @@ func (s *Shell) ResolveVFS(p string) (*core.VFS, string, string) {
 			if !ok {
 				return s.Dev.FS, p, ""
 			}
+			// a vfat mount is a locally attached usb stick: the filesystem
+			// is live while the stick is physically in THIS machine
+			if m.FSTy == "vfat" {
+				if w := s.W; w.USB == nil || w.USB.Attached[srcParts[0]] != s.Dev.ID {
+					return nil, "", "Stale file handle (the stick is not attached to this machine)"
+				}
+				rel := strings.TrimPrefix(strings.TrimPrefix(p, m.Dst), "/")
+				return d.FS, path.Join(srcParts[1], rel), "mounted"
+			}
 			svcName := "nfsd"
 			if m.FSTy == "smb" || m.FSTy == "cifs" {
 				svcName = "smbd"
