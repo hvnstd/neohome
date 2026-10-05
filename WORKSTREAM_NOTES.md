@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -196,3 +196,52 @@ mboxo escape in `mail.go`'s `AppendToInbox`.
 * Folders beyond INBOX: the world has one mailbox per account; mutt says so
   rather than pretending.
 * IMAP over TLS (port 993): the PKI exists, but no storyline needs it yet.
+
+---
+
+# BBS workstream (WS-0.7) — the board as a social system
+
+Ownership: `internal/core/bbs.go`, `internal/shell/bbs_cmds.go`,
+`tests/bbs_test.go`, plus the `bbs` device/bbsd service in `world_init.go`
+and the `BBSTick` call in `engine.go`.
+
+## Why it is not decoration (spec §19, §27, §33)
+
+* The board is a real host (`bbs.neohome.example`, infra, its own public IP
+  and zone record) running `bbsd` on port 2323, scope any — the port answers
+  only while the service runs, and `scan` sees it like anything else.
+* Every post is a real file on that box (`/srv/bbs/<board>/<NNNN>.txt`,
+  0644 bbs:bbs): get a shell there and the raw threads are readable, delete
+  a file and the post is gone. `bbs read` only formats what is on disk.
+* The seeded threads are true of the world: the hacker board points at the
+  consumer router's real legacy telnetd, warns that scans are logged (they
+  are), the intel board's seeded thread explains the exact dnsmasq failure
+  mode the planted fault produces.
+* NPC posters are the IRC crowd (mira-9, daemon42, sysmods, mara-bot):
+  a player post earns a keyword-driven, state-aware reply within a few
+  ticks — while the DNS fault is active the answer names the broken
+  resolv-file; after the repair it does not. Ambient posts land every 80
+  ticks and are also fault-aware (the mirror-curl cron clue appears on the
+  board while the fault lasts).
+* Market threads reference real rails (coins, bank transfer, NPC mail), so
+  交易 has somewhere to go.
+
+## Client surface
+
+`bbs [boards] | bbs read <board> [N] | bbs post <board> <subject>` — the
+client resolves bbs.neohome.example, dials 2323 through the normal stack
+and fails honestly (DNS fault → resolution error; stopped bbsd → refusal).
+
+## Verified
+
+* `tests/bbs_test.go`: seeding (service, conf, files, zone record), network
+  reads with service-state gating, player post → file + syslog + NPC reply
+  (fault-aware and healthy variants), ambient fault-aware post, save/load
+  round trip with post numbering carried over.
+
+## Not implemented on purpose
+
+* Login/registration: reading and posting is open, as on many small boards;
+  accounts per board user are a follow-up if a storyline needs private mail.
+* Reply threading (Reply-To chains): posts are flat per board; quoting via
+  "re: <subject>" is the convention.

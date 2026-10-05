@@ -49,9 +49,13 @@ func NewWorld() *World {
 		Hardware{"VM", 2, 2000, 2048, 40960, 1000, false, false}, "10.0.0.7")
 	jobsd := w.addDevice("jobs", "jobs.hiring.example", "infra", "", OSInfo{"Debian", "13", "6.12.5", "x86_64", "bash"},
 		Hardware{"VM", 1, 1000, 1024, 8192, 100, false, false}, "10.0.0.8")
+	// the community board (WS-0.7): a hobby box on the public internet, the
+	// way every neighbourhood had one
+	bbsd := w.addDevice("bbs", "bbs.neohome.example", "infra", "", OSInfo{"Alpine", "3.20", "6.6.20", "x86_64", "ash"},
+		Hardware{"VM", 1, 800, 768, 20480, 100, false, false}, "10.0.0.9")
 	_ = core
 
-	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd} {
+	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd} {
 		d.Ifaces = append(d.Ifaces, &Iface{Name: "eth1", IP: w.allocPublicFor(d.Profile), MAC: macFor(d.ID + "-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	}
 	pubISP := wanIP(ispDNS)
@@ -61,7 +65,8 @@ func NewWorld() *World {
 	pubIRC := wanIP(ircd)
 	pubBank := wanIP(bankd)
 	pubJobs := wanIP(jobsd)
-	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd} {
+	pubBBS := wanIP(bbsd)
+	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd} {
 		w.IPMap[d.Ifaces[1].IP] = d.ID
 	}
 
@@ -187,6 +192,7 @@ func NewWorld() *World {
 		{Name: "irc.neohome.example", IP: pubIRC},
 		{Name: "bank.firstneohome.example", IP: pubBank},
 		{Name: "jobs.hiring.example", IP: pubJobs},
+		{Name: "bbs.neohome.example", IP: pubBBS},
 		{Name: "dns.isp.example", IP: pubISP},
 		{Name: "home.alex.neohome.example", IP: pubHome},
 	}
@@ -199,6 +205,11 @@ func NewWorld() *World {
 	ircd.Services["ircd"] = &Service{Name: "ircd", Desc: "IRC", Port: 6667, Proto: "tcp", Scope: "any", State: "running", Handler: "irc"}
 	bankd.Services["httpd"] = &Service{Name: "httpd", Desc: "bank api", Port: 80, Proto: "tcp", Scope: "any", State: "running", Handler: "http-bank", Banner: "Apache"}
 	jobsd.Services["httpd"] = &Service{Name: "httpd", Desc: "job board", Port: 80, Proto: "tcp", Scope: "any", State: "running", Handler: "http-jobs", Banner: "Apache"}
+	bbsd.Services["bbsd"] = &Service{Name: "bbsd", Desc: "community bulletin board", Port: 2323, Proto: "tcp",
+		Scope: "any", State: "running", Handler: "bbs", Banner: "NeoBBS", Conf: "/etc/bbsd.conf"}
+	bbsd.FS.Write("/etc/bbsd.conf",
+		"listen on eth1 port 2323\nboards = general, market, intel, hacker\nspool = /srv/bbs\n",
+		0644, "root", "root")
 	router.Services["dnsmasq"] = &Service{Name: "dnsmasq", Desc: "DHCP+DNS forwarder", Port: 53, Proto: "udp+tcp", Scope: "lan", State: "running", Handler: "dns-forward", Conf: "/etc/dnsmasq.conf"}
 	router.Services["dropbear"] = &Service{Name: "dropbear", Desc: "SSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-dropbear_2024.85"}
 	// The consumer router still carries a legacy telnetd on 23, which is the
@@ -242,6 +253,7 @@ func NewWorld() *World {
 	seedFS(ircd, "infra")
 	seedFS(bankd, "infra")
 	seedFS(jobsd, "infra")
+	seedFS(bbsd, "infra")
 	seedFS(npcpc, "pc")
 	seedFS(npcr, "router")
 
@@ -293,6 +305,7 @@ func NewWorld() *World {
 	seedVMs(w)
 	seedMail(w)
 	seedTLS(w)
+	seedBBS(w)
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

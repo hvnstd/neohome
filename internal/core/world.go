@@ -66,11 +66,13 @@ type World struct {
 	//   Cron -> cron.go  (world scheduler)
 	//   VMs  -> vm.go    (virtualisation)
 	//   TLS  -> tls.go   (certificate authorities / issued certs)
+	//   BBS  -> bbs.go   (bulletin board: boards, posts, NPC replies)
 	// Touch only the pointer here; add fields inside the owning file.
 	WAN  *WAN
 	Cron *CronState
 	VMs  *VMHost
 	TLS  *TLSState
+	BBS  *BBS
 }
 
 type Event struct {
