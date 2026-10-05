@@ -162,6 +162,27 @@ func NewWorld() *World {
 	w.Players["alex"] = &Player{Name: "alex", Pass: "alex123", PC: pc.ID, Router: router.ID, NAS: nas.ID,
 		Assistant: asst.ID, HouseKey: "house:alex", Created: time.Now()}
 
+	// ---- the front-door IoT pair (WS-1.0) -----------------------------------
+	// Spec §15/§41/§42: a camera that really records the household's events
+	// onto the NAS, and a smart lock whose state is real. Both ship with the
+	// classic weak default password, because IoT does.
+	cam := w.addDevice("cam-alex", "cam-front", "iot", "alex", OSInfo{"NeoIoT", "3.1", "5.15.160", "arm", "ash"},
+		Hardware{"PoE Door Cam", 1, 400, 128, 1024, 10, false, false}, "10.77.1.40")
+	lokd := w.addDevice("lock-alex", "lock-front", "iot", "alex", OSInfo{"NeoIoT", "3.1", "5.15.160", "arm", "ash"},
+		Hardware{"Smart Lock", 1, 120, 64, 512, 5, false, false}, "10.77.1.43")
+	mkUsers(cam, map[string]*User{
+		"root": {Name: "root", UID: 0, Pass: "admin", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},
+	})
+	mkUsers(lokd, map[string]*User{
+		"root": {Name: "root", UID: 0, Pass: "admin", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},
+	})
+	seedFS(cam, "iot")
+	seedFS(lokd, "iot")
+	cam.Services["rtsp"] = &Service{Name: "rtsp", Desc: "camera stream and recordings", Port: 554, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "rtsp", Banner: "RTSP/1.0 200 OK", Conf: "/etc/rtsp.conf"}
+	lokd.Services["lockd"] = &Service{Name: "lockd", Desc: "front door lock", Port: 8899, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "lockd", Banner: "NeoLock/2.1", Conf: "/etc/lockd.conf"}
+
 	// ---- NPC neighbour ----
 	npcpc := w.addDevice("npc-pc", "darkden", "pc", "mara", OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
 		Hardware{"Gaming rig", 8, 4800, 32768, 131072, 1000, false, false}, "10.88.1.11")
@@ -326,6 +347,7 @@ func NewWorld() *World {
 	seedTLS(w)
 	seedBBS(w)
 	seedGit(w)
+	seedIoT(w)
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

@@ -214,6 +214,7 @@ func (w *World) Tick() {
 	w.CronTick()
 	w.VMTick()
 	w.BBSTick()
+	w.IoTTick()
 }
 
 func (w *World) AssistantSkillCount() int { return w.assistSkills }

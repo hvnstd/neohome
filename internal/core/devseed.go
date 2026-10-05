@@ -87,7 +87,7 @@ func seedFS(d *Device, kind string) {
 		if d.W != nil {
 			for _, id := range d.W.Order {
 				dev := d.W.Devices[id]
-				if dev == nil || dev.Profile != "pc" && dev.Profile != "nas" {
+				if dev == nil || dev.Profile != "pc" && dev.Profile != "nas" && dev.Profile != "iot" {
 					continue
 				}
 				for _, a := range dev.Ifaces {

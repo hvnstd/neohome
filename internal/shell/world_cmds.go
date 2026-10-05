@@ -422,14 +422,17 @@ func cmdScan(s *Shell, args []string) int {
 	foundAny := false
 	for _, d := range targets {
 		open := []string{}
-		for _, p := range ports {
-			svc, dst, msg := core.Dial(s.Dev, d.FirstLANIP(), p)
-			if svc != nil && msg == "connected" {
-				open = append(open, fmt.Sprintf("%d/tcp open  %s  %s", p, svc.Name, svc.Banner))
-				// scanning is an observable act — it leaves evidence on the target
-				d.Logf("notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
+			for _, p := range ports {
+				svc, dst, msg := core.Dial(s.Dev, d.FirstLANIP(), p)
+				if svc != nil && msg == "connected" {
+					open = append(open, fmt.Sprintf("%d/tcp open  %s  %s", p, svc.Name, svc.Banner))
+					// scanning is an observable act — it leaves evidence on the
+					// target, in the syslog and in the world's event stream
+					// (which is what the front-door camera records)
+					d.Logf("notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
+					s.W.AddEvent(d.ID, "notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
+				}
 			}
-		}
 		if len(open) > 0 {
 			foundAny = true
 			fmt.Fprintf(s.Out, "\nNmap scan report for %s (%s)\n", d.Hostname, d.FirstLANIP())
@@ -820,6 +823,8 @@ The world layer:
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   bbs [boards|read <board> [N]|post <board> <sub>]  bbs.neohome.example — the community board answers
   git clone|status|log|commit|pull|push             real repositories on git.neohome.example, https with push auth
+  camera [list|view N]                              front-door clips, recorded from real household events
+  lock [status|lock|unlock [PIN]|batteries]         the front door: owner app or PIN; wrong codes are evidence
   mail [send TO SUBJECT|log]                        mail actually lands in mailboxes
   mutt [-f mailbox [N]]                             open any mailbox: local mbox or imap://user@host/INBOX
   assist [status|guide|tasks|train TRACK]            the assistant works its own node

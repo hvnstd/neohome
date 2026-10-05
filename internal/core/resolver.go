@@ -220,6 +220,11 @@ func LoadWorld(path string) (*World, error) {
 		// honest (no CAs known yet); seedTLS only runs for fresh worlds
 		w.TLS = &TLSState{CAs: map[string]*TLSCert{}}
 	}
+	if w.IoT == nil {
+		// saves from before the IoT subsystem existed; a no-op unless the
+		// camera and lock devices exist
+		seedIoT(w)
+	}
 	return w, nil
 }
 

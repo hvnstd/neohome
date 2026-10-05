@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git + sftp + IoT
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -339,3 +339,50 @@ Ownership: `internal/core/sftp.go`, `internal/shell/sftp_cmds.go`,
 * sftp directory recursion (-r), permissions/uid commands, and resumable
   transfers: no storyline needs them; what exists covers the spec's
   "真提供远程 Shell / 文件传输" honestly.
+
+---
+
+# IoT workstream (WS-1.0) — the physical layer's first citizens
+
+Ownership: `internal/core/iot.go`, `internal/shell/iot_cmds.go`,
+`tests/iot_test.go`, plus the camera/lock device seeds in `world_init.go`,
+the `iot` profile in devseed's router-hosts list, the `IoTTick` call in
+`engine.go`, the `World.IoT` pointer, and the `AddEvent` lines added next
+to existing target-side logs (scan in `world_cmds.go`).
+
+## What exists
+
+* `cam-alex` ("cam-front", 10.77.1.40) and `lock-alex` ("lock-front",
+  10.77.1.41): real LAN devices with real services — rtsp on 554, lockd on
+  8899, both LAN-scoped — and the honest IoT default `root`/`admin`.
+* The camera records spec §42's "视频 / 证据状态" for real: each tick it
+  drains the world event stream for alert-level events on household
+  devices and writes a clip file to the NAS's `/srv/recordings/` (§15:
+  Camera → NAS). The tape contains only things that really happened:
+  port scans, denied fetches, wrong lock PINs, door actuations. The last
+  100 clips are kept.
+* Every dependency is enforced: rtsp stopped → nothing is recorded; NAS
+  dark → clips are dropped and the camera logs "recordings dropped" every
+  20 ticks even without events. `camera list|view N` dials the camera and
+  reads the NAS's real files.
+* The lock: state (locked/battery/PIN/wrong-attempts) on `World.IoT`, PIN
+  inside `/etc/lockd.conf` (0600 root on the device — stealing it is a
+  real objective). Owner sessions actuate without a code (the phone-app
+  model); everyone else needs the PIN; three wrong codes buy a 40-tick
+  lockout and leave evidence (device log, world event, heat via `Record`).
+  A dead battery refuses actuation but not a physical battery swap.
+
+## Verified
+
+* `tests/iot_test.go`: device/service/credential/PIN seeding, scan → clip
+  with the real event text, info-level silence, rtsp/NAS dependency
+  enforcement including the drop notice, owner/PIN/lockout/battery lock
+  flows with evidence on every wrong attempt.
+
+## Not implemented on purpose
+
+* A PoE switch between the camera and the router (§15's example chain):
+  the dependency that matters (camera → NAS storage, both → router for
+  reachability) is enforced; a switch device adds nothing yet.
+* Video: the world is text; a clip is a structured, honest rendering of
+  the events it recorded.
