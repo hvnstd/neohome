@@ -71,11 +71,13 @@ func MailAddr(user, hostname string) string {
 
 // AppendToInbox writes one RFC-ish message into a user's inbox mbox. The write
 // goes through the VFS as the recipient so a read-only mailbox really refuses.
+// Body lines that would look like a record separator are escaped the mboxo
+// way (">From "), so a message can never swallow the next one.
 func AppendToInbox(d *Device, user, from, subject, body, stamp string) error {
 	mbox := MailboxPath(user)
 	old, _ := d.FS.Read(mbox)
 	msg := fmt.Sprintf("From %s %s\nSubject: %s\nDate: %s\n\n%s\n\n---\n",
-		from, stamp, subject, stamp, strings.TrimRight(body, "\n"))
+		from, stamp, subject, stamp, escapeMboxo(strings.TrimRight(body, "\n")))
 	// Owner is the recipient: the mailbox is theirs to read and delete.
 	d.FS.Write(mbox, string(old)+msg, 0600, user, "mail")
 	return nil

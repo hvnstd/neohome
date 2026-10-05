@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -156,3 +156,43 @@ the client side of `internal/shell/net.go` (`fetchURL` scheme handling).
   players issuance is a follow-up once a storyline needs it.
 * `Verify` checks a two-level chain (leaf → root); intermediate CAs are not
   modelled.
+
+---
+
+# IMAP workstream (WS-0.6) — the reading half of the mail system
+
+Ownership: `internal/core/imap.go`, `internal/shell/mutt.go`,
+`tests/imap_test.go`, plus the `imapd` seed in `world_init.go` and the
+mboxo escape in `mail.go`'s `AppendToInbox`.
+
+## The shape
+
+* SMTP (WS-0.2–0.5) delivers; IMAP reads. A mailbox is still nothing but the
+  mbox file in the VFS — `internal/core/imap.go` parses it on demand
+  (`ParseMbox`) and authenticates against the target host's real account
+  records (`World.IMAPSelect`): the account must exist on the mail host and
+  the password must match, the same simulated check ssh and sudo perform.
+  The failure never says which one was wrong.
+* `imapd` is a real service on the two mail hosts (pc-alex, asst-alex), port
+  143, scope lan, conf at `/etc/mail/imapd.conf` — stopping it really closes
+  remote mailbox access, and its scope keeps it off the WAN.
+* The client is `mutt` (`internal/shell/mutt.go`): `mutt -f
+  imap://user[:pass]@host[:port]/INBOX [N]` opens a remote mailbox through
+  DNS/Dial (a missing password prompts like ssh does); `mutt -f /var/mail/u
+  [N]` reads a local mbox under plain file rules; bare `mutt` is the session
+  account's own inbox. Successful and failed logins are logged on the mail
+  host, so reads are evidence.
+* mbox records now escape body lines starting with `From ` as `>From `
+  (mboxo), so one message can never swallow the next; the parser undoes it.
+
+## Verified
+
+* `tests/imap_test.go`: service seeding, a cross-device read from the NAS
+  with real credentials, body round-trip through the mboxo escape, failed
+  auth (and its leak-free error), service-state gating, local mbox reads.
+
+## Not implemented on purpose
+
+* Folders beyond INBOX: the world has one mailbox per account; mutt says so
+  rather than pretending.
+* IMAP over TLS (port 993): the PKI exists, but no storyline needs it yet.

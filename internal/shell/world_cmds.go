@@ -819,6 +819,7 @@ The world layer:
   bank [balance|history|pay]                        household wallet + assistant budget
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   mail [send TO SUBJECT|log]                        mail actually lands in mailboxes
+  mutt [-f mailbox [N]]                             open any mailbox: local mbox or imap://user@host/INBOX
   assist [status|guide|tasks|train TRACK]            the assistant works its own node
   mount -t nfs host:/path /mnt/x                    NFS/SMB really resolve to a device
   vps [list|create PLAN [hostname]]                 buy a real node; it joins the internet

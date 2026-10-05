@@ -111,9 +111,18 @@ func NewWorld() *World {
 		d.Services["smtpd"] = &Service{Name: "smtpd", Desc: "SMTP mail transfer agent", Port: 25, Proto: "tcp",
 			Scope: "lan", State: "running", Handler: "smtpd",
 			Banner: "220 neohome ESMTP smtpd ready", Conf: "/etc/mail/smtpd.conf"}
+		// The reading half of the mail system (WS-0.6): a mailbox on this
+		// host is reachable from any other machine over IMAP, gated by the
+		// account's real credentials.
+		d.Services["imapd"] = &Service{Name: "imapd", Desc: "IMAP mailbox access", Port: 143, Proto: "tcp",
+			Scope: "lan", State: "running", Handler: "imapd",
+			Banner: "* OK IMAP4rev1 neohome imapd ready", Conf: "/etc/mail/imapd.conf"}
 		d.FS.MkdirAll("/etc/mail", 0755, "root", "root")
 		d.FS.Write("/etc/mail/smtpd.conf",
 			"listen on lo port 25\nlisten on eth0 port 25\n\naction \"local\" mbox\naction \"relay\" relay\n\nmatch from any for local\n",
+			0644, "root", "root")
+		d.FS.Write("/etc/mail/imapd.conf",
+			"listen on lo port 143\nlisten on eth0 port 143\nmail_location = /var/mail/%u\n",
 			0644, "root", "root")
 	}
 	router.Ifaces = append(router.Ifaces, &Iface{Name: "eth0", IP: w.allocPublicFor("router"), MAC: macFor("router-alex-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
