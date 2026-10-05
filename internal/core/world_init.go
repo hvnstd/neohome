@@ -53,9 +53,12 @@ func NewWorld() *World {
 	// way every neighbourhood had one
 	bbsd := w.addDevice("bbs", "bbs.neohome.example", "infra", "", OSInfo{"Alpine", "3.20", "6.6.20", "x86_64", "ash"},
 		Hardware{"VM", 1, 800, 768, 20480, 100, false, false}, "10.0.0.9")
+	// the git server (WS-0.8): repositories with real history over https
+	gitd := w.addDevice("git", "git.neohome.example", "infra", "", OSInfo{"Debian", "13", "6.12.5", "x86_64", "bash"},
+		Hardware{"VM", 1, 1000, 1024, 20480, 100, false, false}, "10.0.0.10")
 	_ = core
 
-	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd} {
+	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd, gitd} {
 		d.Ifaces = append(d.Ifaces, &Iface{Name: "eth1", IP: w.allocPublicFor(d.Profile), MAC: macFor(d.ID + "-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	}
 	pubISP := wanIP(ispDNS)
@@ -66,7 +69,8 @@ func NewWorld() *World {
 	pubBank := wanIP(bankd)
 	pubJobs := wanIP(jobsd)
 	pubBBS := wanIP(bbsd)
-	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd} {
+	pubGit := wanIP(gitd)
+	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd, gitd} {
 		w.IPMap[d.Ifaces[1].IP] = d.ID
 	}
 
@@ -193,6 +197,7 @@ func NewWorld() *World {
 		{Name: "bank.firstneohome.example", IP: pubBank},
 		{Name: "jobs.hiring.example", IP: pubJobs},
 		{Name: "bbs.neohome.example", IP: pubBBS},
+		{Name: "git.neohome.example", IP: pubGit},
 		{Name: "dns.isp.example", IP: pubISP},
 		{Name: "home.alex.neohome.example", IP: pubHome},
 	}
@@ -209,6 +214,12 @@ func NewWorld() *World {
 		Scope: "any", State: "running", Handler: "bbs", Banner: "NeoBBS", Conf: "/etc/bbsd.conf"}
 	bbsd.FS.Write("/etc/bbsd.conf",
 		"listen on eth1 port 2323\nboards = general, market, intel, hacker\nspool = /srv/bbs\n",
+		0644, "root", "root")
+	gitd.Services["nginx"] = &Service{Name: "nginx", Desc: "git repositories", Port: 80, Proto: "tcp",
+		Scope: "any", State: "running", Handler: "http-git", Banner: "nginx", Conf: "/etc/nginx/sites-enabled/git"}
+	gitd.FS.MkdirAll("/etc/nginx/sites-enabled", 0755, "root", "root")
+	gitd.FS.Write("/etc/nginx/sites-enabled/git",
+		"server {\n  listen 80;\n  listen 443 ssl;\n  location ~ /.*\\.git {\n    root /srv/git;\n  }\n}\n",
 		0644, "root", "root")
 	router.Services["dnsmasq"] = &Service{Name: "dnsmasq", Desc: "DHCP+DNS forwarder", Port: 53, Proto: "udp+tcp", Scope: "lan", State: "running", Handler: "dns-forward", Conf: "/etc/dnsmasq.conf"}
 	router.Services["dropbear"] = &Service{Name: "dropbear", Desc: "SSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-dropbear_2024.85"}
@@ -254,6 +265,14 @@ func NewWorld() *World {
 	seedFS(bankd, "infra")
 	seedFS(jobsd, "infra")
 	seedFS(bbsd, "infra")
+	seedFS(gitd, "infra")
+	// the git server's accounts: the daemon user, and the household identity
+	// so a push is a real authenticated write
+	mkUsers(gitd, map[string]*User{
+		"root": {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
+		"git":  {Name: "git", UID: 112, Groups: []string{"git"}, Home: "/home/git", Shell: "/bin/bash"},
+		"alex": {Name: "alex", UID: 1000, Pass: "alex123", Groups: []string{"users"}, Home: "/home/alex", Shell: "/bin/bash"},
+	})
 	seedFS(npcpc, "pc")
 	seedFS(npcr, "router")
 
@@ -306,6 +325,7 @@ func NewWorld() *World {
 	seedMail(w)
 	seedTLS(w)
 	seedBBS(w)
+	seedGit(w)
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

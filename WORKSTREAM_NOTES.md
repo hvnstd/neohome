@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS
+# Workstream notes — scheduler (cron) + VM + TLS + mail/IMAP + BBS + git
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -245,3 +245,52 @@ and fails honestly (DNS fault → resolution error; stopped bbsd → refusal).
   accounts per board user are a follow-up if a storyline needs private mail.
 * Reply threading (Reply-To chains): posts are flat per board; quoting via
   "re: <subject>" is the convention.
+
+---
+
+# Git workstream (WS-0.8) — repositories as real world state
+
+Ownership: `internal/core/git.go`, `internal/shell/git_cmds.go`,
+`tests/git_test.go`, plus the `git` device/service/account seeds in
+`world_init.go` and the `git.neohome.example` entry in `tls.go`'s
+httpsHosts list.
+
+## The model
+
+* A repository is a directory of loose objects — blobs, trees and commits
+  named by their SHA-1 — plus a HEAD, on the server under
+  `/srv/git/<name>.git` (owned by the `git` daemon user) and locally under
+  `<dir>/.git`. Nothing about a repo is stored anywhere else: get a shell
+  on the server and the objects are readable; delete one and the history
+  is really damaged.
+* Transport is dumb-http over the git server's nginx (`http-git` handler,
+  port 80, and 443 with a household-CA certificate — seedTLS issues it via
+  the shared httpsHosts list, so `git clone https://git.neohome.example/...`
+  performs the same handshake curl does). Every gate applies: DNS, route,
+  power, service state, TLS.
+* The client (`git clone|status|log|commit|pull|push`) works on the session
+  CWD, walking up to find the `.git` directory like real git. `commit` is
+  whole-tree (`commit -a` semantics; there is no index). `push` is an
+  authenticated write against the git server's own account records —
+  failures are logged on the server — and both directions are
+  fast-forward-only: diverged histories are refused with "fetch first" /
+  "diverged", never silently merged.
+* Seeded repos: `neohome-scripts` (backup + mirror probe, whose history
+  mentions the same syslog/backup story the cron jobs live in) and
+  `dotfiles`. Two commits each, real objects, real authors.
+
+## Verified
+
+* `tests/git_test.go`: server seeding (service, TLS cert, object stores,
+  zone record), https clone with checkout and history, commit → push →
+  fresh clone sees the change, push auth (wrong password refused and
+  logged, server HEAD unmoved), pull fast-forward + dirty-tree refusal +
+  diverged refusal, status honesty outside a repo.
+
+## Not implemented on purpose
+
+* Branches, merges, rebase, the index/staging area, `git init`: one `main`
+  line per repository, whole-tree commits. A second branch is the moment
+  merge semantics must exist, and that is not needed by any storyline yet.
+* SSH transport: the dumb-http path with TLS covers the story; a git
+  protocol daemon would be a second listener for no narrative gain.

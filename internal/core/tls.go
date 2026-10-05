@@ -324,6 +324,7 @@ var httpsHosts = []struct{ host, devID, svc string }{
 	{"api.novapanel.example", "prov-api", "nginx"},
 	{"bank.firstneohome.example", "bank", "httpd"},
 	{"jobs.hiring.example", "jobs", "httpd"},
+	{"git.neohome.example", "git", "nginx"},
 }
 
 // seedTLS gives the fresh world a root CA whose material lives on the

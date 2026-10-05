@@ -819,6 +819,7 @@ The world layer:
   bank [balance|history|pay]                        household wallet + assistant budget
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   bbs [boards|read <board> [N]|post <board> <sub>]  bbs.neohome.example — the community board answers
+  git clone|status|log|commit|pull|push             real repositories on git.neohome.example, https with push auth
   mail [send TO SUBJECT|log]                        mail actually lands in mailboxes
   mutt [-f mailbox [N]]                             open any mailbox: local mbox or imap://user@host/INBOX
   assist [status|guide|tasks|train TRACK]            the assistant works its own node
