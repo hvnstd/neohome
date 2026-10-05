@@ -1,4 +1,4 @@
-# Workstream notes — scheduler (cron) + VM
+# Workstream notes — scheduler (cron) + VM + TLS
 
 Ownership: `internal/core/cron.go`, `internal/core/crond.go`,
 `internal/shell/cron_cmds.go`, `tests/cron_test.go`.
@@ -106,3 +106,53 @@ Verified against `aaa2990` (the state-aware-assistant + MCP tip):
   perm). Note both `all_verify.sh` and the individual scripts hardcode
   `cd /workspace/neohome` — fine here (the repo is cloned at that path), but a
   clone elsewhere needs the `cd` overridden first.
+
+---
+
+# TLS workstream — certificate authorities and enforced https
+
+Ownership: `internal/core/tls.go`, `internal/shell/tls_cmds.go`,
+`tests/tls_test.go`, `tools/tls_verify.sh`, plus the seed/persistence hooks in
+`world.go` (the `World.TLS` pointer and `Service.TLSCert`),
+`world_init.go` (`seedTLS` call), `resolver.go` (backward-compatible load) and
+the client side of `internal/shell/net.go` (`fetchURL` scheme handling).
+
+## What exists
+
+* `World.TLS` (`internal/core/tls.go`) holds every CA and issued leaf as real
+  crypto: x509 DER + PKCS#8 key bytes, validity judged against `World.Sim`,
+  never the wall clock. `GenerateCA` / `IssueCert` / `Verify` are the world's
+  own PKI; leaves carry the domain as CN and DNS SAN.
+* Seed: `seedTLS` creates `neohome-root-ca`, drops its material on the
+  assistant node (`/etc/ssl/{certs,private}`, key 0600), installs the CA into
+  the trust stores of the household devices, and issues leaves for the four
+  public https hosts (mirror, nova panel, bank, jobs). A web service with a
+  leaf carries `Service.TLSCert`; `Dial` answers on 443 for such units — one
+  unit, two sockets — so `systemctl stop nginx` takes https down with http.
+* Client side (`fetchURL` + `World.Handshake`): `curl https://…` fails closed
+  with the real failure modes — no certificate presented (35), hostname
+  mismatch, untrusted issuer (60), expired/not-yet-valid — all judged against
+  the simulated clock. Trust is files on the client device
+  (`/etc/ssl/certs/*.pem` must contain the issuing CA's exact certificate), so
+  deleting or planting trust material really changes what is trusted.
+* `openssl` builtin (`internal/shell/tls_cmds.go`): `s_client -connect
+  HOST[:PORT]` performs the same handshake and prints the chain and verify
+  result; `x509 -in FILE -noout -subject|-issuer|-dates|-text` reads the PEM
+  views on disk.
+
+## Verified
+
+* `tests/tls_test.go`: seed files, duplicate-CA refusal, issue/verify, clock
+  gating (expired leaf refuses verify, expired CA refuses issuance),
+  save/load round trip, and the live-path https behaviours (fail-closed on
+  untrusted/stopped/expired, hostname check, openssl output).
+* Live: `bash tools/tls_verify.sh` — chains the seeded DNS fault, the
+  player-style router repair, working https to mirror + bank, the openssl
+  chain, and the fail-closed case after `sudo rm` of the trust anchor.
+
+## Not implemented on purpose
+
+* Player-side CA creation (`openssl req`) — the world's PKI is seeded; giving
+  players issuance is a follow-up once a storyline needs it.
+* `Verify` checks a two-level chain (leaf → root); intermediate CAs are not
+  modelled.

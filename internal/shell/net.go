@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -373,7 +374,12 @@ func httpFetch(s *Shell, args []string, tool string) int {
 	}
 	data, err := fetchURL(s, url)
 	if err != nil {
-		fmt.Fprintf(s.Out, "%s: (%s) %s\n", tool, "couldn't connect to host", err)
+		var tlsErr *core.TLSError
+		if errors.As(err, &tlsErr) {
+			fmt.Fprintf(s.Out, "%s: (%d) %s\n", tool, tlsErr.Code, tlsErr.Msg)
+		} else {
+			fmt.Fprintf(s.Out, "%s: (%s) %s\n", tool, "couldn't connect to host", err)
+		}
 		return 1
 	}
 	if output != "" {
@@ -395,13 +401,17 @@ func httpFetch(s *Shell, args []string, tool string) int {
 
 // fetchURL resolves the name, dials the target service and returns the
 // simulated HTTP response body. This is the causal gate: a broken DNS or a
-// stopped web server produces a real failure, not a canned page.
+// stopped web server produces a real failure, not a canned page. https is
+// judged like a real client: the handshake fails closed on a missing,
+// untrusted, mismatched or stale certificate.
 func fetchURL(s *Shell, url string) (string, error) {
-	host := url
-	if strings.Contains(url, "://") {
-		host = strings.SplitN(url, "://", 2)[1]
+	scheme := "http"
+	rest := url
+	if i := strings.Index(url, "://"); i >= 0 {
+		scheme = url[:i]
+		rest = url[i+3:]
 	}
-	host = strings.SplitN(host, "/", 2)[0]
+	host := strings.SplitN(rest, "/", 2)[0]
 	host = strings.SplitN(host, ":", 2)[0]
 	if host == "" {
 		return "", fmt.Errorf("empty host")
@@ -410,11 +420,20 @@ func fetchURL(s *Shell, url string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("could not resolve host %s: %s", host, how)
 	}
-	svc, dst, msg := core.Dial(s.Dev, ip, 80)
+	port := 80
+	if scheme == "https" {
+		port = 443
+	}
+	svc, dst, msg := core.Dial(s.Dev, ip, port)
 	if svc == nil {
 		return "", fmt.Errorf(msg)
 	}
 	_ = dst
+	if scheme == "https" {
+		if _, _, err := s.W.Handshake(s.Dev, host, svc); err != nil {
+			return "", err
+		}
+	}
 	return serveHTTP(s, svc, host), nil
 }
 

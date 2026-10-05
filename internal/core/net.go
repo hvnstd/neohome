@@ -362,7 +362,7 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	// loopback
 	if dstIP == "127.0.0.1" {
 		for _, s := range src.Services {
-			if s.Port == port && s.State == "running" {
+			if svcListensOn(s, port) && s.State == "running" {
 				return s, src, "loopback"
 			}
 		}
@@ -436,7 +436,7 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 
 	// service must exist, run, listen on that port, and allow the scope
 	for _, s := range dst.Services {
-		if s.Port != port {
+		if !svcListensOn(s, port) {
 			continue
 		}
 		if s.State != "running" {
@@ -453,6 +453,17 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 		return s, dst, "connected"
 	}
 	return nil, dst, "Connection refused"
+}
+
+// svcListensOn reports whether the service accepts a connection on port:
+// its own port, plus the standard https port when the unit carries TLS
+// material (a web server with a certificate binds both sockets from one
+// unit, so stopping the unit takes https down with it).
+func svcListensOn(s *Service, port int) bool {
+	if s.Port == port {
+		return true
+	}
+	return port == 443 && s.TLSCert != ""
 }
 
 // sourceIPFor: what ip would src appear as to dst (NAT-aware).

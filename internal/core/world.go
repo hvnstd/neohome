@@ -65,10 +65,12 @@ type World struct {
 	//   WAN  -> wan.go   (public internet / transit / ASN)
 	//   Cron -> cron.go  (world scheduler)
 	//   VMs  -> vm.go    (virtualisation)
+	//   TLS  -> tls.go   (certificate authorities / issued certs)
 	// Touch only the pointer here; add fields inside the owning file.
 	WAN  *WAN
 	Cron *CronState
 	VMs  *VMHost
+	TLS  *TLSState
 }
 
 type Event struct {
@@ -247,6 +249,9 @@ type Service struct {
 	PID     int
 	Conf    string
 	Banner  string
+	// TLSCert names the certificate (a leaf in World.TLS) this service
+	// presents on a TLS handshake; empty means the service speaks plaintext.
+	TLSCert string
 	// TelnetUser optionally pre-fills the account a telnetd presents first.
 	TelnetUser string
 }

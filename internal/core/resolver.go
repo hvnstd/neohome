@@ -215,6 +215,11 @@ func LoadWorld(path string) (*World, error) {
 	if w.IPMap == nil {
 		w.IPMap = map[string]string{}
 	}
+	if w.TLS == nil {
+		// saves from before the TLS subsystem existed: an empty state is
+		// honest (no CAs known yet); seedTLS only runs for fresh worlds
+		w.TLS = &TLSState{CAs: map[string]*TLSCert{}}
+	}
 	return w, nil
 }
 

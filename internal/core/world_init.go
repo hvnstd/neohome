@@ -278,11 +278,12 @@ func NewWorld() *World {
 			}
 		}
 	}
-	// workstream seeds — each implemented in its own file (wan.go/cron.go/vm.go)
+	// workstream seeds — each implemented in its own file (wan.go/cron.go/vm.go/tls.go)
 	seedWAN(w)
 	seedCron(w)
 	seedVMs(w)
 	seedMail(w)
+	seedTLS(w)
 
 	w.AddEvent("world", "info", "engine", "world booted: %d devices", len(w.Devices))
 	return w

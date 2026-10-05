@@ -809,7 +809,7 @@ Start here:                assist guide (state-aware help)   job list
 Work on the machine:      ls cd cat cp mv rm mkdir touch echo find grep head tail
                           sort uniq wc du df chmod chown stat file which ln
 Processes:                ps top htop kill pkill nice
-Network:                  ip ifconfig route ss ping traceroute dig nslookup curl wget
+Network:                  ip ifconfig route ss ping traceroute dig nslookup curl wget openssl
 Services & packages:      systemctl service apt apk pacman dnf
 Remote:                   ssh scp telnet        Sessions: tmux screen
 System info:              fastfetch uname hostname uptime whoami id env free lscpu lsblk dmesg

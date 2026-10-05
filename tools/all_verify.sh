@@ -3,7 +3,7 @@
 set -u
 cd /workspace/neohome
 fail=0
-for t in live_verify ssh_verify wan_verify live_full vm_verify power_verify dhcp_verify key_verify persistence_verify history_verify tmux_verify perm_verify; do
+for t in live_verify ssh_verify wan_verify live_full vm_verify power_verify dhcp_verify key_verify persistence_verify history_verify tmux_verify perm_verify tls_verify; do
   bash tools/killsrv.sh >/dev/null 2>&1
   out=/tmp/verify_$t.out
   if bash tools/$t.sh >"$out" 2>&1; then
