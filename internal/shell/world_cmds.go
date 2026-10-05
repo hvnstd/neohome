@@ -3,7 +3,6 @@ package shell
 import (
 	"fmt"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -15,7 +14,7 @@ func init() {
 		name string
 		fn   Cmd
 	}{
-		{"job", cmdJob}, {"jobs", cmdJob}, {"bank", cmdBank}, {"irc", cmdIRC},
+		{"job", cmdJob}, {"jobs", cmdJob}, {"bank", cmdBank},
 		{"mail", cmdMail}, {"assist", cmdAssist}, {"scan", cmdScan},
 		{"exploit", cmdExploit}, {"mount", cmdMount}, {"umount", cmdUmount},
 		{"recon", cmdRecon}, {"trace", cmdTrace}, {"evidence", cmdEvidence},
@@ -164,52 +163,6 @@ func cmdBank(s *Shell, args []string) int {
 
 // ---- IRC ----
 
-func cmdIRC(s *Shell, args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintf(s.Out, "channels: ")
-		var chs []string
-		for c := range s.W.Chat.Channels {
-			chs = append(chs, c)
-		}
-		sort.Strings(chs)
-		fmt.Fprintln(s.Out, strings.Join(chs, "  "))
-		fmt.Fprintln(s.Out, "online:   "+strings.Join(s.W.IRCNicks(), "  "))
-		fmt.Fprintln(s.Out, "\nusage: irc read [#chan] | irc say <message> [#chan]")
-		return 0
-	}
-	switch args[0] {
-	case "read", "log", "tail":
-		ch := "#local"
-		if len(args) > 1 {
-			ch = args[1]
-		}
-		for _, m := range s.W.Chat.History {
-			if m.Chan != ch {
-				continue
-			}
-			fmt.Fprintf(s.Out, "[%s] <%s> %s\n", m.At.Format("15:04"), m.Nick, m.Text)
-		}
-		return 0
-	case "say", "msg":
-		if len(args) < 2 {
-			s.errf("usage: irc say MESSAGE [#chan]")
-			return 1
-		}
-		ch := "#local"
-		body := args[1:]
-		if len(body) > 1 && strings.HasPrefix(body[len(body)-1], "#") {
-			ch = body[len(body)-1]
-			body = body[:len(body)-1]
-		}
-		s.W.IRCSend(s.User.Name, ch, strings.Join(body, " "))
-		for _, m := range s.W.Chat.History[len(s.W.Chat.History)-3:] {
-			fmt.Fprintf(s.Out, "[%s] <%s> %s\n", m.At.Format("15:04"), m.Nick, m.Text)
-		}
-		return 0
-	}
-	s.errf("usage: irc [read|say]")
-	return 1
-}
 
 // ---- mail ----
 

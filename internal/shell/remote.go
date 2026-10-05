@@ -20,9 +20,15 @@ func init() {
 }
 
 // cmdSsh: connect to a remote device and drive a shell on it.
+//
+// Two real ssh shapes are supported: `ssh [user@]host` opens an interactive
+// session on the target, and `ssh [user@]host command` runs that one command
+// there and returns its status. The command form is what a session without a
+// terminal (a script, a cron job, a test) must use — a nested loop with no
+// input has nothing to read.
 func cmdSsh(s *Shell, args []string) int {
 	if len(args) < 1 {
-		s.errf("usage: ssh [user@]host")
+		s.errf("usage: ssh [user@]host [command]")
 		return 1
 	}
 	target := args[0]
@@ -84,15 +90,33 @@ func cmdSsh(s *Shell, args []string) int {
 	} else {
 		// key-based: accept if the target is the assistant node and trusts
 		// the player's key (see seed: assistant authorized_keys has alex's key).
-		if !s.W.AssistantKeyTrusted(dst) {
+		if !s.W.AssistantKeyTrusted(s.Dev, dst) {
 			fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: Permission denied (publickey)\n", host)
 			return 1
 		}
 	}
-	// success: spawn a nested shell on the target
+	// success
 	fmt.Fprintf(s.Out, "Welcome to %s, %s!\n", dst.Hostname, user)
+	return s.openRemoteSession("ssh", dst, u, args[1:])
+}
+
+// openRemoteSession is the far side of ssh/telnet: with a command it runs that
+// command on the target and returns its status; without one it hands this
+// terminal to a shell on the target. The nested shell shares the session's
+// buffered reader instead of wrapping it again — a second bufio.Reader over
+// the same input would starve on bytes the outer reader already holds.
+func (s *Shell) openRemoteSession(name string, dst *core.Device, u *core.User, cmd []string) int {
 	nested := NewShell(s.W, dst, u, s.Out, s.srcIP, s.TTY)
-	nested.RunLoop(s.bufrd)
+	if len(cmd) > 0 {
+		return nested.ExecLineStatus(strings.Join(cmd, " "))
+	}
+	if s.bufrd == nil {
+		s.errf("%s: no interactive terminal on this session (try: %s %s@%s COMMAND)",
+			name, name, u.Name, dst.Hostname)
+		return 1
+	}
+	nested.bufrd = s.bufrd
+	nested.RunLoop(nil)
 	return 0
 }
 
@@ -152,7 +176,5 @@ func cmdTelnet(s *Shell, args []string) int {
 	s.W.Record("auth", s.User.Name, s.srcIP, dst.ID,
 		"telnet login "+loginUser+"@"+dst.Hostname, 1)
 	fmt.Fprintf(s.Out, "Welcome to %s (%s)\n", dst.Hostname, dst.OS.Distro)
-	nested := NewShell(s.W, dst, u, s.Out, s.srcIP, s.TTY)
-	nested.RunLoop(s.bufrd)
-	return 0
+	return s.openRemoteSession("telnet", dst, u, nil)
 }

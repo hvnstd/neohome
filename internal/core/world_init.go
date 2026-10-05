@@ -87,6 +87,9 @@ func NewWorld() *World {
 	asst := w.addDevice("asst-alex", "assistant", "pc", "alex", OSInfo{"Alpine", "3.20", "6.6.20", "x86_64", "ash"},
 		Hardware{"Assistant Mini-PC", 2, 2000, 2048, 32768, 1000, false, false}, lanIP(20))
 	asst.Notes = "assistant node"
+	// the player reaches the assistant's workspace over the same ssh the rest
+	// of the world uses: key-only, because the node trusts the owner's key
+	SeedAssistantAccess(w, asst)
 
 	// ---- the management controller -------------------------------------------
 	// A BMC-class box wired to the mains before the breaker, on its own battery

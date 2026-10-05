@@ -68,7 +68,7 @@ func sshLogin(s *Shell, user, host, ip string, dst *core.Device) (*core.User, in
 			fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
 			return nil, 1
 		}
-	} else if !s.W.AssistantKeyTrusted(dst) {
+	} else if !s.W.AssistantKeyTrusted(s.Dev, dst) {
 		fmt.Fprintf(s.Out, "%s: connect to host %s port 22: Permission denied (publickey)\n", "ssh", host)
 		return nil, 1
 	}

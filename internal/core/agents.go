@@ -154,13 +154,30 @@ func (w *World) ChatPost(ch, nick, text string) {
 
 // ---- assistant trust ----
 
-func (w *World) AssistantKeyTrusted(d *Device) bool {
-	for _, p := range w.Players {
-		if p.Assistant == d.ID || (d.Owner == p.Name && p.Assistant != "") {
-			return true
-		}
+// AssistantKeyTrusted answers the only question sshd can answer here: does
+// the session that is connecting belong to the owner of THIS assistant? The
+// source device identifies the player — a stranger's box is not the owner's,
+// so the seeded key is not a skeleton key for the whole world.
+func (w *World) AssistantKeyTrusted(src, dst *Device) bool {
+	if src == nil || dst == nil || src.Owner == "" {
+		return false
 	}
-	return false
+	p := w.Players[src.Owner]
+	return p != nil && p.Assistant == dst.ID
+}
+
+// SeedAssistantAccess makes the assistant's machine reachable the way the
+// spec describes it (§24: the player can SSH in and look at the assistant's
+// working environment). The trust side is already seeded — the assistant's
+// authorized_keys holds the owner's key — but a host with no sshd_config is a
+// host that still asks for a password, so the key path was unreachable and
+// the node demanded a password nobody has. Key-only access is the directive
+// this world actually enforces, so it is the only one written.
+func SeedAssistantAccess(w *World, d *Device) {
+	if d == nil {
+		return
+	}
+	d.FS.Write("/etc/ssh/sshd_config", "Port 22\nPasswordAuthentication no\n", 0644, "root", "root")
 }
 
 // PlayerFor device owner

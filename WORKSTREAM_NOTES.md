@@ -22,6 +22,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | live-verify sweep | `ea8eb1d` | home dirs for every account; 13 scripts green | §"Verification status" |
 | LAN plan (hardcode removal) | this commit | one owner for household addresses; `AllocLANStatic` replaces the MCP const; `ValidateLAN` panics at boot on duplicates/pool-collisions; the router's dhcp-range renders from the constants | `internal/core/addr.go`, `tests/lan_test.go` |
 | FTP + reachability (WS-1.4) | this commit | real FTP sessions over the wire; the seeded drop box is reachable, attackable and defended; a port-forward is now a hole that really forwards | §"FTP workstream (WS-1.4)" |
+| coupling patch (WS-1.5) | this commit | `irc` goes through the real ircd service and the resolver; the assistant node is reachable by key, as §24 intends, and `ssh host command` exists | §"Coupling patch (WS-1.5)" |
 
 Verification status at tip: full `go test ./...` green, `go vet` clean,
 `bash tools/all_verify.sh` — all 14 scripts exit ok, suspicious counts zero
@@ -672,3 +673,82 @@ lies, one workstream.
 * The BBS thread added to the `hacker` board is one hint about the *method*
   (an ISP's customer range), not a walkthrough; it carries no IP, because those
   numbers have an owner.
+
+---
+
+# Coupling patch (WS-1.5) — three places where a service was decoration
+
+Ownership: `internal/shell/irc_cmds.go` (new: the IRC client), `remote.go`
+(ssh/telnet session handling), `internal/core/agents.go` (assistant key trust +
+its access seed), `tests/irc_test.go` (new), one seed line in `world_init.go`.
+
+Found while auditing the spec against the code, not by a failing test — which
+is why each one gets a test now.
+
+## 1. IRC was the one communication system with no service behind it
+
+§19 lists IRC beside BBS, mail and FTP, and the other three really do go
+through their daemons (the BBS client dials `bbsd`, mail needs `smtpd`, FTP
+needs `vsftpd`). The `irc` client read `World.Chat` directly: the channel
+worked with `ircd` stopped, with the box unpowered, and during the scripted DNS
+fault. The data was real; the system was not.
+
+`internal/shell/irc_cmds.go` now owns the client, and every use of it resolves
+`irc.neohome.example`, dials 6667 and lets `core.Dial` decide — the same gate
+the BBS uses. Consequences are the intended ones: during the DNS fault the
+channel reports the resolution failure (and comes back when the resolver is
+repaired), and stopping `ircd` refuses the connection until it is started
+again. The message store, the NPC replies and their grounding in world state
+are unchanged.
+
+## 2. SSH into the assistant node was impossible, and its absence hid a panic
+
+§24 says the player can SSH into the assistant's environment. The seed was
+half-there: `/home/assistant/.ssh/authorized_keys` trusts the owner's key, but
+the node had no `/etc/ssh/sshd_config`, so the client took the password path —
+and the password (`assist-pass`) is not the player's to know. The key path in
+`remote.go` only triggers when the target's config says
+`PasswordAuthentication no`, so it never ran.
+
+`SeedAssistantAccess` writes exactly the directive the world enforces, and
+`AssistantKeyTrusted` was tightened from "any device of any player who has an
+assistant" to "the session's device belongs to the owner of *this* assistant":
+the old rule made the assistant node's key a skeleton key for every session in
+the world, including a stranger's box. The test asserts the boundary as well as
+the owner's access.
+
+## 3. `ssh host command` did not exist, and the interactive path panicked without a terminal
+
+`tests/wan_test.go` already called `ssh deploy@192.0.2.1 hostname` — the extra
+argument was silently ignored and the test only passed because that address
+never got as far as a nested shell. On a session with no input stream,
+`cmdSsh` called `RunLoop(nil)` and panicked (`bufio.NewReader(nil)`), which is
+what turned up when the assistant test first ran headless.
+
+`openRemoteSession` now implements both real shapes: with a command it runs it
+on the target and returns its status (so scripts, cron and tests can use remote
+machines honestly), and without one it hands the terminal over — sharing the
+session's buffered reader instead of wrapping it in a second `bufio.Reader`,
+which would have starved on bytes the outer reader had already buffered. The
+same helper drives telnet, which had the identical nil-reader crash.
+
+## Verified
+
+* `tests/irc_test.go`: the DNS fault really blocks the channel and the repair
+  restores it; stopping `ircd` refuses honestly and starting it recovers;
+  saying something mutates the log and draws a state-grounded NPC answer;
+  the owner reaches the assistant node's workspace by key (non-interactive
+  command form *and* interactive session), a command's remote exit status is
+  returned, and a session from a machine that does not own the assistant is
+  refused with `Permission denied (publickey)`.
+* Full gate after the patch: `go vet ./...` clean, `go test ./...` green.
+
+## Still open (recorded, not fixed here)
+
+The audit that found these also found the larger blocks: one Debian package
+universe pretending to be four distros (§9–§11), no dependency resolution or
+package removal, dead `Repo.Status`/`SyncLag`, `apt` working with the mirror
+host switched off, no player-side firewall/port-forward/DMZ controls (§14), no
+IPv6/CGNAT/dynamic-WAN (§13), VPS lifecycle beyond create+ssh (§12), and the
+§33 defence tools beyond the fail2ban counter. Those are the next workstreams;
+the assistant/IRC/coupling items above were the cheap, load-bearing ones.

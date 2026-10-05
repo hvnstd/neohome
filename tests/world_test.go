@@ -28,6 +28,19 @@ func run(t *testing.T, w *core.World, dev *core.Device, user string, line string
 	return out.String()
 }
 
+// remoteStatus executes one line and reports its exit status, for the paths
+// (ssh command form, cmdSsh) where the status is part of the contract.
+func remoteStatus(t *testing.T, w *core.World, dev *core.Device, user string, line string) int {
+	t.Helper()
+	u := dev.FindUser(user)
+	if u == nil {
+		t.Fatalf("user %s not found on %s", user, dev.Hostname)
+	}
+	out := &bufOut{}
+	sh := shell.NewShell(w, dev, u, out, "10.77.1.11", "xterm")
+	return sh.ExecLineStatus(line)
+}
+
 // runWithStdin runs one command line with the given lines available on the
 // session's stdin — passwords and interactive command bodies, the way a
 // live session feeds them.
