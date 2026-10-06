@@ -502,6 +502,22 @@ func NewWorld() *World {
 			Help: "我家里所有网站都打不开,但是按 IP 直连还可以。整栋楼只有我的网这样。50 块,修好即付。", Verify: "dns-fix", Done: false},
 		{ID: "J-102", Title: "把旧笔记本重装成轻量系统", Client: "olduser", Pay: 1500, Tier: 1, Target: "self",
 			Help: "给 assistant 节点装 busybox 即可交差。", Verify: "pkg-busybox", Done: false},
+		// §34: the investigation workstream is playable from both ends. You
+		// can be the victim who files a real report, and you can be the person
+		// on shift who has to move the cases — with an account that is in the
+		// desk's group and nothing more.
+		{ID: "J-103", Title: "网络取证:把扫我的机器报给它的运营商", Client: "mira-9", Pay: 3500, Tier: 2, Target: "house:alex",
+			Help: "我的日志里一直有同一个地址在扫端口。帮我按规矩报上去,别只在自己的防火墙上封它——" +
+				"它扫的不止我一家。先看自己的记录(abuse evidence <ip>),再 abuse report。",
+			Verify: "abuse-report", Done: false},
+		{ID: "J-104", Title: "NovaPanel 滥用台顶班:裁定两个工单", Client: "novapanel-abuse", Pay: 3000, Tier: 2, Target: "vps",
+			Help: "值班的人病了。用 contractor / np-shift-2026 登上 abuse.novapanel.example," +
+				"abuse queue 看队列,abuse triage <编号> --note ... 按证据裁定两个工单。裁定要写理由。",
+			Verify: "abuse-triage", Done: false},
+		{ID: "J-105", Title: "Meridian 文件服务器:把项目目录交给项目组", Client: "meridian-soc", Pay: 2500, Tier: 1, Target: "self",
+			Help: "办公室的文件服务器上 /srv/projects 还是空的。从公司内网登进去(admin / meridian-admin)," +
+				"建 /srv/projects/handover/README 写清楚交接内容。共享已经在 smb.conf 里配好了。",
+			Verify: "meridian-share", Done: false},
 	}
 
 	w.Prov = &Provider{DeviceID: provider.ID, APIKey: "np_live_9f3c2a",
@@ -541,6 +557,11 @@ func NewWorld() *World {
 	// device with an address like any other, so a player can trace it and §34
 	// has a real actor to report.
 	w.addScanner()
+
+	// §34: the organisations — registry, ISP NOC, abuse desk, datacenter,
+	// enterprise, security team, law enforcement — each on a real address.
+	// They are seeded before the WAN so their prefixes are announced.
+	seedDesks(w)
 
 	// workstream seeds — each implemented in its own file (wan.go/cron.go/vm.go/tls.go)
 	seedWAN(w)

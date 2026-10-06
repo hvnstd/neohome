@@ -640,6 +640,20 @@ func serveHTTP(s *Shell, svc *core.Service, host, ip, urlPath string) string {
 		return "<html><body><h1>Welcome to nginx!</h1></body></html>\n"
 	case "smtpd":
 		return "220 neohome ESMTP smtpd ready\n"
+	// §34's organisations: each portal says what it is for and how to file
+	// with it, because a real abuse desk publishes exactly that.
+	case "http-abuse":
+		return "NovaPanel abuse desk\n\nFile complaints from the machine that saw the traffic:\n  abuse report <ip>\nQuote the ticket number when you reply by mail: abuse@abuse.novapanel.example\n"
+	case "http-noc":
+		return "NetCrest NOC — access network operations\n\nSubscriber records are released on lawful request only.\nOperational reports: noc@noc.netcrest.example\n"
+	case "http-soc":
+		return "Meridian Systems Security Team\n\nReports about Meridian address space: soc@soc.meridian.example\nOffice network incidents are handled internally.\n"
+	case "http-dc":
+		return "NovaPanel DC1 console\n\nRack, power and port state. Suspensions are executed here.\n"
+	case "http-le":
+		return "Cybercrime National Unit — case intake\n\nProviders and ISPs file here with a case reference.\nSubscriber data is requested under lawful process only.\n"
+	case "whois-registry":
+		return "NeoCore Registry Services — allocation records\n"
 	}
 	return svc.Banner + "\n"
 }

@@ -253,6 +253,9 @@ func (w *World) Tick() {
 	// rather than decorative.
 	w.ScannerTick()
 	w.SecurityTick()
+	// §34: the organisations read what the scanner and the defenders really
+	// did in this same tick, and work their own cases on their own clocks.
+	w.AbuseTick()
 	// §17 runs last: the numbers it charges describe the world as it now is
 	w.ResourceTick()
 }

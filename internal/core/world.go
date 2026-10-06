@@ -42,6 +42,10 @@ type World struct {
 	MailLog  []string
 	NPCNames []string
 	Case     *Case
+	// §34: the organisations that investigate, and the cases they hold. Both
+	// are world state, so a case survives a save exactly as a ban does.
+	Desks []*Desk
+	Abuse *AbuseLog
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int

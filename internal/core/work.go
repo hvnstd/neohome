@@ -89,6 +89,52 @@ func (w *World) VerifyJob(j *Job) (bool, string) {
 		}
 		return false, "no sshd is running"
 
+	case "abuse-report":
+		// the report is real only if the network that answers for the address
+		// really opened a case about it, filed by this worker. The scanner has
+		// both a v4 and a v6 address, and which one lands in a victim's log is
+		// decided by the sender's own routing — so either one counts (and the
+		// file has to be about the address the victim could actually see).
+		sc := w.Devices[ScannerID]
+		if sc == nil {
+			return false, "the world has no scanner to report"
+		}
+		var candidates []string
+		for _, ip := range []string{sc.WANIP(), sc.FirstWANv6(), sc.FirstLANIP()} {
+			if ip != "" {
+				candidates = append(candidates, ip)
+			}
+		}
+		for _, ip := range candidates {
+			if n := w.CasesAbout(j.Accepted, ip); n > 0 {
+				return true, fmt.Sprintf("%d case(s) opened with the network that announces %s", n, ip)
+			}
+		}
+		return false, "no organisation has a case from you about " + strings.Join(candidates, " or ") +
+			" — file one from the machine that saw the traffic"
+
+	case "abuse-triage":
+		// the shift is covered when the desk's own file shows two decisions
+		// taken by hand. The player signs in as the shift account rather than as
+		// themselves, so the desk is what is checked, not the player's name.
+		if n := w.CasesHandledBy(j.Accepted); n >= 2 {
+			return true, fmt.Sprintf("%d case(s) moved by %s", n, j.Accepted)
+		}
+		if n := w.CasesWorkedAt(j.Client); n >= 2 {
+			return true, fmt.Sprintf("%d case(s) moved by hand at %s", n, j.Client)
+		}
+		return false, "the desk still has undecided cases: two triage decisions with reasons are needed"
+
+	case "meridian-share":
+		fsSrv := w.Devices["meridian-fs"]
+		if fsSrv == nil {
+			return false, "the office file server is missing"
+		}
+		if _, ok := fsSrv.FS.Get("/srv/projects/handover/README"); !ok {
+			return false, "/srv/projects/handover/README does not exist on the file server"
+		}
+		return true, "the handover document is on the office file server"
+
 	case "clean":
 		// "clean up your act": no leftover fail2ban strikes on the home router
 		r := w.RouterForPlayer(j.Accepted)

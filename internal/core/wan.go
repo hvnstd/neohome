@@ -62,6 +62,11 @@ const (
 	// own distance, which is what `whois` and `traceroute` then report.
 	asNovaUS = 64521 // NovaPanel us-east
 	asNovaAP = 64522 // NovaPanel ap-northeast
+	// §34: the state has its own network too. Law enforcement is an
+	// organisation in the world like any other: it has an AS, an address, a
+	// portal and a queue — which is exactly why a report reaches it through
+	// the same case ladder everything else uses.
+	asGov = 64540
 )
 
 // seedWAN builds the public internet at world creation.
@@ -103,6 +108,12 @@ func seedWAN(w *World) {
 		Region: "ap-northeast", Country: "JP", Latency: 38.5,
 		Peers: []int{asCore, asNova}, Upstream: []int{asCore},
 		Abuse: "abuse@novapanel.example", RDNS: "rdns.novapanel.example", Status: "SYNCED",
+	}
+	wan.ASes[asGov] = &AS{
+		ASN: asGov, Name: "GovNet", Org: "Cybercrime National Unit",
+		Region: "eu-west", Country: "ZA", Latency: 9.4,
+		Peers: []int{asCore, asNetCrest}, Upstream: []int{asCore},
+		Abuse: "cert@gov.example", RDNS: "rdap.gov.example", Status: "SYNCED",
 	}
 	wan.ASes[asPeer] = &AS{
 		ASN: asPeer, Name: "Meridian Systems", Org: "Meridian Systems Inc",

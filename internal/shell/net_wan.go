@@ -57,6 +57,15 @@ func cmdWhois(s *Shell, args []string) int {
 		}
 	}
 
+	// §34: the registry is an organisation with a machine, not a local table.
+	// A lookup that cannot reach it says so, exactly like a real whois client.
+	if core.ClassifyAddr(ip).Public {
+		if err := s.registryReachable(); err != "" {
+			fmt.Fprintf(s.Out, "whois: %s\n", err)
+			return 1
+		}
+	}
+
 	a, ok := s.W.Lookup(ip)
 	if !ok {
 		info := core.ClassifyAddr(ip)
@@ -88,6 +97,15 @@ func cmdWhois(s *Shell, args []string) int {
 	fmt.Fprintf(s.Out, "status:       %s\n", a.Status)
 	fmt.Fprintf(s.Out, "rdns:         %s\n", a.RDNS)
 	fmt.Fprintf(s.Out, "abuse-mailbox: %s\n", a.Abuse)
+	if dk := s.W.DeskFor(ip); dk != nil {
+		if d := s.W.DeskDevice(dk); d != nil {
+			state := "queue open"
+			if !s.W.DeskOperational(dk) {
+				state = "queue closed"
+			}
+			fmt.Fprintf(s.Out, "responsible:  %s — report to %s@%s (%s)\n", dk.Org, dk.Mailbox, d.Hostname, state)
+		}
+	}
 	if a.Note != "" {
 		fmt.Fprintf(s.Out, "note:         %s\n", a.Note)
 	}
@@ -192,4 +210,33 @@ func atoiSafe(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// registryReachable performs the one query a whois client really makes: a TCP
+// connection to the registry's service port. Returns "" when the registry
+// answered, or the reason it did not.
+func (s *Shell) registryReachable() string {
+	var reg *core.Desk
+	for _, dk := range s.W.Desks {
+		if dk.Kind == core.DeskRegistry {
+			reg = dk
+			break
+		}
+	}
+	if reg == nil {
+		return "no registry is reachable from this world"
+	}
+	d := s.W.DeskDevice(reg)
+	if d == nil {
+		return "the registry has no machine"
+	}
+	port := 43
+	if svc := d.Svc(reg.Portal); svc != nil {
+		port = svc.Port
+	}
+	svc, _, msg := core.Dial(s.Dev, core.WANIPOf(d), port)
+	if svc == nil {
+		return fmt.Sprintf("cannot reach the registry %s (%s): %s", d.Hostname, core.WANIPOf(d), msg)
+	}
+	return ""
 }

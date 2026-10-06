@@ -325,6 +325,33 @@ func (w *World) NATAddress(asn int) string {
 	return ""
 }
 
+// NATEgressASN names the network whose carrier-grade NAT sends traffic out under
+// an address. A NAT egress belongs to the provider and never to the customer
+// behind it, so a report about that address can only ever reach the provider —
+// which is the honest dead end §35 requires.
+func (w *World) NATEgressASN(ip string) int {
+	if w.WAN == nil {
+		return 0
+	}
+	for _, as := range w.WAN.ASes {
+		if as == nil {
+			continue
+		}
+		if w.NATAddress(as.ASN) == ip {
+			return as.ASN
+		}
+	}
+	return 0
+}
+
+// SharedAddress reports whether an address is one that many subscribers send
+// from: a carrier-grade NAT range, or a provider's NAT egress. Nobody can be
+// named behind one of these, and every part of the world that resolves an
+// address to a subscriber has to say so instead of guessing.
+func (w *World) SharedAddress(ip string) bool {
+	return ClassifyAddr(ip).Kind == KindShared || w.NATEgressASN(ip) != 0
+}
+
 // RenumberWAN changes a device's public address the way an ISP lease renewal
 // can: the interface, the world's address map and the device's DNS record all
 // move together. Nothing about it is decorative — a stale A record really does

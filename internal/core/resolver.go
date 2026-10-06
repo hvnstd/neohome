@@ -237,6 +237,18 @@ func LoadWorld(path string) (*World, error) {
 		// saves from before sticks existed; a no-op unless a stick exists
 		seedUSB(w)
 	}
+	if len(w.Desks) == 0 {
+		// a save from before §34: the organisations are devices like any
+		// other, so they can be created under an existing world
+		seedDesks(w)
+		if w.WAN != nil {
+			for _, dk := range w.Desks {
+				if d := w.DeskDevice(dk); d != nil {
+					w.WAN.assign(d, wanIP(d))
+				}
+			}
+		}
+	}
 	if w.Prov != nil {
 		// saves from before the panel kept regions or node records
 		if len(w.Prov.Regions) == 0 {
