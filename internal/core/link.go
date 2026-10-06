@@ -77,7 +77,17 @@ type PrinterState struct {
 	Printed int // sheets printed since it was installed
 	Offline bool
 	NextID  int // the spooler's job counter, persisted with the queue
+
+	// Credit is the work the printer has accumulated towards its next sheet.
+	// A sheet costs pageWork units; a machine earns its WorkRate() per tick, so
+	// an idle printer still prints a page every other tick (as it always has)
+	// and a CPU-starved one prints more slowly — §17's "进程变慢" applied to the
+	// one process a household notices.
+	Credit float64
 }
+
+// pageWork is what one sheet costs: two ticks of an idle printer.
+const pageWork = 2.0
 
 // IsSwitch reports whether a device is a network switch.
 func (d *Device) IsSwitch() bool { return d.Profile == "switch" }

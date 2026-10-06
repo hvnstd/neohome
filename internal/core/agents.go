@@ -12,8 +12,15 @@ func (w *World) AssistantWork() {
 		if t.Done || t.Kind != "assist-job" {
 			continue
 		}
-		// one job takes 6 ticks (~3 game minutes) — visible progress, not a wall
-		if w.TickCount-t.StartTick < 6 {
+		// one job takes 6 ticks (~3 game minutes) of the node's own CPU —
+		// visible progress, not a wall. §17: a busy node is a slow node, so the
+		// job advances by the share its processes actually get.
+		if a := w.Devices[t.DeviceID]; a != nil {
+			t.Progress += a.CPUShare()
+		} else {
+			t.Progress += 1
+		}
+		if t.Progress < 6 {
 			continue
 		}
 		j := w.Job(t.JobID)

@@ -125,6 +125,14 @@ func (w *World) InstallFromView(d *Device, steps []InstallStep) ([]InstalledPkg,
 		if d.Installed[step.Entry.Name] != nil {
 			continue
 		}
+		// §17: the unpack needs room before it needs anything else. The error
+		// is the filesystem's own; the shell renders it in each manager's
+		// voice (mgrErr), the way the real tools report the same errno.
+		if need := (step.Entry.Size + 1023) / 1024; need > 0 && d.DiskFreeMB() < need {
+			return done, pkgErr("NOSPACE",
+				"cannot unpack %s: no space left on device (%d MiB needed, %d MiB free)",
+				step.Entry.Name, need, d.DiskFreeMB())
+		}
 		p, err := w.FetchPayload(d, step)
 		if err != nil {
 			if len(done) == 0 {

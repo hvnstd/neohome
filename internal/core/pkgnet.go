@@ -402,6 +402,7 @@ func (w *World) StartMirrorSync(r *Repo) *PackageError {
 	d.AddProc(&Proc{Name: "mirror-sync", Args: r.Distro + "/" + r.Suite, User: "root",
 		CPU: 12, Mem: 64, TTY: "?", State: "R", Kind: "task", Start: w.Sim})
 	r.SyncPhase = 1
+	r.SyncCredit = 0 // a new sync starts with no credit banked
 	r.SyncDirty = false
 	d.Logf("info", "mirror", "sync started for %s (%s)", r.Name, r.Suite)
 	return nil
@@ -510,6 +511,14 @@ func (w *World) mirrorSyncStep(r *Repo) {
 		w.finishSyncInterrupted(r, "the sync process was killed mid-run")
 		return
 	}
+	// §17: a sync is bulk work — it moves bytes at the machine's link and disk
+	// throughput, and a CPU-starved host gets less done per tick. A fast mirror
+	// still advances a phase per tick, exactly as it always did.
+	r.SyncCredit += d.WorkRate()
+	if r.SyncCredit < 1 {
+		return
+	}
+	r.SyncCredit -= 1
 	r.SyncPhase++
 	switch r.SyncPhase {
 	case 2:

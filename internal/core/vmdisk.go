@@ -8,22 +8,14 @@ import (
 // ErrNoSpace is what a real kernel returns when a write hits a full filesystem.
 var ErrNoSpace = errors.New("no space left on device")
 
-// DiskFull reports whether this device's own storage is exhausted. For a VM
-// guest the limit is the guest's own disk, not the hypervisor's: a guest sized
-// too small runs out on its own even when the host has terabytes free, which is
-// the whole point of "资源不是装饰".
+// DiskFull reports whether this device's own storage is exhausted. It is one
+// rule for every machine (§17): a guest's limit is its virtual disk, a host's is
+// its own disk — see DiskLimitMB. A guest sized too small runs out on its own
+// even when the host has terabytes free, and a PC with a full disk fails the
+// same way, which is the whole point of "资源不是装饰".
 func (d *Device) DiskFull() bool {
-	if d.W == nil || d.W.VMs == nil {
-		return false
-	}
-	v := d.W.VMs.guestOf(d.ID)
-	if v == nil {
-		return false
-	}
-	if v.VDiskM <= 0 {
-		return false
-	}
-	return d.FS.DiskUsedMB() >= v.VDiskM
+	limit := d.DiskLimitMB()
+	return limit > 0 && d.FS.DiskUsedMB() >= limit
 }
 
 // WriteGuest performs a user write on a device, refusing it when the disk is
@@ -34,7 +26,13 @@ func (d *Device) WriteGuest(p string, data []byte, u *User) error {
 	if d.DiskFull() {
 		return ErrNoSpace
 	}
-	return d.FS.WriteChecked(p, data, u)
+	if err := d.FS.WriteChecked(p, data, u); err != nil {
+		return err
+	}
+	// §17: the disk counters are fed by the writes that really happen, so a
+	// `vmstat` sample and `df` can never disagree about them
+	d.NoteDiskWrite(len(data))
+	return nil
 }
 
 // guestOf finds the guest a device is, if that device is a guest.

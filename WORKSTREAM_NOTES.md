@@ -1297,3 +1297,95 @@ from the switch itself.
 * **Printers with their own queue UI over IPP**: `cupsd:631` answers and the
   queue is real; implementing IPP's wire protocol would not change one byte of
   state a player can see.
+
+# 系统状态 / 资源管理 (WS-1.11) — §17 资源不是装饰
+
+## The model
+
+§17 lists CPU, RAM, swap, disk, disk I/O, network bandwidth and process count and
+says every one of them must really affect the system. The answer is a small
+kernel-side accounting layer (`internal/core/resources.go`) on top of state that
+was already real — memory in use and disk in use are *derived* from the processes
+and the filesystem, never stored twice:
+
+* **CPU is shared, not claimed.** Each process has a `WantCPU` and a measured
+  `CPU`; `CPUShare()` is the fraction of the request a machine can honour. A
+  machine with four workers on one core really gives each of them a quarter, and
+  `htop` shows both numbers so the gap is visible. Everything that should slow
+  down consults that one share: the printer's spooler earns credit per tick
+  (a sheet costs two ticks of an idle CPU), the assistant's job progress
+  advances by it, and bulk work (`WorkRate`) multiplies by it.
+* **Load averages are the machine's own.** `uptime`, `top` and `htop` print the
+  exponentially weighted averages of `CPUDemand()/CPUCapacity()`, so a busy
+  machine says so and decays honestly when the work stops.
+* **RAM → swap → OOM.** Over RAM pages into swap (half the RAM, the rule `free`
+  has always printed); swap full with the machine still over RAM kills the
+  biggest resident process for real — services marked failed, the victim gone
+  from `ps`, the kernel's own "Out of memory: Killed process" line in the log.
+  With nothing but daemons left, the services are what fails. The same chain a
+  guest VM already had now applies to the machine itself.
+* **A full disk is an error, not a warning.** `DiskLimitMB()` is a guest's
+  virtual disk or a host's own disk, and every player-visible write goes through
+  `WriteGuest`, which returns `no space left on device` when the bytes do not
+  fit. Logs are the second casualty: a full `/` really loses syslog lines,
+  `df` reports the count, and the reckoning ("N message(s) dropped") is written
+  once there is room. Installs check room first and refuse in each manager's
+  voice.
+* **Disk I/O and the link are throughput.** `DiskMBps` (per profile, overridable)
+  and `HW.NetMbps` give `WorkRate()`: a gigabit-plus-500 MB/s machine completes
+  one unit of bulk work per tick, a slow one takes proportionally longer. The
+  mirror sync is the visible consumer — a sync that took three ticks on a fast
+  mirror takes more on a slow or busy one, and the tree's state is unchanged by
+  the waiting.
+* **The process table is finite.** `ProcLimit()` (RAM/8, floor 24) refuses forks
+  with `Resource temporarily unavailable`, the count of refusals is kept, and
+  `vmstat` reports it.
+
+## What exists
+
+* `stress` — real background load: `--cpu N`, `--vm N --vm-bytes SIZE`, `--timeout T`
+  (`pkill stress` ends it early). The workers are real entries in the process
+  table with real memory and real demand.
+* `dd` — writes real bytes into the filesystem (`if=/dev/zero`, a source file,
+  `bs=`, `count=`, `status=none`), reports the records that landed, and fails
+  with the filesystem's error when the disk fills. A single file is capped at
+  64 MiB — a stated model limit, not a fake errno — so a disk fills the honest
+  way, with several files.
+* `htop`, `top` — memory, swap, tasks, load average and per-process CPU vs what
+  it asked for, with a line when the machine is over RAM or the disk is full.
+* `free` — real memory and real swap in use; `df` — the real limit, the warning
+  when writes are failing and the dropped-log count; `uptime` — the measured
+  load average; `vmstat` — one sample per command (the world clock moves on
+  ticks, so there is nothing to sleep for) with the per-tick disk and network
+  rates the transfer paths feed.
+
+## The tests
+
+`tests/resources_test.go`, six tests, each with a happy path, a boundary and a
+recovery: four workers on one core sharing a quarter each with a spooler that
+stops finishing sheets, the load average climbing and decaying, and the fork
+limit refusing the load past the table's size; a 300 MiB hog paging, a second
+hog taking the machine past swap and the kernel killing the biggest resident
+while the printer's own daemon survives and the swap drains; 16 MiB of flash
+filling from `dd`, the write after it failing with the filesystem's error, the
+log losing lines and counting them, and the file being removed to bring
+everything back; `apt` refusing to unpack onto a full disk in its own voice and
+taking the same package once there is room; every monitoring command printing
+the same numbers the consequences use; and the same 64 MiB write taking twice as
+long on a mirror whose disk is two fifths as fast.
+
+`tools/resource_verify.sh` is the live counterpart over `:2222`: a load on the
+laptop, the same write measured before and after, an OOM kill on the switch, and
+a disk filled, logged, recovered.
+
+## Not implemented on purpose
+
+* **Schedulers, priorities and cgroups**: `nice` exists as the value it always
+  was, and the fair share is one number per machine — a per-process scheduler
+  would be a second, unobservable CPU model.
+* **Per-user RLIMIT_NPROC and ulimits**: the table limit is the machine's, which
+  is what a small device really hits first.
+* **Block-device I/O queues and latency curves**: throughput is a rate per tick.
+  Modelling queue depth would change no state a player can see.
+* **Disk quotas and cgroup memory limits**: one machine, one disk, one RAM
+  limit — the failures people actually meet.

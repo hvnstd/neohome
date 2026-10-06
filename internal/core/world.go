@@ -165,6 +165,12 @@ type Device struct {
 	Battery     *LaptopBattery
 	Printer     *PrinterState
 	BackupIndex int // the last backup run, for the NAS's own records
+
+	// Rsrc is §17's kernel-side accounting: load average, swap, OOM count,
+	// fork refusals, dropped log lines and the last measured CPU/work rates.
+	// Everything else about resources (memory used, disk used, process count)
+	// is derived from the real state instead of stored here.
+	Rsrc *Rsrc
 }
 
 type Mount struct {
@@ -269,18 +275,26 @@ func (u *User) CheckPassword(pw string) bool {
 }
 
 type Proc struct {
-	PID   int
-	Name  string
-	Args  string
-	User  string
-	CPU   float64
-	Mem   int
-	TTY   string
-	State string
-	Start time.Time
-	Nice  int
-	Svc   string
-	Kind  string // builtin|task|shell
+	PID  int
+	Name string
+	Args string
+	User string
+	// CPU is what the process actually got last tick; WantCPU is what it asked
+	// for. Under contention the two differ, and that difference is what makes
+	// "CPU 不足 → 进程变慢" measurable instead of a claim.
+	CPU     float64
+	WantCPU float64
+	Mem     int
+	TTY     string
+	State   string
+	Start   time.Time
+	// StartTick/EndTick bound a background load (`stress --timeout`); EndTick 0
+	// means it runs until something kills it.
+	StartTick int
+	EndTick   int
+	Nice      int
+	Svc       string
+	Kind      string // builtin|task|shell|load
 }
 
 type Service struct {
@@ -310,6 +324,10 @@ type Task struct {
 	Done      bool
 	DoneAt    time.Time
 	StartTick int
+	// Progress is how much of the work is done: a tick-sized task advances by
+	// the CPU share the machine actually had (§17), so a busy node finishes it
+	// late instead of on schedule.
+	Progress  float64
 	Narrative string
 }
 
@@ -456,6 +474,9 @@ type Repo struct {
 	ReleaseHash map[string]string
 	// SyncPhase: 0 idle; >0 a sync process is running (see MirrorTick).
 	SyncPhase int
+	// SyncCredit accumulates the mirror host's work-per-tick: a phase costs one
+	// unit, so a slow or busy host finishes the same sync in more ticks (§17).
+	SyncCredit float64
 	// SyncDirty records that the running sync already rewrote index files:
 	// interrupting after that leaves the tree inconsistent (CORRUPTED).
 	SyncDirty bool
@@ -548,6 +569,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		Battery                      *LaptopBattery
 		Printer                      *PrinterState
 		BackupIndex                  int
+		Rsrc                         *Rsrc
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -605,6 +627,7 @@ func (d *Device) GobDecode(b []byte) error {
 		Battery                      *LaptopBattery
 		Printer                      *PrinterState
 		BackupIndex                  int
+		Rsrc                         *Rsrc
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -632,6 +655,7 @@ func (d *Device) GobDecode(b []byte) error {
 	d.Switch, d.Uplink, d.UplinkPort = shadow.Switch, shadow.Uplink, shadow.UplinkPort
 	d.PoEPowered, d.PoeUp = shadow.PoEPowered, shadow.PoeUp
 	d.Battery, d.Printer, d.BackupIndex = shadow.Battery, shadow.Printer, shadow.BackupIndex
+	d.Rsrc = shadow.Rsrc
 	return nil
 }
 
@@ -653,7 +677,14 @@ func (w *World) Now() time.Time { return w.Sim }
 func (d *Device) Logf(level, src string, format string, a ...any) {
 	msg := fmt.Sprintf(format, a...)
 	line := fmt.Sprintf("%s %s %s[%s]: %s\n", d.W.Sim.Format("Jan 2 15:04:05"), d.Hostname, src, level, msg)
-	d.FS.Append("/var/log/syslog", []byte(line))
+	// §17: a full filesystem really loses log lines. rsyslog cannot write into
+	// /var, drops the message, and says how many it lost once there is room
+	// again (see diskTick) — which is exactly what the real daemon does.
+	if d.DiskFull() {
+		d.Resources().LogDropped++
+	} else {
+		d.FS.Append("/var/log/syslog", []byte(line))
+	}
 	if src == "kernel" {
 		d.Dmesg = append(d.Dmesg, line)
 		if len(d.Dmesg) > 200 {

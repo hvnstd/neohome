@@ -246,6 +246,8 @@ func (w *World) Tick() {
 	w.LinkTick()
 	w.BatteryTick()
 	w.PrintTick()
+	// §17 runs last: the numbers it charges describe the world as it now is
+	w.ResourceTick()
 }
 
 func (w *World) AssistantSkillCount() int { return w.assistSkills }

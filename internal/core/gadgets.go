@@ -115,11 +115,15 @@ func (w *World) PrintTick() {
 			job.Blocked("out of toner")
 			continue
 		}
-		// print as much as this tick can: a page every other tick, which is a
-		// believable small-office printer and makes a long job take real time
-		if w.TickCount%2 != 0 {
+		// print as much as this tick can: a sheet costs pageWork units and the
+		// printer earns its own CPU share per tick, so an idle machine prints a
+		// page every other tick and a loaded one prints more slowly (§17's
+		// "进程变慢" applied to the one process a household notices)
+		p.Credit += d.CPUShare()
+		if p.Credit < pageWork {
 			continue
 		}
+		p.Credit -= pageWork
 		job.State = "printing"
 		p.Paper--
 		p.Printed++
