@@ -147,19 +147,29 @@ func cmdFastfetch(s *Shell, args []string) int {
 	fmt.Fprintf(s.Out, "Processes: %d\n", len(d.Procs))
 	fmt.Fprintf(s.Out, "Services: %d running\n", runningServiceCount(d))
 
-	var addresses []string
-	var hasIPv6 bool
+	var addresses, v6 []string
+	linkLocal := false
 	for _, iface := range d.Ifaces {
-		if !iface.Up || iface.IP == "" {
+		if !iface.Up {
 			continue
 		}
-		ifaceName := iface.Name
-		if iface.Zone != "" {
-			ifaceName += "[" + iface.Zone + "]"
+		if iface.IP != "" {
+			ifaceName := iface.Name
+			if iface.Zone != "" {
+				ifaceName += "[" + iface.Zone + "]"
+			}
+			addresses = append(addresses, ifaceName+"="+iface.IP)
 		}
-		addresses = append(addresses, ifaceName+"="+iface.IP)
-		if strings.Contains(iface.IP, ":") {
-			hasIPv6 = true
+		// §13: the v6 addresses are read from the interface, not guessed — a
+		// host that really holds a global v6 address reports it here
+		for _, a := range iface.IP6 {
+			if strings.HasPrefix(a, "fe80:") {
+				// every v6 host has a link-local address, even when it has no
+				// route to the v6 internet: it is not connectivity
+				linkLocal = true
+				continue
+			}
+			v6 = append(v6, a)
 		}
 	}
 	if len(addresses) == 0 {
@@ -167,9 +177,12 @@ func cmdFastfetch(s *Shell, args []string) int {
 	} else {
 		fmt.Fprintf(s.Out, "Network: %s\n", strings.Join(addresses, ", "))
 	}
-	if hasIPv6 {
-		fmt.Fprintln(s.Out, "IPv6: configured")
-	} else {
+	switch {
+	case len(v6) > 0:
+		fmt.Fprintf(s.Out, "IPv6: configured (%s)\n", strings.Join(v6, ", "))
+	case linkLocal:
+		fmt.Fprintln(s.Out, "IPv6: link-local only (no routable address)")
+	default:
 		fmt.Fprintln(s.Out, "IPv6: not configured")
 	}
 	return 0

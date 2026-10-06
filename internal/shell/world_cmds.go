@@ -5,6 +5,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"neohome/internal/core"
 )
@@ -903,34 +904,82 @@ func cmdVps(s *Shell, args []string) int {
 	switch sub {
 	case "", "list":
 		fmt.Fprintf(s.Out, "novapanel — plans\n")
+		fmt.Fprintf(s.Out, "  %-12s %-6s %-7s %-13s %s\n", "PLAN", "vCPU", "RAM", "IP", "PRICE")
 		for _, p := range s.W.Prov.Plans {
-			fmt.Fprintf(s.Out, "  %-10s %d vCPU  %5d MiB  %6d MiB  %-9s  %s/mo\n",
-				p.Name, p.Cores, p.RAM, p.Disk, p.Region, fmtMoney(p.Monthly))
+			ip := "public IPv4"
+			switch p.IPMode {
+			case "shared":
+				ip = "shared (CGNAT)"
+			case "v6only":
+				ip = "IPv6 only"
+			}
+			if p.V6 {
+				ip += " + v6"
+			}
+			fmt.Fprintf(s.Out, "  %-12s %-6d %-7s %-13s %s/mo  (%s)\n",
+				p.Name, p.Cores, fmt.Sprintf("%d MiB", p.RAM), ip, fmtMoney(p.Monthly), p.Region)
 		}
 		fmt.Fprintln(s.Out, "\nimages: debian alpine ubuntu fedora arch")
-		fmt.Fprintln(s.Out, "usage: vps create <plan> [hostname] [image]")
+		var regions []string
+		for _, r := range s.W.NodeRegions() {
+			regions = append(regions, r.Name)
+		}
+		fmt.Fprintf(s.Out, "regions: %s\n", strings.Join(regions, ", "))
+		fmt.Fprintln(s.Out, "note: a shared-address plan has no inbound IPv4 — host on IPv6 or buy a public plan")
+		fmt.Fprintln(s.Out, "usage: vps create <plan> [hostname] [image] [--region R]")
+		fmt.Fprintln(s.Out, "manage a node: vps show|start|stop|reboot|reinstall|console|resize|disk|snapshot|snapshots|restore|rdns <hostname>")
 		return 0
 	case "create", "buy", "new":
-		if len(args) < 2 {
-			s.errf("usage: vps create <plan> [hostname] [image]")
+		region := ""
+		rest := []string{}
+		for i := 1; i < len(args); i++ {
+			if (args[i] == "--region" || args[i] == "-r") && i+1 < len(args) {
+				region = args[i+1]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--region=") {
+				region = strings.TrimPrefix(args[i], "--region=")
+				continue
+			}
+			rest = append(rest, args[i])
+		}
+		if len(rest) < 1 {
+			s.errf("usage: vps create <plan> [hostname] [image] [--region NAME]")
 			return 1
 		}
 		hostname := ""
-		if len(args) > 2 {
-			hostname = args[2]
+		if len(rest) > 1 {
+			hostname = rest[1]
 		}
 		image := "debian"
-		if len(args) > 3 {
-			image = args[3]
+		if len(rest) > 2 {
+			image = rest[2]
 		}
-		d, creds, err := s.W.ProvisionVPSWithOS(s.User.Name, args[1], hostname, image)
+		d, creds, err := s.W.ProvisionVPSInRegion(s.User.Name, rest[0], hostname, image, region)
 		if err != nil {
 			s.errf("%v", err)
 			return 1
 		}
+		if rec := s.W.NodeOf(d); rec != nil {
+			country := "??"
+			if r, err := s.W.RegionByName(rec.Region); err == nil {
+				country = r.Country
+			}
+			fmt.Fprintf(s.Out, "region:    %s (%s, %s, AS%d)\n", rec.Region, rec.Datacenter, country, regionASN(s, rec.Region))
+		}
 		fmt.Fprintf(s.Out, "provisioning %s...\n", d.Hostname)
 		fmt.Fprintf(s.Out, "image:     %s %s\n", d.OS.Distro, d.OS.Ver)
-		fmt.Fprintf(s.Out, "public ip: %s\n", d.FirstWANIP())
+		if d.NATed {
+			fmt.Fprintf(s.Out, "ipv4:      %s (shared — carrier-grade NAT, no inbound)\n", core.WANIPOf(d))
+		} else if d.FirstWANIP() != "" {
+			fmt.Fprintf(s.Out, "public ip: %s\n", d.FirstWANIP())
+		} else {
+			fmt.Fprintf(s.Out, "ipv4:      none (IPv6-only plan)\n")
+		}
+		if v6 := d.FirstWANv6(); v6 != "" {
+			fmt.Fprintf(s.Out, "public ip6: %s\n", v6)
+		}
 		fmt.Fprintf(s.Out, "dns:       %s.neohome.example\n", d.Hostname)
 		fmt.Fprintf(s.Out, "%s\n", creds)
 		fmt.Fprintf(s.Out, "\nssh in: ssh deploy@%s\n", d.Hostname)
@@ -943,16 +992,371 @@ func cmdVps(s *Shell, args []string) int {
 			d := s.W.Devices[id]
 			if d.Profile == "vps" && d.Owner == s.User.Name {
 				found = true
-				fmt.Fprintf(s.Out, "%-16s %-16s %-14s %d vCPU %d MiB\n", d.Hostname, d.FirstWANIP(), d.OS.Distro+" "+d.OS.Ver, d.HW.Cores, d.HW.RAMMB)
+				addr := d.FirstWANIP()
+				switch {
+				case d.NATed:
+					addr = core.WANIPOf(d) + " (shared)"
+				case addr == "":
+					addr = d.FirstWANv6()
+					if addr != "" {
+						addr += " (v6)"
+					}
+				}
+				fmt.Fprintf(s.Out, "%-16s %-22s %-14s %d vCPU %d MiB\n",
+					d.Hostname, addr, d.OS.Distro+" "+d.OS.Ver, d.HW.Cores, d.HW.RAMMB)
+				if vips := d.VirtualIPs(); len(vips) > 0 {
+					fmt.Fprintf(s.Out, "%-16s virtual: %s\n", "", strings.Join(vips, ", "))
+				}
 			}
 		}
 		if !found {
 			fmt.Fprintln(s.Out, "you have no VPS")
 		}
 		return 0
+	case "ip", "address", "floating":
+		// §13's "virtual IP": a reserved address the provider lends to one of
+		// the customer's nodes. Real providers call these floating/reserved
+		// addresses, and the whole point is that they can move between nodes
+		// while the name in DNS keeps resolving to them.
+		if len(args) < 3 {
+			s.errf("usage: vps ip add <hostname> [address] | vps ip show <hostname> | vps ip del <hostname> <address>")
+			return 1
+		}
+		verb, host := args[1], args[2]
+		var dev *core.Device
+		for _, id := range s.W.Order {
+			if d := s.W.Devices[id]; d.Hostname == host && d.Profile == "vps" && d.Owner == s.User.Name {
+				dev = d
+			}
+		}
+		if dev == nil {
+			s.errf("vps: no node %q on your account", host)
+			return 1
+		}
+		switch verb {
+		case "add", "attach", "reserve":
+			ip := ""
+			if len(args) > 3 {
+				ip = args[3]
+			}
+			if ip == "" {
+				// out of the provider's own block: a reserved address is the
+				// operator's to lend, which is what `whois` will say about it
+				ip = s.W.AllocPublicFor("vps")
+			}
+			if err := s.W.AttachVirtual(dev, ip); err != nil {
+				s.errf("vps: %v", err)
+				return 1
+			}
+			fmt.Fprintf(s.Out, "reserved %s -> %s\n", ip, dev.Hostname)
+			fmt.Fprintf(s.Out, "point a DNS record at it and the name survives moving the service to another node\n")
+			return 0
+		case "show", "list":
+			vips := dev.VirtualIPs()
+			if len(vips) == 0 {
+				fmt.Fprintf(s.Out, "%s holds no reserved addresses (its own address is %s)\n", dev.Hostname, core.WANIPOf(dev))
+				return 0
+			}
+			for _, v := range vips {
+				fmt.Fprintf(s.Out, "%-16s reserved for %s\n", v, dev.Hostname)
+			}
+			return 0
+		case "del", "detach", "release":
+			if len(args) < 4 {
+				s.errf("usage: vps ip del <hostname> <address>")
+				return 1
+			}
+			if err := s.W.DetachVirtual(dev, args[3]); err != nil {
+				s.errf("vps: %v", err)
+				return 1
+			}
+			fmt.Fprintf(s.Out, "released %s from %s\n", args[3], dev.Hostname)
+			return 0
+		}
+		s.errf("usage: vps ip add <hostname> [address] | vps ip show <hostname> | vps ip del <hostname> <address>")
+		return 1
+	case "regions", "region":
+		fmt.Fprintf(s.Out, "novapanel — regions\n")
+		fmt.Fprintf(s.Out, "  %-14s %-11s %-8s %-9s %s\n", "REGION", "DATACENTER", "COUNTRY", "NETWORK", "BLOCK")
+		for _, r := range s.W.NodeRegions() {
+			fmt.Fprintf(s.Out, "  %-14s %-11s %-8s %-9s %s0/24\n",
+				r.Name, r.Datacenter, r.Country, fmt.Sprintf("AS%d", r.ASN), r.Block)
+		}
+		return 0
+	case "show", "info", "status":
+		if len(args) < 2 {
+			s.errf("usage: vps show <hostname>")
+			return 1
+		}
+		d, rec, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		dc := rec.Datacenter
+		if r, err := s.W.RegionByName(rec.Region); err == nil {
+			dc = fmt.Sprintf("%s (%s, %s, AS%d)", r.Datacenter, r.Name, r.Country, r.ASN)
+		}
+		fmt.Fprintf(s.Out, "%s\n", d.Hostname)
+		fmt.Fprintf(s.Out, "  plan:      %s (%d vCPU, %d MiB RAM, %d MiB disk)\n", rec.Plan, d.HW.Cores, d.HW.RAMMB, d.HW.DiskMB)
+		fmt.Fprintf(s.Out, "  image:     %s %s\n", d.OS.Distro, d.OS.Ver)
+		fmt.Fprintf(s.Out, "  region:    %s\n", dc)
+		fmt.Fprintf(s.Out, "  state:     %s\n", core.VPSState(d))
+		fmt.Fprintf(s.Out, "  ipv4:      %s\n", orNone(core.WANIPOf(d)))
+		fmt.Fprintf(s.Out, "  ipv6:      %s\n", orNone(d.FirstWANv6()))
+		if vips := d.VirtualIPs(); len(vips) > 0 {
+			fmt.Fprintf(s.Out, "  reserved:  %s\n", strings.Join(vips, ", "))
+		}
+		fmt.Fprintf(s.Out, "  rDNS:      %s\n", orNone(rec.RDNS))
+		fmt.Fprintf(s.Out, "  price:     %s/mo\n", fmtMoney(rec.Monthly))
+		fmt.Fprintf(s.Out, "  rebuilds:  %d\n", rec.Rebuilds)
+		if len(rec.Snapshots) > 0 {
+			var snaps []string
+			for _, sn := range rec.Snapshots {
+				snaps = append(snaps, sn.Name)
+			}
+			fmt.Fprintf(s.Out, "  snapshots: %s\n", strings.Join(snaps, ", "))
+		}
+		fmt.Fprintf(s.Out, "  console:   vps console %s\n", d.Hostname)
+		return 0
+	case "start", "boot", "poweron":
+		return vpsOne(s, args, func(host string) error {
+			d, err := s.W.VPSStart(s.User.Name, host)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(s.Out, "%s powered on (%d services running)\n", d.Hostname, runningServiceCount(d))
+			return nil
+		})
+	case "stop", "poweroff", "shutdown":
+		return vpsOne(s, args, func(host string) error {
+			d, err := s.W.VPSStop(s.User.Name, host)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(s.Out, "%s powered off — nothing answers at %s now\n", d.Hostname, firstAddr(d))
+			return nil
+		})
+	case "reboot", "restart":
+		return vpsOne(s, args, func(host string) error {
+			d, err := s.W.VPSReboot(s.User.Name, host)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(s.Out, "%s rebooted (uptime %s)\n", d.Hostname, d.Uptime().Round(time.Second))
+			return nil
+		})
+	case "reinstall", "rebuild":
+		if len(args) < 2 {
+			s.errf("usage: vps reinstall <hostname> [image]")
+			return 1
+		}
+		image := "debian"
+		if len(args) > 2 {
+			image = args[2]
+		}
+		_, creds, err := s.W.ReinstallVPS(s.User.Name, args[1], image)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "%s reinstalled — the old filesystem is gone\n", args[1])
+		fmt.Fprintf(s.Out, "%s\n", creds)
+		fmt.Fprintf(s.Out, "start it with: vps start %s\n", args[1])
+		return 0
+	case "console":
+		if len(args) < 2 {
+			s.errf("usage: vps console <hostname>")
+			return 1
+		}
+		d, _, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		if !d.NetUp {
+			s.errf("%s is powered off (start it first)", d.Hostname)
+			return 1
+		}
+		u := d.FindUser("deploy")
+		if u == nil {
+			u = d.FindUser("root")
+		}
+		if u == nil {
+			s.errf("no user to log in as on %s", d.Hostname)
+			return 1
+		}
+		return enterConsole(s, d, u, d.Hostname)
+	case "resize", "grow":
+		if len(args) < 2 {
+			s.errf("usage: vps resize <hostname> [--cpu N] [--mem MB] [--disk MB]")
+			return 1
+		}
+		d, rec, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		cores, mem, disk := float64(d.HW.Cores), d.HW.RAMMB, d.HW.DiskMB
+		for i := 2; i < len(args); i++ {
+			num := func() (int, bool) {
+				if i+1 < len(args) {
+					if n, err := strconv.Atoi(args[i+1]); err == nil {
+						i++
+						return n, true
+					}
+				}
+				return 0, false
+			}
+			switch {
+			case strings.HasPrefix(args[i], "--cpu"):
+				if n, ok := num(); ok {
+					cores = float64(n)
+				}
+			case strings.HasPrefix(args[i], "--mem"):
+				if n, ok := num(); ok {
+					mem = n
+				}
+			case strings.HasPrefix(args[i], "--disk"):
+				if n, ok := num(); ok {
+					disk = n
+				}
+			}
+		}
+		price, delta, err := s.W.VPSResize(s.User.Name, args[1], cores, mem, disk)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		_ = rec
+		fmt.Fprintf(s.Out, "%s resized: %g vCPU, %d MiB RAM, %d MiB disk — now %s/mo\n",
+			d.Hostname, cores, mem, disk, fmtMoney(price))
+		if delta > 0 {
+			fmt.Fprintf(s.Out, "charged %s for the upgrade\n", fmtMoney(delta))
+		} else if delta < 0 {
+			fmt.Fprintf(s.Out, "a downgrade is not refunded (%s/mo from now on)\n", fmtMoney(price))
+		}
+		return 0
+	case "disk":
+		if len(args) < 3 {
+			s.errf("usage: vps disk <hostname> <GiB>")
+			return 1
+		}
+		gib, err := strconv.Atoi(args[2])
+		if err != nil {
+			s.errf("vps: disk size must be a number of GiB")
+			return 1
+		}
+		monthly, err := s.W.VPSAddDisk(s.User.Name, args[1], gib)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "+%d GiB attached to %s — %s/mo now\n", gib, args[1], fmtMoney(monthly))
+		return 0
+	case "snapshot", "snap":
+		if len(args) < 2 {
+			s.errf("usage: vps snapshot <hostname> [name]")
+			return 1
+		}
+		name := ""
+		if len(args) > 2 {
+			name = args[2]
+		}
+		snap, err := s.W.VPSnapshot(s.User.Name, args[1], name)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "snapshot %s taken from %s (%s)\n", snap.Name, args[1], snap.At.Format("2006-01-02 15:04"))
+		return 0
+	case "snapshots", "snaps":
+		if len(args) < 2 {
+			s.errf("usage: vps snapshots <hostname>")
+			return 1
+		}
+		_, rec, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		if len(rec.Snapshots) == 0 {
+			fmt.Fprintf(s.Out, "%s has no snapshots\n", args[1])
+			return 0
+		}
+		for _, sn := range rec.Snapshots {
+			fmt.Fprintf(s.Out, "%-16s %s\n", sn.Name, sn.At.Format("2006-01-02 15:04"))
+		}
+		return 0
+	case "restore", "rollback":
+		if len(args) < 3 {
+			s.errf("usage: vps restore <hostname> <snapshot>")
+			return 1
+		}
+		if err := s.W.VPSRestore(s.User.Name, args[1], args[2]); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "%s restored from %s (start it to boot the restored system)\n", args[1], args[2])
+		return 0
+	case "rdns", "ptr":
+		if len(args) < 2 {
+			s.errf("usage: vps rdns <hostname> [name]")
+			return 1
+		}
+		ptr := ""
+		if len(args) > 2 {
+			ptr = args[2]
+		}
+		if err := s.W.VPSSetRDNS(s.User.Name, args[1], ptr); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		d, rec, _ := s.W.NodeFor(s.User.Name, args[1])
+		fmt.Fprintf(s.Out, "%s reverse DNS: %s\n", d.Hostname, rec.RDNS)
+		fmt.Fprintf(s.Out, "check it with: dig -x %s\n", core.WANIPOf(d))
+		return 0
 	}
-	s.errf("usage: vps [list|create PLAN [hostname] [image]|list-mine]")
+	s.errf("usage: vps [list|regions|create PLAN [hostname] [image] [--region R]|list-mine|show|start|stop|reboot|reinstall|console|resize|disk|snapshot|snapshots|restore|rdns|ip add|show|del]")
 	return 1
+}
+
+// vpsOne runs a one-hostname panel verb.
+func vpsOne(s *Shell, args []string, fn func(host string) error) int {
+	if len(args) < 2 {
+		s.errf("usage: vps %s <hostname>", args[0])
+		return 1
+	}
+	if err := fn(args[1]); err != nil {
+		s.errf("vps: %v", err)
+		return 1
+	}
+	return 0
+}
+
+// regionASN is the AS behind a region name, for the receipt.
+func regionASN(s *Shell, name string) int {
+	if r, err := s.W.RegionByName(name); err == nil {
+		return r.ASN
+	}
+	return 0
+}
+
+func firstAddr(d *core.Device) string {
+	if a := core.WANIPOf(d); a != "" {
+		return a
+	}
+	if a := d.FirstWANv6(); a != "" {
+		return a
+	}
+	return d.FirstLANIP()
+}
+
+func orNone(v string) string {
+	if v == "" {
+		return "(none)"
+	}
+	return v
 }
 
 // ---- help ----
@@ -987,7 +1391,9 @@ The world layer:
   mount -t cifs //host/share /mnt/x [-o user=U]     SMB: real smb.conf shares, guest or authenticated
   smbclient -L host                                 what the server really shares
   ftp [-A] [user@]host[:port]                        real FTP session (ls/get/put); -A is anonymous
-  vps [list|create PLAN [hostname]]                 buy a real node; it joins the internet
+  vps [list|regions|create|show|start|stop|reboot]  rent a real node: choose a region and an
+  vps [reinstall|console|resize|disk]               OS, then power it, rebuild it, resize it,
+  vps [snapshot|snapshots|restore|rdns|ip]          snapshot it or roll it back
 
   recon <host>      what is actually reachable + what is actually vulnerable
   scan <host|net>   port scan (logged on the target — it is not free)

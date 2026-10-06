@@ -140,10 +140,16 @@ type Device struct {
 
 	Installed     map[string]*VPkg
 	InstalledFrom map[string]string // package name -> repository that served it
-	Mounts        []Mount
-	Sessions      map[string]*TermSession
-	Active        []Login
-	Fail2Ban      map[string]int // source ip -> failed count
+
+	// NATed marks a node with no public IPv4 of its own: everything it sends
+	// leaves through its provider's carrier-grade NAT, so the address a remote
+	// host logs is the provider's, not the customer's. §13's 「公开 IP 不等于
+	// 公开玩家真实身份」 is literally this field.
+	NATed    bool
+	Mounts   []Mount
+	Sessions map[string]*TermSession
+	Active   []Login
+	Fail2Ban map[string]int // source ip -> failed count
 }
 
 type Mount struct {
@@ -198,12 +204,27 @@ type Iface struct {
 	Name string
 	IP   string
 	CIDR string // network like 10.77.1.0/24
-	MAC  string
-	Zone string // lo|lan|wan
-	GW   string
-	Up   bool
-	Link string // device id directly connected
-	Mode string // static|dhcp
+	// IP6 are this interface's IPv6 addresses as CIDRs, in the order the
+	// kernel would list them: the global address first, then the link-local
+	// one. §13's v6 kinds (public IPv6, ULA, link-local) are all spelled here.
+	IP6 []string
+	// SharedIP is the carrier-grade-NAT address a provider numbers a customer
+	// with when the plan has no public IPv4. It is NOT this interface's
+	// address: it is what the provider translated to on the way out, and it is
+	// deliberately absent from the world's address map.
+	SharedIP string
+	// Extra are secondary IPv4 addresses on this interface: §13's "virtual
+	// IP", a reserved address the provider lends to one node and can move.
+	// Real kernels print these with the `secondary` flag, which is why the
+	// command does too.
+	Extra []string
+	MAC   string
+	Zone  string // lo|lan|wan
+	GW    string
+	GW6   string // the v6 default gateway, when the ISP provides one
+	Up    bool
+	Link  string // device id directly connected
+	Mode  string // static|dhcp
 }
 
 type User struct {
@@ -354,6 +375,11 @@ type Provider struct {
 	Plans       []Plan
 	Issued      int
 	FirstMonths int
+	// Regions is the datacenter list the panel sells into (§12 lets the player
+	// choose one, and a region is an AS with its own block, not a label).
+	Regions []Region
+	// Nodes is the provider's record of every node it has rented out.
+	Nodes map[string]*NodeRecord
 }
 
 type Plan struct {
@@ -363,6 +389,16 @@ type Plan struct {
 	Disk    int
 	Monthly int64
 	Region  string
+	// IPMode is what the plan's networking really is, and it decides what the
+	// node can do: "public" ships one routable IPv4, "shared" puts the node
+	// behind the provider's carrier-grade NAT (outbound only — no port
+	// forward, no inbound at all), "v6only" ships no IPv4 the internet can
+	// reach. §13 lists the kinds; §12 makes the player choose one.
+	IPMode string
+	// V6 is whether the plan includes a routed IPv6 /64. On the shared and
+	// v6only plans this is what makes hosting possible at all — which is how
+	// a real budget provider pushes customers onto v6.
+	V6 bool
 }
 
 // Repo is one repository tree as the world serves it: a real path on a real
@@ -497,6 +533,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		Purposes                     string
 		Installed                    map[string]*VPkg
 		InstalledFrom                map[string]string
+		NATed                        bool
 		Mounts                       []Mount
 		Sessions                     map[string]*TermSession
 		Active                       []Login

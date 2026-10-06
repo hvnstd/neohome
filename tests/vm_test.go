@@ -14,7 +14,7 @@ import (
 // everything below would be a lie.
 func TestGuestIsARealDevice(t *testing.T) {
 	w := core.NewWorld()
-	v, err := w.CreateVM("srv-alex", "web", 2, 2048, 20480)
+	v, err := w.CreateVM("srv-alex", "web", 2, 2048, 20480, "public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestGuestIsARealDevice(t *testing.T) {
 // Stopping a guest must really stop it: no services, no processes, no answer.
 func TestStoppingAGuestReallyStopsIt(t *testing.T) {
 	w := core.NewWorld()
-	v, err := w.CreateVM("srv-alex", "web", 1, 1024, 8192)
+	v, err := w.CreateVM("srv-alex", "web", 1, 1024, 8192, "public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestStoppingAGuestReallyStopsIt(t *testing.T) {
 // Each step must be real, observable state — not a warning string.
 func TestRAMStarvedGuestReallySwapsAndOOMs(t *testing.T) {
 	w := core.NewWorld()
-	v, err := w.CreateVM("srv-alex", "tiny", 1, 256, 8192)
+	v, err := w.CreateVM("srv-alex", "tiny", 1, 256, 8192, "public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestRAMStarvedGuestReallySwapsAndOOMs(t *testing.T) {
 // full guest has to get ENOSPC, not a silent success.
 func TestFullDiskReallyFailsWrites(t *testing.T) {
 	w := core.NewWorld()
-	v, err := w.CreateVM("srv-alex", "tinyfs", 1, 512, 4)
+	v, err := w.CreateVM("srv-alex", "tinyfs", 1, 512, 4, "public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestFullDiskReallyFailsWrites(t *testing.T) {
 // never be faked by sleeping.
 func TestCPUStarvationThrottlesRealProcesses(t *testing.T) {
 	w := core.NewWorld()
-	v, err := w.CreateVM("srv-alex", "busy", 1, 2048, 8192)
+	v, err := w.CreateVM("srv-alex", "busy", 1, 2048, 8192, "public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestCPUStarvationThrottlesRealProcesses(t *testing.T) {
 // Destroying a guest must remove it from the world, not just flag it.
 func TestDestroyingAGuestRemovesIt(t *testing.T) {
 	w := core.NewWorld()
-	v, err := w.CreateVM("srv-alex", "temp", 1, 512, 4096)
+	v, err := w.CreateVM("srv-alex", "temp", 1, 512, 4096, "public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,8 +273,8 @@ func TestGuestPricingIsConsistentWithVPSPlans(t *testing.T) {
 		t.Fatalf("expected novapanel to publish several plans, got %d", len(plans))
 	}
 	for _, p := range plans {
-		out := run(t, w, pc, "alex", fmt.Sprintf("vm create probe-%s --cpu %d --mem %d --disk %d",
-			p.Name, p.Cores, p.RAM, p.Disk))
+		out := run(t, w, pc, "alex", fmt.Sprintf("vm create probe-%s --cpu %d --mem %d --disk %d --ip %s",
+			p.Name, p.Cores, p.RAM, p.Disk, p.IPMode))
 		if !strings.Contains(out, "Domain probe-"+p.Name+" created") {
 			// a plan the household cannot afford is a legitimate refusal, but
 			// then the price must be the reason, not a crash
@@ -319,7 +319,7 @@ func TestHouseholdServerIsTheHypervisor(t *testing.T) {
 		t.Fatal("no hypervisor is registered")
 	}
 	// a non-server cannot host guests
-	if _, err := w.CreateVM("pc-alex", "nope", 1, 512, 4096); err == nil {
+	if _, err := w.CreateVM("pc-alex", "nope", 1, 512, 4096, "public"); err == nil {
 		t.Fatal("a pc should not be able to host guests")
 	}
 }

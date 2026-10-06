@@ -4,7 +4,7 @@ One section per workstream, oldest first. Each section owns its files; check
 ownership there before touching cross-cutting files (`world.go` pointers,
 `engine.go` tick calls, `world_init.go` seeds, `resolver.go` backcompat).
 
-## Index (status 2026-10-06, tip WS-1.7)
+## Index (status 2026-10-06, tip WS-1.9)
 
 | Workstream | Commit | What it added | Where |
 |---|---|---|---|
@@ -24,7 +24,9 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | FTP + reachability (WS-1.4) | this commit | real FTP sessions over the wire; the seeded drop box is reachable, attackable and defended; a port-forward is now a hole that really forwards | §"FTP workstream (WS-1.4)" |
 | coupling patch (WS-1.5) | this commit | `irc` goes through the real ircd service and the resolver; the assistant node is reachable by key, as §24 intends, and `ssh host command` exists | §"Coupling patch (WS-1.5)" |
 | package ecosystem (WS-1.6) | this commit | five real package managers on five distributions, repositories as signed files served over HTTP by real hosts, a mirror that syncs on the world's own schedule, dependency-aware install and honest removal, and the third-party supply-chain decision | §"Package ecosystem (WS-1.6)" |
-| household network (WS-1.7) | this commit | exposure *is* configuration: `uci` stages then commits, `iptables` on a host, real NAT and filtering in the packet path, UPnP with leases, a DMZ, and the router's own management surface | §"Household network (WS-1.7)" |
+| household network (WS-1.7) | `c130af8` | exposure *is* configuration: `uci` stages then commits, `iptables` on a host, real NAT and filtering in the packet path, UPnP with leases, a DMZ, and the router's own management surface | §"Household network (WS-1.7)" |
+| IP system (WS-1.8) | this commit | §13 in full: public/private/CGNAT/ULA/link-local/dynamic/shared/virtual addresses, IPv6 for every device, v6 publication by rule, per-AS `/48`s, and the attribution layer that never names a person | §"IP system (WS-1.8)" |
+| VPS lifecycle (WS-1.9) | this commit | §12's control plane: regions that are real networks, power, reboot, reinstall, resize, disks, snapshots, console, rDNS — every one an operation on the machine itself | §"VPS lifecycle (WS-1.9)" |
 
 Verification status at tip: full `go test ./...` green (~182 tests, 29 files),
 `go vet` clean, `gofmt -l` empty across the tree (the pre-existing debt in
@@ -1034,3 +1036,166 @@ policy boundary and a recovery:
   honest interface for the images this world ships.
 * **Wireless client isolation and VLANs**: the guest network exists as an
   interface, but §14's per-network policy is not modelled yet.
+
+# IP system (WS-1.8) — §13 地址系统, and the addressing §12 needed to exist
+
+## The model
+
+One vocabulary, in `internal/core/addrs.go`: `ClassifyAddr` returns an `AddrInfo`
+whose `Kind` is `loopback | link-local | private | shared | public-v4 |
+public-v6 | ula | unassigned | unknown`, and every other part of the world asks
+it rather than re-deriving "is this public". §13's list maps onto it directly:
+
+* **public IPv4** — one /24 per autonomous system, allocated per prefix so a
+  prefix has exactly one holder (that is what makes `whois` attribution truth
+  rather than a guess);
+* **public IPv6** — one /48 per AS, `2001:db8:<asn hex>::/48`, with subscriber
+  /64s handed out from index 16 up and read back from `WAN.V6Issued`, so
+  renumbering or a reload cannot hand the same /64 to two households;
+* **RFC1918** — the household's own `10.77.1.0/24` and the LAN plans;
+* **CGNAT / shared address space** — `100.64.0.0/10` from `allocSharedV4`; the
+  address sits on the interface as `Iface.SharedIP`, never enters `IPMap`, and
+  no inbound packet can reach it;
+* **loopback / link-local / ULA** — `::1`, `fe80::`, `fd00:<lan>:<n>::/64` per
+  LAN; a link-local address is present on every v6 interface and is explicitly
+  *not* connectivity (fastfetch says "link-local only");
+* **dynamic** — a DHCP lease is a file (`/var/run/udhcpc.<if>.lease`) and the
+  address is marked `dynamic valid_lft` by `ip addr`; `RenumberWAN` moves a
+  node's WAN address, its `IPMap` entry and its A record together, and refuses
+  an address somebody else holds;
+* **shared IP** — a plan whose nodes sit behind the provider's NAT: outbound
+  works, inbound says "No route to host (carrier-grade NAT…)";
+* **virtual IP** — a secondary public IPv4 lent by the provider
+  (`AttachVirtual`/`DetachVirtual`/`VirtualIPs`), on the interface as a second
+  `inet … secondary`, registered in `IPMap` so the packet path lands on the
+  right device, movable between nodes, refused onto somebody else's address or
+  a private one, and never removable when it *is* the node's own address;
+* **NAT mapping** — the §14 translator stays the only thing that opens an
+  inbound path, and it is re-read per packet.
+
+## IPv6 is not decoration
+
+Every device has a real v6 stack: a global address, a ULA and a link-local one.
+`ip -6 addr`, `ifconfig`-family output, `ping6`, `dig -t AAAA`, `ss -6` and
+`ip -6 route` all read it. Publication follows §13's rule that IPv6 does not
+translate: a LAN host is reachable on v6 only when a rule on the router in front
+*names its address* (`Rule.DestIP` in `/etc/config/firewall`, no NAT) **and** the
+host's own `ip6tables` INPUT accepts the port. Either one missing and the
+connection times out, which is exactly the two-sided configuration a real
+household has to get right.
+
+## Attribution and §12's rDNS
+
+`whois`/`rdap`/`bgp` answer from the AS that announces the prefix: provider, ASN,
+region, range, abuse contact, rDNS status — never a person. `Attribution.Kind`
+and `Note` carry the qualifier when the answer is not a plain owner (carrier
+grade NAT says so in words). A node's `RDNS` name is published in the reverse
+zone, so `dig -x` returns the operator's chosen name and a private or CGNAT
+address has no PTR at all.
+
+## The packet-path bug this workstream exposed
+
+`routerFor` now skips the device itself — a router is not its own upstream — and
+that change silently removed the router from three call sites that *must* judge a
+packet addressed to the household's edge: `Dial`, `Reach` and `ForwardTarget`.
+The symptom was a router that stopped logging WAN drops (so §14's "filtered
+packets are logged" stopped being true) and a DMZ that stopped being followed.
+All three now fall back to `r = dst` when the destination is a router and no
+upstream router exists, and the 14 firewall/FTP tests that depended on it are
+green again.
+
+## Verified
+
+`tests/addrs_test.go` (9 tests) plus `tests/vps_test.go`'s region and rDNS cases:
+the shipped world's addresses classify as they should; every device has a real v6
+stack; a household host is unreachable on v6 until both the router rule and the
+host ruleset allow it; AAAA records are published and bounded; a shared plan is
+outbound-only while its egress shows the operator's NAT address; a v6-only plan
+has no IPv4 at all; a dynamic address renews without moving and moves only when
+the operator renumbers it; a reserved address is movable; `dig -x` finds the
+operator's PTR and never a person.
+
+## Not implemented on purpose
+
+* **NAT64 / DNS64**: a v6-only node really cannot reach IPv4, and saying so is
+  more honest than a translator nobody asked for.
+* **SLAAC/RA in the packet path**: addresses are assigned by the world's own
+  allocator; router advertisements are not modelled as a protocol.
+* **IPv6 prefix delegation to the household's own router by DHCPv6-PD**: the
+  delegated /64 is read back from the provider, which is the same fact without
+  the wire protocol.
+
+# VPS lifecycle (WS-1.9) — §12 计算机 as a machine you own
+
+## The model
+
+A rented node *is* a Device, so every panel verb is an operation on the machine
+the rest of the world talks to. `VPSStop` really powers it off (`setPowered`),
+which stops its services, clears its processes and makes `Reach`/`Dial` report
+"host is down"; `VPSStart` brings back exactly the services it was running;
+`VPSReboot` keeps the disk and resets uptime. Nothing here prints a status the
+machine does not have.
+
+**Regions are networks.** NovaPanel sells three datacenters, each its own AS
+(`asNova` eu-central, `asNovaUS` us-east, `asNovaAP` ap-northeast) with its own
+/24 and /48 — so a `--region` choice moves the address, the `whois` attribution
+and the real latency a `traceroute`/`ping` reports. An unknown region is refused
+before any money moves.
+
+**The panel keeps records.** `Provider.Nodes` holds each node's plan, image,
+region, datacenter, rDNS, monthly price, rebuild count and snapshots; `vps show`
+prints them and `LoadWorld` backfills old saves.
+
+## What exists
+
+* `vps regions` — the published datacenters, their AS and their block.
+* `vps create PLAN [hostname] [image] [--region R]` — buys in a region.
+* `vps show <host>` — plan, image, region, state, addresses, reserved addresses,
+  rDNS, price, rebuilds, snapshots.
+* `vps start|stop|reboot <host>` — real power, real uptime, real reachability.
+* `vps reinstall <host> <image>` — refused while running; wipes the disk, lays
+  down the new distribution's own `/etc/os-release`, repositories, package
+  manager and shell, **keeps** the address and the name, and issues new
+  credentials (the rebuild count seeds the password, so the old one really stops
+  working).
+* `vps resize <host> [--cpu N] [--mem MB] [--disk MB]` and `vps disk <host> GiB`
+  — refused while running, disk can only grow, RAM cannot shrink below what is
+  in use, upgrades are billed (downgrades are not refunded), block storage is
+  billed monthly, and the household's wallet and the panel's monthly price both
+  move.
+* `vps snapshot|snapshots|restore` — a snapshot is a real copy of the disk
+  (files, accounts, packages); restoring is refused while running, brings back
+  deleted files and removes later ones, and leaves the machine stopped so it can
+  boot the restored system.
+* `vps console <host>` — the machine's own shell (the same code path as
+  `vm console`), refused on a powered-off node.
+* `vps rdns <host> [name]` — publishes the reverse name; `dig -x` shows it.
+* `vm create … --ip public|shared|v6only` — a hypervisor guest now gets the same
+  addressing choice its plan implies (`CreateVM(..., ipMode)`), priced by the
+  same rule via `core.NodePriceCents`.
+
+`NodePriceCents` now lives in core (the shell's `vmCost` delegates), which is why
+the panel and `vm create` cannot drift apart.
+
+## The tests
+
+`tests/vps_test.go`, seven tests, each with a happy path, a boundary and a
+recovery: power off/on/reboot with real reachability and uptime; another account
+refused every verb; reinstall refused while running and afterwards a different
+system on the same address with dead old credentials; resize/disk refused while
+running, billed when stopped, disk shrink and unaffordable storage refused;
+snapshot/restore rollback with an unknown snapshot refused; regions giving
+different blocks, different owners and measurably different latency; rDNS
+published, changeable, refused for a malformed name and for another account;
+console landing on the node's own filesystem and exiting.
+
+## Not implemented on purpose
+
+* **Bandwidth/transfer billing and datacenter migrations**: the panel bills for
+  what this world can really measure; moving a node between regions would be a
+  new address plus a new host, and pretending otherwise would be worse than not
+  offering it.
+* **Snapshot scheduling**: snapshots are the customer's action here, not a cron
+  the player cannot see.
+* **Live resize**: a real provider can sometimes hot-grow a disk; this world
+  requires a power-off, which is the conservative and checkable rule.

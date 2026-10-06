@@ -248,7 +248,9 @@ func seedVMs(w *World) {
 // CreateVM provisions a guest on a hypervisor. The guest becomes a real Device
 // in the world: own filesystem, own users, own services, own address. That is
 // the whole point — nothing about it is a record in a bookkeeping table.
-func (w *World) CreateVM(hostID, name string, vcpu float64, ramMB, diskMB int) (*VM, error) {
+// ipMode is the plan's networking ("" == public): it decides whether the guest
+// gets a routable IPv4, a carrier-grade-NAT address, or no IPv4 at all (§13).
+func (w *World) CreateVM(hostID, name string, vcpu float64, ramMB, diskMB int, ipMode string) (*VM, error) {
 	host := w.Devices[hostID]
 	if host == nil {
 		return nil, fmt.Errorf("no such hypervisor: %s", hostID)
@@ -278,7 +280,19 @@ func (w *World) CreateVM(hostID, name string, vcpu float64, ramMB, diskMB int) (
 		OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
 		Hardware{"VM " + name, int(vcpu), 2400, ramMB, diskMB, 1000, false, false},
 		lanIP)
-	d.AttachWAN(w.allocPublicFor("vps"), "10.0.0.1")
+	// §13: the guest's networking follows the product it was bought from. A
+	// shared-IP guest sits behind the provider's carrier-grade NAT (outbound
+	// only, nothing can reach in), a v6-only guest gets no IPv4 at all, and a
+	// public guest gets a routable address like any other node.
+	switch ipMode {
+	case "shared":
+		w.AttachSharedWAN(d, "10.0.0.1")
+	case "v6only":
+		d.AttachWAN6Only("10.0.0.1")
+	default:
+		d.AttachWAN(w.allocPublicFor("vps"), "10.0.0.1")
+	}
+	d.AddWANv6(w.allocV6For("vps"))
 	d.OS.Distro = "Debian"
 	d.OS.Ver = "13"
 	seedFS(d, "vps")

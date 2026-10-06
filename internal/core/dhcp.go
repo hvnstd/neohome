@@ -209,7 +209,7 @@ func (d *Device) DHCPRenew() (*Lease, error) {
 	}
 	mac := ""
 	for _, i := range d.Ifaces {
-		if i.MAC != "" && (i.Zone == "lan" || i.Mode == "dhcp") {
+		if i.MAC != "" && i.Zone == "lan" && i.Mode == "dhcp" {
 			mac = i.MAC
 		}
 	}

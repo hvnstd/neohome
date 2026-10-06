@@ -147,7 +147,7 @@ func NewWorld() *World {
 			"listen on lo port 143\nlisten on eth0 port 143\nmail_location = /var/mail/%u\n",
 			0644, "root", "root")
 	}
-	router.Ifaces = append(router.Ifaces, &Iface{Name: "eth0", IP: w.allocPublicFor("router"), MAC: macFor("router-alex-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
+	router.Ifaces = append(router.Ifaces, &Iface{Name: "eth0.2", IP: w.allocPublicFor("router"), MAC: macFor("router-alex-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	pubHome := wanIP(router)
 	w.IPMap[router.Ifaces[1].IP] = router.ID
 
@@ -223,7 +223,7 @@ func NewWorld() *World {
 		Hardware{"Gaming rig", 8, 4800, 32768, 131072, 1000, false, false}, "10.88.1.11")
 	npcr := w.addDevice("npc-router", "modem-netgearish", "router", "mara", OSInfo{"StockOS", "1.0", "4.9.0", "arm", "ash"},
 		Hardware{"ISP modem", 1, 500, 64, 8, 1000, true, false}, "10.88.1.1")
-	npcr.Ifaces = append(npcr.Ifaces, &Iface{Name: "eth0", IP: w.allocPublicFor("router"), MAC: macFor("npc-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
+	npcr.Ifaces = append(npcr.Ifaces, &Iface{Name: "eth0.2", IP: w.allocPublicFor("router"), MAC: macFor("npc-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	w.IPMap[npcr.Ifaces[1].IP] = npcr.ID
 	if len(npcpc.Ifaces) > 0 {
 		npcpc.Ifaces[0].GW = "10.88.1.1"
@@ -391,11 +391,19 @@ func NewWorld() *World {
 
 	w.Prov = &Provider{DeviceID: provider.ID, APIKey: "np_live_9f3c2a",
 		Plans: []Plan{
-			{Name: "nano-1", Cores: 1, RAM: 512, Disk: 10240, Monthly: 600, Region: "jp-tokyo"},
-			{Name: "small-2", Cores: 2, RAM: 2048, Disk: 40960, Monthly: 1800, Region: "de-frankfurt"},
-			{Name: "medium-4", Cores: 4, RAM: 4096, Disk: 81920, Monthly: 3500, Region: "us-east"},
+			// §12 asks the player to choose a region, a spec and IPv4/IPv6, and
+			// §13 gives those choices real consequences: the cheap plan is
+			// cheaper because it has no public IPv4, and that is a fact about
+			// what the node can host, not a line in a list.
+			{Name: "nano-shared", Cores: 1, RAM: 512, Disk: 10240, Monthly: 300, Region: "ap-northeast", IPMode: "shared", V6: true},
+			{Name: "nano-1", Cores: 1, RAM: 512, Disk: 10240, Monthly: 600, Region: "ap-northeast", IPMode: "public", V6: true},
+			{Name: "small-2", Cores: 2, RAM: 2048, Disk: 40960, Monthly: 1800, Region: "eu-central", IPMode: "public", V6: true},
+			{Name: "medium-4", Cores: 4, RAM: 4096, Disk: 81920, Monthly: 3500, Region: "us-east", IPMode: "public", V6: true},
+			{Name: "v6-sandbox", Cores: 1, RAM: 1024, Disk: 20480, Monthly: 440, Region: "eu-central", IPMode: "v6only", V6: true},
 		},
-		FirstMonths: 2}
+		FirstMonths: 2,
+		Regions:     DefaultRegions(),
+		Nodes:       map[string]*NodeRecord{}}
 
 	w.ChatBots()
 
@@ -426,6 +434,10 @@ func NewWorld() *World {
 	seedSMS(w)
 	seedUSB(w)
 	SeedPackageWorld(w)
+
+	// §13: the addresses. Every device gets its v6 addresses once the whole
+	// topology exists, so a host is numbered inside its own router's /64.
+	seedV6World(w)
 
 	// the LAN plan is checked before the world can be used: a static inside
 	// the DHCP band or two devices on one address panics right here

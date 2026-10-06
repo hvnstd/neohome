@@ -56,6 +56,10 @@ type Rule struct {
 	Proto  string
 	Port   int // 0 = any port
 	Target string
+	// DestIP names the host a rule lets through. On IPv6 — where nothing is
+	// translated — this is the only way a rule can be about one machine, so it
+	// is load-bearing rather than descriptive.
+	DestIP string
 	// File names where the rule was read from, so a refusal can explain itself.
 	File string
 }
@@ -81,6 +85,13 @@ type FirewallState struct {
 	ForwardPolicy string
 	// HostInput: policy for a non-router device's own ports.
 	HostInput string
+	// HostInput6 and Rules6 are the same two facts for IPv6, read from the
+	// ip6tables-save file. §13's v6 stack is not decoration: the same packet
+	// path consults it, because a host that is open on v4 and closed on v6 (or
+	// the other way round) is exactly the kind of half-configured machine this
+	// world is supposed to be able to represent.
+	HostInput6 string
+	Rules6     []Rule
 
 	Redirects []Redirect
 	Rules     []Rule
@@ -117,12 +128,16 @@ func (d *Device) FW() *FirewallState {
 	} else {
 		st.HostInput = "DROP"
 	}
+	// A dual-stack machine ships the same policy on both families unless its
+	// own rules6 file says otherwise.
+	st.HostInput6 = st.HostInput
 
 	if cf := d.readFirewallConfig(st); cf != nil && len(st.Errors) == 0 {
 		st.applyUCIFirewall(cf)
 	}
 	if d.Profile != "router" {
 		d.applyHostRules(st)
+		d.applyHostRules6(st)
 	}
 	if d.Profile == "router" {
 		d.readUPnP(st)
@@ -214,6 +229,10 @@ func (st *FirewallState) applyUCIFirewall(f *UCIFile) {
 			r.Port = firstPort(v)
 		}
 		if v := s.Get("dest_ip"); v != "" {
+			// §13: a rule can name the host it is about. On IPv6, where nothing
+			// is translated, that is the only way a rule can publish one
+			// machine — so it is carried, not just printed.
+			r.DestIP = v
 			r.Name = orDefault(r.Name, v)
 		}
 		if v := s.Get("enabled"); v != "" && !uciOptionTrue(v) {
@@ -227,6 +246,59 @@ func (st *FirewallState) applyUCIFirewall(f *UCIFile) {
 
 // iptablesPath is where a distribution's persistent ruleset lives. Debian and
 // Alpine use the netfilter-persistent path; Fedora and RHEL use their own.
+// iptablesPath6 is the v6 ruleset. Fedora/RHEL keep it beside the v4 one.
+func (d *Device) iptablesPath6() string {
+	switch strings.ToLower(d.OS.Distro) {
+	case "fedora", "rhel", "centos":
+		return "/etc/sysconfig/ip6tables"
+	}
+	return "/etc/iptables/rules.v6"
+}
+
+// applyHostRules6 reads the ip6tables file. The syntax is the same language —
+// that is the point of `ip6tables` existing — so the same parser runs on it.
+func (d *Device) applyHostRules6(st *FirewallState) {
+	path := d.iptablesPath6()
+	data, ok := d.FS.Read(path)
+	if !ok {
+		return // no v6 ruleset: the profile default stands
+	}
+	st.Files = append(st.Files, path)
+	table := ""
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "*") {
+			table = strings.TrimPrefix(line, "*")
+			continue
+		}
+		if table != "filter" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if strings.HasPrefix(fields[0], ":") && len(fields) >= 2 {
+			if strings.EqualFold(strings.TrimPrefix(fields[0], ":"), "INPUT") {
+				st.HostInput6 = strings.ToUpper(fields[1])
+			}
+			continue
+		}
+		switch fields[0] {
+		case "-P":
+			if len(fields) >= 3 && strings.EqualFold(fields[1], "INPUT") {
+				st.HostInput6 = strings.ToUpper(fields[2])
+			}
+		case "-A":
+			r, ok := parseIPTablesRule(fields, path)
+			if !ok {
+				continue
+			}
+			st.Rules6 = append(st.Rules6, r)
+		}
+	}
+}
+
 func (d *Device) iptablesPath() string {
 	switch strings.ToLower(d.OS.Distro) {
 	case "fedora", "rhel", "centos":
@@ -310,6 +382,11 @@ func parseIPTablesRule(fields []string, file string) (Rule, bool) {
 				if strings.HasPrefix(fields[i+1], "eth1") || strings.Contains(fields[i+1], "wan") {
 					r.Src = "wan"
 				}
+				i++
+			}
+		case "-d":
+			if i+1 < len(fields) {
+				r.DestIP = fields[i+1]
 				i++
 			}
 		case "-s":
@@ -444,6 +521,49 @@ func (st *FirewallState) WANAllowsPort(port int) bool {
 		}
 	}
 	return false
+}
+
+// PermitsWAN6 answers, for a v6 address, the question v4 answers with NAT: may
+// this host be reached from the internet? There is no translation to perform,
+// so the answer is a rule that names the host — which is why "publishing" a
+// v6 service means writing a firewall rule, not a port-forward.
+func (r *Device) PermitsWAN6(dstIP string, port int) bool {
+	st := r.FW()
+	if st.ForwardAllowsEverything() {
+		return true
+	}
+	for _, rule := range st.Rules {
+		if rule.Target != "ACCEPT" {
+			continue
+		}
+		if rule.Src != "wan" && rule.Src != "all" {
+			continue
+		}
+		if rule.Port != 0 && rule.Port != port {
+			continue
+		}
+		if rule.DestIP == "" || rule.DestIP == dstIP {
+			return true
+		}
+	}
+	return false
+}
+
+// PermitsWAN6Self is the end device's own v6 ruleset: an explicit accept, or a
+// policy that accepts WAN input.
+func (d *Device) PermitsWAN6Self(port int) bool {
+	st := d.FW()
+	for _, r := range st.Rules6 {
+		if r.Target == "ACCEPT" && r.Src != "lan" && (r.Port == 0 || r.Port == port) {
+			return true
+		}
+	}
+	return strings.EqualFold(st.HostInput6, "ACCEPT")
+}
+
+// FWDropInput6 is the v6 half of the host gate.
+func (d *Device) FWDropInput6(fromWAN bool, port int) bool {
+	return fromWAN && !d.PermitsWAN6Self(port)
 }
 
 // HostAcceptsWAN reports whether the device's own ruleset lets this port

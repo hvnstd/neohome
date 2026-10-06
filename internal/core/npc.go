@@ -167,6 +167,13 @@ func (w *World) ProvisionVPS(owner, plan, hostname string) (*Device, string, err
 // picks the OS, and with it the package manager, the file layout and the
 // service manager the box will have).
 func (w *World) ProvisionVPSWithOS(owner, plan, hostname, distro string) (*Device, string, error) {
+	return w.provisionVPS(owner, plan, hostname, distro, "")
+}
+
+// provisionVPS creates a node in a chosen region ("" = the plan's default). It
+// is the single path a node is born through, so the panel's record of the
+// machine and the machine itself can never disagree.
+func (w *World) provisionVPS(owner, plan, hostname, distro, region string) (*Device, string, error) {
 	p := w.Players[owner]
 	if p == nil {
 		return nil, "", fmt.Errorf("no such player: %s", owner)
@@ -195,8 +202,13 @@ func (w *World) ProvisionVPSWithOS(owner, plan, hostname, distro string) (*Devic
 			return nil, "", fmt.Errorf("hostname already taken: %s", hostname)
 		}
 	}
+	reg, err := w.RegionByName(orDefault(region, chosen.Region))
+	if err != nil {
+		return nil, "", err
+	}
 	acc.Balance -= chosen.Monthly
-	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: -chosen.Monthly, Memo: "VPS " + hostname + " (" + plan + ")", Balance: acc.Balance})
+	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: -chosen.Monthly,
+		Memo: "VPS " + hostname + " (" + plan + ", " + reg.Name + ")", Balance: acc.Balance})
 	w.Prov.Issued++
 
 	os := vpsImage(distro)
@@ -204,8 +216,26 @@ func (w *World) ProvisionVPSWithOS(owner, plan, hostname, distro string) (*Devic
 	id := "vps-" + hostname
 	d := w.addDevice(id, hostname, "vps", owner, os, hw, "")
 	d.Boot = w.Sim
-	pub := w.allocPublicFor("vps")
-	d.AttachWAN(pub, "10.0.0.1")
+	// §13: the plan decides what the node's networking really is. A public plan
+	// gets a routable IPv4; a shared plan gets an address inside the provider's
+	// carrier-grade NAT pool, which is on the interface, in use, and *not*
+	// routable — `whois` of it names the provider, and nothing can reach in;
+	// a v6-only plan gets no IPv4 at all, so the node lives on v6 alone.
+	pub := ""
+	switch chosen.IPMode {
+	case "shared":
+		pub = w.AttachSharedWAN(d, "10.0.0.1")
+	case "v6only":
+		d.AttachWAN6Only("10.0.0.1")
+	default:
+		// the address comes out of the region's own block, so `whois` names
+		// the datacenter the node was actually bought in
+		pub = w.allocInAS(reg.ASN)
+		d.AttachWAN(pub, "10.0.0.1")
+	}
+	if chosen.V6 {
+		d.AddWANv6(w.allocV6InAS(reg.ASN))
+	}
 	seedFS(d, "vps")
 	provisionPkgImage(w, d, distro)
 	refreshPasswd(d)
@@ -221,15 +251,25 @@ func (w *World) ProvisionVPSWithOS(owner, plan, hostname, distro string) (*Devic
 	refreshPasswd(d)
 	d.AddProc(&Proc{Name: "sshd", User: "root", CPU: 0.2, Mem: 20, TTY: "?", State: "S", Start: w.Sim, Svc: "sshd", Kind: "builtin"})
 
-	// DNS registration: the node is now part of the observable internet
-	rec := DNSRecord{Name: hostname + ".neohome.example", IP: pub}
-	w.Records = append(w.Records, rec)
-	for i := range w.Records {
-		if w.Records[i].Name == "home."+owner+".neohome.example" {
-			_ = i
-		}
+	// DNS registration: the node is now part of the observable internet. A
+	// shared-address customer still gets a name — it resolves to the address
+	// the node *has*, which is exactly why resolving it does not make it
+	// reachable.
+	who := pub
+	if who == "" {
+		who = d.FirstWANv6()
 	}
-	w.AddEvent(id, "info", "provider", "VPS %s provisioned: %s (%s)", hostname, pub, plan)
+	if pub != "" {
+		w.Records = append(w.Records, DNSRecord{Name: hostname + ".neohome.example", IP: pub})
+	}
+	if v6 := d.FirstWANv6(); v6 != "" {
+		w.Records = append(w.Records, DNSRecord{Name: hostname + ".neohome.example", IP: v6})
+	}
+	w.AddEvent(id, "info", "provider", "VPS %s provisioned: %s (%s, %s, %s)", hostname, who, plan, chosen.IPMode, reg.Name)
+	// the panel's own record: what was bought, where it runs and how reverse
+	// DNS names it (§12's rDNS), which `vps show` and `dig -x` then read
+	w.recordNode(d, &NodeRecord{DeviceID: id, Plan: plan, Image: distro, Region: reg.Name,
+		Datacenter: reg.Datacenter, RDNS: hostname + ".neohome.example", Monthly: chosen.Monthly, CreatedAt: w.Sim})
 	creds := fmt.Sprintf("deploy@%s password: %s", hostname, d.Users["deploy"].Pass)
 	return d, creds, nil
 }

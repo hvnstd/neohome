@@ -64,7 +64,10 @@ func (w *World) HouseholdPower() bool {
 // on battery while the mains is out.
 func (d *Device) Powered() bool {
 	if d.IsDataCenter() {
-		return true
+		// The house cannot darken a datacenter — but the customer's own panel
+		// can switch their machine off (§12 启动/关机), and then there really
+		// is nothing at that address to answer.
+		return d.NetUp
 	}
 	if d.MainsDropped {
 		return false

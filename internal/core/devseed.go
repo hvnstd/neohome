@@ -207,6 +207,11 @@ func seedRouterFirewall(d *Device, v *VFS) {
 // and what the packet path consults for that machine's own ports.
 func seedHostFirewall(d *Device, v *VFS, policy string, accepts []Rule) {
 	v.Write(d.iptablesPath(), RenderIPTables(policy, accepts), 0644, "root", "root")
+	// §13: a dual-stack machine carries the same policy on both families, so
+	// the v6 ruleset ships beside the v4 one. Nothing here is generated from
+	// the other file — they are two real rulesets that can be edited apart,
+	// which is how a host ends up open on one family and closed on the other.
+	v.Write(d.iptablesPath6(), RenderIPTables(policy, accepts), 0644, "root", "root")
 }
 
 // refreshPasswd keeps /etc/passwd in sync with the user table.

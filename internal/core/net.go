@@ -20,6 +20,8 @@ var publicBlocks = []struct {
 	{"198.51.100.", asNetCrest}, // NetCrest ISP — household WAN space
 	{"192.0.2.", asNova},        // NovaPanel — VPS customers
 	{"198.18.0.", asPeer},       // Meridian — the peer network
+	{"198.19.0.", asNovaUS},     // NovaPanel us-east
+	{"198.19.1.", asNovaAP},     // NovaPanel ap-northeast
 }
 
 // asnForProfile picks which AS's address space a new device is numbered from.
@@ -43,9 +45,24 @@ func (w *World) allocPublic() string {
 	return w.allocPublicFor("")
 }
 
+// blockBase is the /24 base a given AS numbers its hosts from.
+func blockBase(asn int) string {
+	for _, b := range publicBlocks {
+		if b.asn == asn {
+			return b.base
+		}
+	}
+	return publicBlocks[0].base
+}
+
 // allocPublicFor allocates from the AS that operates a device of this profile.
 func (w *World) allocPublicFor(profile string) string {
-	want := asnForProfile(profile)
+	return w.allocInAS(asnForProfile(profile))
+}
+
+// allocInAS allocates the next free address in an AS's own block. Every device
+// in the world is checked, so two regions can never hand out one address.
+func (w *World) allocInAS(want int) string {
 	block := publicBlocks[0]
 	for _, b := range publicBlocks {
 		if b.asn == want {
@@ -59,6 +76,9 @@ func (w *World) allocPublicFor(profile string) string {
 		for _, i := range d.Ifaces {
 			if i.IP != "" {
 				used[i.IP] = true
+			}
+			for _, ip := range i.Extra {
+				used[ip] = true
 			}
 		}
 	}
@@ -157,12 +177,14 @@ func (d *Device) GatewayIP() string {
 			continue
 		}
 		if i.Mode == "dhcp" {
-			// lease still valid? router dhcp must be running
-			r := d.W.routerFor(d)
-			if r == nil || r.Svc("dnsmasq") == nil || r.Svc("dnsmasq").State != "running" {
-				continue
+			// A DHCP address works while its lease is valid. A LAN client's
+			// lease lives on the router (dnsmasq must be running); a household
+			// router's own WAN lease is written by its udhcpc client, and that
+			// file is the evidence §13's "dynamic IP" is built on.
+			if leaseValid(d, i) {
+				return i.GW
 			}
-			return i.GW
+			continue
 		}
 		return i.GW
 	}
@@ -173,6 +195,11 @@ func (d *Device) GatewayIP() string {
 func (w *World) routerFor(d *Device) *Device {
 	net := ""
 	for _, i := range d.Ifaces {
+		if i.CIDR == "" {
+			// a WAN lease has no LAN prefix: a household router's own WAN is
+			// DHCP too, and it must not be mistaken for the LAN it serves
+			continue
+		}
 		if i.Zone == "lan" || i.Mode == "dhcp" {
 			net = i.CIDR
 		}
@@ -182,6 +209,10 @@ func (w *World) routerFor(d *Device) *Device {
 	}
 	for _, id := range w.Order {
 		dev := w.Devices[id]
+		if dev == d {
+			// a router is not its own upstream: its LAN is the one it serves
+			continue
+		}
 		if dev.Profile == "router" && lanNetOf(dev) == net {
 			return dev
 		}
@@ -193,7 +224,24 @@ func (w *World) routerFor(d *Device) *Device {
 // real resolver chain: d's resolver → router forwarder → authoritative ns.
 // Returns (ip, ok, how) where how is diagnostics text for dig.
 func DNSAnswer(d *Device, name string) (string, bool, string) {
+	return DNSAnswerFamily(d, name, 4)
+}
+
+// DNSAnswerFamily is the same resolution with §13's families honoured: family 6
+// asks for AAAA (and answers a v6 literal), family 4 asks for A. There is no
+// "happy eyeballs" client here — the world's own tools pick a family
+// explicitly, the way `ping -6` and `dig -t AAAA` do.
+func DNSAnswerFamily(d *Device, name string, family int) (string, bool, string) {
+	if IsV6(name) {
+		if family == 6 {
+			return name, true, "inline address"
+		}
+		return "", false, "NXDOMAIN (no A record for an IPv6 literal)"
+	}
 	if isIPv4(name) {
+		if family == 6 {
+			return "", false, "NXDOMAIN (no AAAA record for an IPv4 literal)"
+		}
 		return name, true, "inline address"
 	}
 	if name == d.Hostname || name == d.Hostname+".lan" || name == d.Hostname+".local" {
@@ -205,7 +253,7 @@ func DNSAnswer(d *Device, name string) (string, bool, string) {
 			f := strings.Fields(line)
 			if len(f) >= 2 {
 				for _, alias := range f[1:] {
-					if alias == name {
+					if alias == name && familyOfRecord(f[0]) == family {
 						return f[0], true, "hosts-file"
 					}
 				}
@@ -216,13 +264,21 @@ func DNSAnswer(d *Device, name string) (string, bool, string) {
 	if resolver == "" {
 		return "", false, "no resolver configured (resolv.conf empty and no DHCP)"
 	}
-	return answerVia(d.W, d, resolver, name, 0)
+	return answerVia(d.W, d, resolver, name, family, 0)
+}
+
+// familyOfRecord classifies a DNS record's address: 6 for AAAA, 4 for A.
+func familyOfRecord(ip string) int {
+	if IsV6(ip) {
+		return 6
+	}
+	return 4
 }
 
 // answerVia walks one resolver hop; depth guards loops. A forwarder with a
 // healthy resolv-file recurses to its own upstream; an authoritative server
 // answers from the zone.
-func answerVia(w *World, ask *Device, resolverIP, name string, depth int) (string, bool, string) {
+func answerVia(w *World, ask *Device, resolverIP, name string, family, depth int) (string, bool, string) {
 	if depth > 4 {
 		return "", false, "SERVFAIL (loop detected)"
 	}
@@ -238,7 +294,7 @@ func answerVia(w *World, ask *Device, resolverIP, name string, depth int) (strin
 			f := strings.Fields(line)
 			if len(f) >= 2 {
 				for _, alias := range f[1:] {
-					if strings.EqualFold(alias, name) {
+					if strings.EqualFold(alias, name) && familyOfRecord(f[0]) == family {
 						return f[0], true, fmt.Sprintf("local (dnsmasq on %s)", rd.Hostname)
 					}
 				}
@@ -249,19 +305,34 @@ func answerVia(w *World, ask *Device, resolverIP, name string, depth int) (strin
 		return "", false, fmt.Sprintf("SERVFAIL (%s on %s has no working upstream)", firstSvc(rd, "dnsmasq", "nsd"), rd.Hostname)
 	}
 	if svc := rd.Svc("nsd"); svc != nil {
-		// authoritative: answer from zone or NXDOMAIN
+		// a reverse lookup is answered by whoever announces the block (§12:
+		// every node has rDNS), not by the forward zone
+		if IsArpaName(name) {
+			return ptrAnswer(w, name)
+		}
+		// authoritative: answer from zone or NXDOMAIN — and only with a record
+		// of the family that was asked for, so a v4-only name really has no AAAA
 		for _, r := range w.Records {
-			if strings.EqualFold(r.Name, name) {
+			if strings.EqualFold(r.Name, name) && familyOfRecord(r.IP) == family {
 				return r.IP, true, fmt.Sprintf("authoritative via %s", resolverIP)
 			}
 		}
 		return "", false, "NXDOMAIN"
 	}
-	// forwarder: consult its upstream list
+	// forwarder: consult its upstream list. A definitive negative answer from
+	// the authoritative server (NXDOMAIN) is an answer, not a failure: a
+	// forwarder that swallowed it and reported SERVFAIL would turn "this name
+	// does not exist" into "DNS is broken", which is a different diagnosis.
+	negative := ""
 	for _, up := range rd.upstreamServers() {
-		if ip, ok2, how := answerVia(w, rd, up, name, depth+1); ok2 {
+		if ip, ok2, how := answerVia(w, rd, up, name, family, depth+1); ok2 {
 			return ip, true, how + " (forwarded by " + rd.Hostname + ")"
+		} else if strings.HasPrefix(how, "NXDOMAIN") {
+			negative = how + " (forwarded by " + rd.Hostname + ")"
 		}
+	}
+	if negative != "" {
+		return "", false, negative
 	}
 	return "", false, fmt.Sprintf("SERVFAIL (%s could not reach upstream)", rd.Hostname)
 }
@@ -289,7 +360,7 @@ func (d *Device) ResolverIP() string {
 	}
 	// fall back to DHCP-assigned dns
 	for _, i := range d.Ifaces {
-		if i.Mode == "dhcp" {
+		if i.Mode == "dhcp" && i.Zone == "lan" {
 			if r := d.W.routerFor(d); r != nil && r.Svc("dnsmasq") != nil && r.Svc("dnsmasq").State == "running" {
 				for _, x := range r.Ifaces {
 					if x.Zone == "lan" {
@@ -331,8 +402,11 @@ func Reach(src *Device, dstIP string) (string, bool) {
 	if dstIP == "127.0.0.1" {
 		return "loopback", true
 	}
-	if !isIPv4(dstIP) {
+	if !isIPv4(dstIP) && !IsV6(dstIP) {
 		return "unknown host", false
+	}
+	if IsV6(dstIP) && !src.ifaceHasV6() {
+		return "Network is unreachable (no IPv6 address)", false
 	}
 	// A machine with no power has no link. This is why an outage really breaks
 	// the network instead of merely being reported.
@@ -348,33 +422,63 @@ func Reach(src *Device, dstIP string) (string, bool) {
 		return "Destination Host Unreachable (host is down)", false
 	}
 
-	sameLAN := false
-	for _, i := range src.Ifaces {
-		if i.Up && i.CIDR != "" && inNet(dstIP, i.CIDR) {
-			sameLAN = true
-		}
-	}
+	sameLAN := src.onLink(dstIP)
 	if !sameLAN {
+		if src.IsV6Only() {
+			return "Network is unreachable (no IPv4 address: this host is IPv6-only)", false
+		}
 		if src.GatewayIP() == "" && src.Profile != "core" {
 			return "Network is unreachable (no default route)", false
 		}
-		if isPrivate(dstIP) {
+		if isPrivate(dstIP) || ClassifyAddr(dstIP).Kind == KindULA {
 			// a private address across the internet is not routable
 			return "No route to host", false
 		}
-		// a home router only forwards WAN traffic it has a rule for; ICMP to
-		// the router itself is answered
-		if dst.Profile != "core" && dst.Profile != "vps" && dst.Profile != "infra" {
+		if IsV6(dstIP) {
+			// §13: v6 does not translate, so a LAN host is reachable only
+			// where the router in front has a rule naming its address
+			if r := src.W.routerFor(dst); r != nil && r != dst && !r.PermitsWAN6(dstIP, 1) {
+				return "Destination Host Unreachable (filtered by " + r.Hostname + ")", false
+			}
+		} else if dst.Profile != "core" && dst.Profile != "vps" && dst.Profile != "infra" {
+			// a home router only forwards WAN traffic it has a rule for; ICMP
+			// to the router itself is judged by its own WAN policy
 			r := dst.W.routerFor(dst)
+			if r == nil && dst.Profile == "router" {
+				r = dst
+			}
 			if r != nil && r.matchFwd(1) == nil {
 				return "Destination Host Unreachable (filtered by " + r.Hostname + ")", false
 			}
 		}
 	}
+	if IsV6(dstIP) {
+		if dst.FWDropInput6(!sameLAN, 1) {
+			return "Destination Host Unreachable (firewalled)", false
+		}
+		return "connected", true
+	}
 	if dst.FWDropInput(!sameLAN, 1) {
 		return "Destination Host Unreachable (firewalled)", false
 	}
 	return "connected", true
+}
+
+// onLink reports whether an address is reachable without a router: inside one
+// of this device's own subnets, v4 or v6.
+func (d *Device) onLink(ip string) bool {
+	for _, i := range d.Ifaces {
+		if !i.Up {
+			continue
+		}
+		if i.CIDR != "" && isIPv4(ip) && inNet(ip, i.CIDR) {
+			return true
+		}
+		if IsV6(ip) && d.v6InAny(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // Dial answers: can a TCP connection from src reach dstIP:port, and which
@@ -398,8 +502,15 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	// find target device by ip
 	dstID, ok := src.W.IPMap[dstIP]
 	if !ok {
-		// unknown public ip → routed to ISP blackhole after ttl
-		if !isIPv4(dstIP) {
+		switch {
+		case IsSharedAddr(dstIP):
+			// §13's carrier-grade NAT: the address is real and in use, and it
+			// is not routable — that is the whole point of sharing it
+			return nil, nil, "No route to host (carrier-grade NAT: the address is not routable from the internet)"
+		case IsV6(dstIP) && ClassifyAddr(dstIP).Kind == KindULA:
+			return nil, nil, "No route to host (ULA is never routed)"
+		case !isIPv4(dstIP) && !IsV6(dstIP):
+			// unknown public ip → routed to ISP blackhole after ttl
 			return nil, nil, "unknown host"
 		}
 		return nil, nil, "No route to host"
@@ -416,14 +527,15 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	}
 
 	// is dst on src's own LAN?
-	sameLAN := false
-	for _, i := range src.Ifaces {
-		if i.Up && i.CIDR != "" && inNet(dstIP, i.CIDR) {
-			sameLAN = true
-		}
-	}
+	sameLAN := src.onLink(dstIP)
 
 	if !sameLAN {
+		// §13's v6-only plan: a node with no IPv4 address cannot reach an IPv4
+		// destination, and saying so is the honest answer — NAT64 is a thing
+		// this world does not have.
+		if src.IsV6Only() {
+			return nil, nil, "Network is unreachable (no IPv4 address: this host is IPv6-only)"
+		}
 		// must have a working gateway (broken dhcp / down link blocks)
 		if src.GatewayIP() == "" && src.Profile != "core" {
 			return nil, nil, "Network is unreachable (no default route)"
@@ -431,6 +543,13 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	}
 
 	fromWAN := !sameLAN
+
+	// §13: IPv6 does not translate. Nothing is DNATed, so the whole NAT half
+	// of the v4 path below does not apply; what decides is a rule on the
+	// router in front, and then the target's own v6 ruleset.
+	if IsV6(dstIP) {
+		return dialV6(src, dst, dstIP, port, fromWAN)
+	}
 
 	// Router in the path applies NAT/firewall for home LANs:
 	// external → LAN service requires an enabled port forward (or DMZ).
@@ -450,6 +569,12 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	outer := dst
 	if dst.Profile != "core" && dst.Profile != "vps" && dst.Profile != "infra" && dst.Profile != "peer" && dst.Profile != "server" && fromWAN {
 		r := dst.W.routerFor(dst)
+		if r == nil && dst.Profile == "router" {
+			// the destination *is* the household's edge: the packet arrives
+			// on its own WAN, and a silent drop there is exactly the kind of
+			// thing its owner goes looking for in the log
+			r = dst
+		}
 		if r != nil {
 			via := r.matchFwd(port)
 			if via == nil {
@@ -518,6 +643,79 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	return nil, dst, "Connection refused"
 }
 
+// leaseValid answers whether a DHCP interface still holds its lease: from the
+// router for a LAN client, or from the client's own udhcpc lease file.
+func leaseValid(d *Device, i *Iface) bool {
+	if r := d.W.routerFor(d); r != nil && r.Svc("dnsmasq") != nil && r.Svc("dnsmasq").State == "running" {
+		return true
+	}
+	data, ok := d.FS.Read("/var/run/udhcpc." + i.Name + ".lease")
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, found := strings.CutPrefix(line, "ip="); found {
+			return strings.TrimSpace(v) == i.IP || (i.IP == "" && strings.TrimSpace(v) == i.SharedIP)
+		}
+	}
+	return false
+}
+
+// dialV6 is IPv6's half of the §13/§14 packet path. v6 has no NAT: a service
+// behind a home router is published by a firewall rule that names the host's
+// own address, never by a port-forward, and the host's own rules6 file is the
+// second gate. A world that modelled v6 as "v4 with longer addresses" would
+// teach exactly the wrong lesson, so it is a separate path.
+func dialV6(src, dst *Device, dstIP string, port int, fromWAN bool) (*Service, *Device, string) {
+	if !src.ifaceHasV6() {
+		return nil, nil, "Network is unreachable (no IPv6 address)"
+	}
+	permitted := !fromWAN
+	if fromWAN {
+		if ClassifyAddr(dstIP).Kind == KindULA || isPrivate(dstIP) {
+			return nil, dst, "No route to host"
+		}
+		if r := src.W.routerFor(dst); r != nil && r != dst {
+			if !r.PermitsWAN6(dstIP, port) {
+				r.logFiltered6(src, port, dstIP)
+				return nil, dst, "Connection timed out (filtered)"
+			}
+			permitted = true
+		}
+	}
+	if dst.FWDropInput6(fromWAN, port) {
+		return nil, dst, "Connection timed out (filtered)"
+	}
+	for _, s := range dst.Services {
+		if !svcListensOn(s, port) {
+			continue
+		}
+		if s.State != "running" {
+			if s.State == "stopped" {
+				return nil, dst, "Connection refused"
+			}
+			return nil, dst, "Connection refused (service " + s.State + ")"
+		}
+		if fromWAN && s.Scope == "lan" && !permitted {
+			return nil, dst, "Connection refused (service bound to LAN only)"
+		}
+		dst.Logf("info", s.Name, "connection accepted from %s (%s:%d)", src.Hostname, src.sourceIPFor(dst), port)
+		return s, dst, "connected"
+	}
+	return nil, dst, "Connection refused"
+}
+
+// logFiltered6 records a dropped v6 packet the same way v4 drops are recorded:
+// on the router, with the address that was refused.
+func (r *Device) logFiltered6(src *Device, port int, dstIP string) {
+	st := r.FW()
+	if !st.LogDrops {
+		return
+	}
+	r.Logf("info", "firewall", "DROP wan6 [%s]:%d/tcp from %s (no v6 rule names that host)",
+		dstIP, port, src.sourceIPFor(r))
+}
+
 // ForwardTarget answers which device a connection to (ip, port) really lands on:
 // the device that owns the address, unless an enabled port-forward on the router
 // in front of it DNATs that port to a machine behind it. Recon, scanning and the
@@ -537,6 +735,11 @@ func ForwardTarget(src *Device, ip string, port int) *Device {
 		return d
 	}
 	r := src.W.routerFor(d)
+	if r == nil && d.Profile == "router" {
+		// the address belongs to the household's edge itself: its own WAN
+		// policy and its own redirects are what the packet meets
+		r = d
+	}
 	if r == nil {
 		return d
 	}
@@ -565,6 +768,22 @@ func svcListensOn(s *Service, port int) bool {
 
 // sourceIPFor: what ip would src appear as to dst (NAT-aware).
 func (d *Device) sourceIPFor(dst *Device) string {
+	// §13: a customer behind carrier-grade NAT never appears under its own
+	// address. What the remote host logs is the provider's NAT egress, which is
+	// why a lookup of it names an ISP and not a person.
+	if d.NATed {
+		if as := d.ASFor(); as != nil {
+			if ip := d.W.NATAddress(as.ASN); ip != "" {
+				return ip
+			}
+		}
+		return d.W.NATAddress(asNova)
+	}
+	if dst != nil && dst.ifaceHasV6() {
+		if v6 := d.FirstWANv6(); v6 != "" {
+			return v6
+		}
+	}
 	if wan := wanIP(d); wan != "" {
 		for _, i := range d.Ifaces {
 			if i.Zone == "wan" {

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"net/netip"
 	"strings"
 )
 
@@ -24,22 +25,28 @@ type WAN struct {
 
 	// the IXP/transit devices that physically carry public traffic, by device id
 	Transit map[string]bool
+
+	// V6Issued is the next /64 index each AS hands out, per ASN. Subscriber
+	// prefixes are allocated, never guessed, so two households can never be
+	// given the same /64.
+	V6Issued map[int]int
 }
 
 // AS is an autonomous system: one organisation's public network.
 type AS struct {
-	ASN      int
-	Name     string
-	Org      string
-	Region   string
-	Country  string
-	Prefixes []string // the public ranges it announces
-	Peers    []int    // other ASNs it exchanges routes with
-	Upstream []int    // ASNs it gets its own reachability from
-	Latency  float64  // ms to its neighbours, used by traceroute timings
-	Abuse    string
-	RDNS     string
-	Status   string // SYNCED | BEHIND | OFFLINE | PARTIAL | CORRUPTED
+	ASN       int
+	Name      string
+	Org       string
+	Region    string
+	Country   string
+	Prefixes  []string // the IPv4 ranges it announces
+	Prefixes6 []string // the IPv6 prefixes it announces (§13: public IPv6)
+	Peers     []int    // other ASNs it exchanges routes with
+	Upstream  []int    // ASNs it gets its own reachability from
+	Latency   float64  // ms to its neighbours, used by traceroute timings
+	Abuse     string
+	RDNS      string
+	Status    string // SYNCED | BEHIND | OFFLINE | PARTIAL | CORRUPTED
 }
 
 // The world's public address space. 203.0.113.0/24 and 198.51.100.0/24 are the
@@ -50,6 +57,11 @@ const (
 	asNetCrest = 64510 // the ISP every household's WAN faces
 	asNova     = 64520 // novapanel, the VPS provider
 	asPeer     = 64530 // a mid-sized peer network
+	// NovaPanel's other datacenters. §12 asks the player to choose a region,
+	// so a region has to be a real network: its own AS, its own block and its
+	// own distance, which is what `whois` and `traceroute` then report.
+	asNovaUS = 64521 // NovaPanel us-east
+	asNovaAP = 64522 // NovaPanel ap-northeast
 )
 
 // seedWAN builds the public internet at world creation.
@@ -80,6 +92,18 @@ func seedWAN(w *World) {
 		Prefixes: []string{}, Peers: []int{asCore, asNetCrest}, Upstream: []int{asCore},
 		Abuse: "abuse@novapanel.example", RDNS: "whois.novapanel.example", Status: "SYNCED",
 	}
+	wan.ASes[asNovaUS] = &AS{
+		ASN: asNovaUS, Name: "NovaPanel US", Org: "NovaPanel Hosting Inc",
+		Region: "us-east", Country: "US", Latency: 22.7,
+		Peers: []int{asCore, asNova}, Upstream: []int{asCore},
+		Abuse: "abuse@novapanel.example", RDNS: "rdns.novapanel.example", Status: "SYNCED",
+	}
+	wan.ASes[asNovaAP] = &AS{
+		ASN: asNovaAP, Name: "NovaPanel AP", Org: "NovaPanel KK",
+		Region: "ap-northeast", Country: "JP", Latency: 38.5,
+		Peers: []int{asCore, asNova}, Upstream: []int{asCore},
+		Abuse: "abuse@novapanel.example", RDNS: "rdns.novapanel.example", Status: "SYNCED",
+	}
 	wan.ASes[asPeer] = &AS{
 		ASN: asPeer, Name: "Meridian Systems", Org: "Meridian Systems Inc",
 		Region: "us-east", Country: "US", Latency: 22.7,
@@ -102,6 +126,13 @@ func seedWAN(w *World) {
 		if wan.Owner(p) == nil {
 			as.Prefixes = append(as.Prefixes, p)
 		}
+	}
+
+	// IPv6: one /48 per AS. The third hextet is the ASN in hex, so the AS that
+	// announces an address can be read off the address itself.
+	wan.V6Issued = map[int]int{}
+	for _, as := range wan.ASes {
+		as.Prefixes6 = []string{v6BlockFor(as.ASN).String()}
 	}
 
 	// A device numbered outside those blocks (nothing should be, but the world
@@ -184,6 +215,29 @@ func (wan *WAN) ASFor(ip string) *AS {
 	return best
 }
 
+// ASFor6 returns the AS that announces a public IPv6 address: longest match
+// over the announced prefixes, the same rule the v4 path uses.
+func (wan *WAN) ASFor6(ip string) *AS {
+	a, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if wan == nil || err != nil || !a.Is6() {
+		return nil
+	}
+	var best *AS
+	bestLen := -1
+	for _, as := range wan.ASes {
+		for _, p := range as.Prefixes6 {
+			pre, err := netip.ParsePrefix(p)
+			if err != nil || !pre.Contains(a) {
+				continue
+			}
+			if pre.Bits() > bestLen {
+				best, bestLen = as, pre.Bits()
+			}
+		}
+	}
+	return best
+}
+
 func prefixLen(p string) int {
 	i := strings.Index(p, "/")
 	if i < 0 {
@@ -204,6 +258,7 @@ func prefixLen(p string) int {
 // provider, ASN, region, range and abuse contact, but never a person's identity.
 type Attribution struct {
 	IP      string
+	Kind    string // the §13 kind of the address being looked up
 	ASN     int
 	ASName  string
 	Org     string
@@ -214,18 +269,55 @@ type Attribution struct {
 	Abuse   string
 	RDNS    string
 	Status  string
+	// Note carries the one thing a lookup must say out loud when the answer is
+	// not a plain registration record (shared space, an unannounced prefix).
+	Note string
 }
 
 // Lookup is the world's whois/rdap answer for a public address.
 func (w *World) Lookup(ip string) (Attribution, bool) {
 	var a Attribution
 	a.IP = ip
-	if !isIPv4(ip) {
+	info := ClassifyAddr(ip)
+	a.Kind = info.Kind
+	switch info.Kind {
+	case KindLoopback, KindPrivate, KindULA, KindLinkLocal:
+		// registries hold no record of these: the honest answer is "nothing",
+		// and a whois that invented a holder here would be a lie a player
+		// could not tell from a real one
 		return a, false
+	case KindShared:
+		// §13's CGNAT: the address exists, is in use, and belongs to a
+		// provider's NAT — its holder is the provider, never a subscriber
+		a.ASN, a.ASName = asNova, "NovaPanel (carrier-grade NAT)"
+		a.Org = "NovaPanel Hosting BV"
+		a.Region, a.Country = "eu-central", "NL"
+		a.Range, a.Netname = SharedBlock, "SHARED-ADDRESS-SPACE"
+		a.Abuse = "abuse@novapanel.example"
+		a.RDNS = "whois.novapanel.example"
+		a.Status = "SYNCED"
+		a.Note = "carrier-grade NAT: many subscribers share this address; a lookup cannot name one of them"
+		return a, true
 	}
-	// A private address has no public attribution at all — registries hold no
-	// record of RFC1918 space.
-	if isPrivate(ip) {
+	if info.Family == 6 {
+		as := w.WAN.ASFor6(ip)
+		if as == nil {
+			a.Netname, a.ASName = "UNASSIGNED", "unannounced"
+			return a, true
+		}
+		a.ASN, a.ASName, a.Org = as.ASN, as.Name, as.Org
+		a.Region, a.Country, a.Abuse, a.RDNS, a.Status = as.Region, as.Country, as.Abuse, as.RDNS, as.Status
+		best := ""
+		for _, p := range as.Prefixes6 {
+			if pre, err := netip.ParsePrefix(p); err == nil && pre.Contains(netip.MustParseAddr(ip)) && len(p) > len(best) {
+				best = p
+			}
+		}
+		a.Range = best
+		a.Netname = strings.ReplaceAll(as.Name, " ", "-") + "-V6"
+		return a, true
+	}
+	if !isIPv4(ip) {
 		return a, false
 	}
 	as := w.WAN.ASFor(ip)
@@ -337,10 +429,29 @@ func (as *AS) edgeIP(ip string) string {
 
 // asLatency returns the latency to an address's announcing AS.
 func (wan *WAN) asLatency(ip string) float64 {
+	// An address no AS announces is on somebody's own wire: a LAN, a NAT pool,
+	// a loopback. It is one switch hop away, not eighteen milliseconds, and
+	// traceroute saying otherwise would make the household's own gateway look
+	// like a distant network.
+	switch ClassifyAddr(ip).Kind {
+	case KindPrivate, KindLoopback, KindLinkLocal, KindULA, KindShared, KindUnassigned:
+		return 0.2
+	}
 	if as := wan.ASFor(ip); as != nil {
 		return as.Latency
 	}
 	return 30.0
+}
+
+// RTTms is the round-trip time from src to an address, derived from the same
+// real path traceroute walks: real hops, real per-AS distances. ping uses it so
+// that a machine three regions away really is slower than the one next door.
+func (w *World) RTTms(src *Device, dstIP string) float64 {
+	hops, ok := w.Trace(src, dstIP)
+	if !ok || len(hops) == 0 {
+		return 0
+	}
+	return hops[len(hops)-1].Latency
 }
 
 // WANTick advances the public internet. Peering state is real state: an AS that

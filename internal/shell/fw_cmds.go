@@ -25,7 +25,7 @@ func init() {
 		name string
 		fn   Cmd
 	}{
-		{"uci", cmdUCI}, {"iptables", cmdIptables}, {"upnpc", cmdUpnpc},
+		{"uci", cmdUCI}, {"iptables", cmdIptables}, {"ip6tables", cmdIp6tables}, {"upnpc", cmdUpnpc},
 	} {
 		builtinTable[e.name] = e.fn
 	}
@@ -382,16 +382,27 @@ func uciRevert(s *Shell, args []string) int {
 // path reads for that machine's own ports. Only the filter table and the
 // INPUT chain are modelled, because they are the ones that decide whether a
 // service the player publishes is reachable from the internet.
-func cmdIptables(s *Shell, args []string) int {
+func cmdIptables(s *Shell, args []string) int { return iptablesRun(s, args, false) }
+
+// cmdIp6tables is the same tool for §13's other family. It edits the v6 ruleset
+// the packet path reads, so a host can be published (or closed) on v6 alone —
+// which is what a dual-stack world has to allow.
+func cmdIp6tables(s *Shell, args []string) int { return iptablesRun(s, args, true) }
+
+func iptablesRun(s *Shell, args []string, v6 bool) int {
+	tool := "iptables"
+	if v6 {
+		tool = "ip6tables"
+	}
 	if s.User.UID != 0 {
-		s.errf("iptables v1.8.10 (legacy): can't initialize iptables table `filter': Permission denied (you must be root)")
+		s.errf("%s v1.8.10 (legacy): can't initialize iptables table `filter': Permission denied (you must be root)", tool)
 		return 1
 	}
 	if len(args) == 0 {
-		s.errf("iptables v1.8.10: no command specified")
+		s.errf("%s v1.8.10: no command specified", tool)
 		return 1
 	}
-	path := iptablesPath(s)
+	path := iptablesPath(s, v6)
 	if args[0] == "-S" || args[0] == "--list-rules" {
 		if data, ok := s.Dev.FS.Read(path); ok {
 			fmt.Fprint(s.Out, string(data))
@@ -402,12 +413,17 @@ func cmdIptables(s *Shell, args []string) int {
 	}
 	if args[0] == "-L" || args[0] == "--list" {
 		st := s.Dev.FW()
-		fmt.Fprintf(s.Out, "Chain INPUT (policy %s)\n", orD(st.HostInput, "ACCEPT"))
+		rules, policy := st.Rules, st.HostInput
+		family := "ipv4"
+		if v6 {
+			rules, policy, family = st.Rules6, st.HostInput6, "ipv6"
+		}
+		fmt.Fprintf(s.Out, "Chain INPUT (policy %s) [%s]\n", orD(policy, "ACCEPT"), family)
 		fmt.Fprintf(s.Out, "%-8s %-16s %-8s %s\n", "target", "prot", "opt", "source/destination")
-		if len(st.Rules) == 0 {
+		if len(rules) == 0 {
 			fmt.Fprintln(s.Out, "(no rules: the policy alone decides)")
 		}
-		for _, r := range st.Rules {
+		for _, r := range rules {
 			dst := "anywhere"
 			if r.Port != 0 {
 				dst = fmt.Sprintf("dport %d", r.Port)
@@ -434,10 +450,9 @@ func cmdIptables(s *Shell, args []string) int {
 			s.errf("iptables v1.8.10: invalid policy %q", args[2])
 			return 1
 		}
-		path := iptablesPath(s)
-		rules := readHostRules(s)
+		rules := readHostRules(s, v6)
 		s.Dev.FS.Write(path, core.RenderIPTables(policy, rules), 0644, "root", "root")
-		s.Dev.Logf("warn", "firewall", "INPUT policy set to %s by %s", policy, s.User.Name)
+		s.Dev.Logf("warn", "firewall", "%s INPUT policy set to %s by %s", tool, policy, s.User.Name)
 		s.W.AddEvent(s.Dev.ID, "info", "firewall", "%s set the default INPUT policy on %s to %s",
 			s.User.Name, s.Dev.Hostname, policy)
 		return 0
@@ -451,7 +466,7 @@ func cmdIptables(s *Shell, args []string) int {
 		s.errf("iptables v1.8.10: %s requires a chain and a rule", verb)
 		return 1
 	}
-	rules := readHostRules(s)
+	rules := readHostRules(s, v6)
 	switch verb {
 	case "-A", "--append", "-I", "--insert":
 		if chain != "INPUT" {
@@ -478,8 +493,8 @@ func cmdIptables(s *Shell, args []string) int {
 		s.errf("iptables v1.8.10: unknown option %q", verb)
 		return 1
 	}
-	s.Dev.FS.Write(path, core.RenderIPTables(currentPolicy(s, path), rules), 0644, "root", "root")
-	s.Dev.Logf("info", "firewall", "ruleset changed by %s: %s %s", s.User.Name, verb, strings.Join(args[1:], " "))
+	s.Dev.FS.Write(path, core.RenderIPTables(currentPolicy(s, path, v6), rules), 0644, "root", "root")
+	s.Dev.Logf("info", "firewall", "%s ruleset changed by %s: %s %s", tool, s.User.Name, verb, strings.Join(args[1:], " "))
 	s.W.AddEvent(s.Dev.ID, "info", "firewall", "%s changed the firewall on %s", s.User.Name, s.Dev.Hostname)
 	return 0
 }
@@ -526,21 +541,34 @@ func parseIPTableArgs(args []string) (chain string, r core.Rule, ok bool) {
 // readHostRules is the ruleset the file currently describes — every rule, not
 // just the WAN ones: rewriting the file must not silently drop the LAN accepts
 // the distribution shipped with.
-func readHostRules(s *Shell) []core.Rule {
-	return append([]core.Rule{}, s.Dev.FW().Rules...)
+func readHostRules(s *Shell, v6 bool) []core.Rule {
+	st := s.Dev.FW()
+	if v6 {
+		return append([]core.Rule{}, st.Rules6...)
+	}
+	return append([]core.Rule{}, st.Rules...)
 }
 
-func currentPolicy(s *Shell, path string) string {
+func currentPolicy(s *Shell, path string, v6 bool) string {
 	if _, ok := s.Dev.FS.Read(path); !ok {
 		return defaultInputPolicy(s)
 	}
-	return orD(s.Dev.FW().HostInput, "ACCEPT")
+	st := s.Dev.FW()
+	if v6 {
+		return orD(st.HostInput6, "ACCEPT")
+	}
+	return orD(st.HostInput, "ACCEPT")
 }
 
-// iptablesPath mirrors core's per-distribution location.
-func iptablesPath(s *Shell) string {
-	switch strings.ToLower(s.Dev.OS.Distro) {
-	case "fedora", "rhel", "centos":
+// iptablesPath mirrors core's per-distribution location, per family.
+func iptablesPath(s *Shell, v6 bool) string {
+	distro := strings.ToLower(s.Dev.OS.Distro)
+	switch {
+	case v6 && (distro == "fedora" || distro == "rhel" || distro == "centos"):
+		return "/etc/sysconfig/ip6tables"
+	case v6:
+		return "/etc/iptables/rules.v6"
+	case distro == "fedora" || distro == "rhel" || distro == "centos":
 		return "/etc/sysconfig/iptables"
 	}
 	return "/etc/iptables/rules.v4"
