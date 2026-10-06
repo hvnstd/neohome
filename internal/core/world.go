@@ -47,6 +47,9 @@ type World struct {
 	Desks []*Desk
 	Abuse *AbuseLog
 	Law   *LawUnit
+	// §36: an intrusion is state, not an event. Each record is one presence on
+	// one machine, with the artifacts that can be seen and removed one by one.
+	Footholds []*Foothold
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int

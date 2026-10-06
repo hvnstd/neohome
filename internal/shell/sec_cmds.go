@@ -647,6 +647,30 @@ func cmdSecstat(s *Shell, args []string) int {
 			fmt.Fprintf(s.Out, "%s\r\n", l)
 		}
 		return 0
+	case "compromise":
+		// §36: what is resident on this machine, what let it in, and what —
+		// if anything — noticed. `clean` removes the artifacts, one by one.
+		if len(args) > 1 && args[1] == "clean" {
+			host := d.ID
+			if len(args) > 2 {
+				host = args[2]
+			}
+			if host != d.ID {
+				fmt.Fprintf(s.Out, "compromise: %s is not this machine; clean it from there\r\n", host)
+				return 1
+			}
+			n, err := s.W.CleanFoothold(host)
+			if err != nil {
+				fmt.Fprintf(s.Out, "compromise: %v\r\n", err)
+				return 1
+			}
+			fmt.Fprintf(s.Out, "removed %d implant(s) from %s: process, payload and persistence line\r\n", n, d.Hostname)
+			return 0
+		}
+		for _, line := range s.W.IntrusionReport(d.ID) {
+			fmt.Fprintf(s.Out, "%s\r\n", line)
+		}
+		return 0
 	case "remote":
 		host := ""
 		if len(args) > 1 {
@@ -733,7 +757,7 @@ func cmdSecstat(s *Shell, args []string) int {
 		}
 		return 0
 	}
-	s.errf("usage: secstat [status|alerts [n]|flows [n]|bans|audit|firewall|hids|backup|remote [host]|quarantine]")
+	s.errf("usage: secstat [status|alerts [n]|flows [n]|bans|audit|firewall|hids|backup|remote [host]|quarantine|compromise [clean]]")
 	return 1
 }
 

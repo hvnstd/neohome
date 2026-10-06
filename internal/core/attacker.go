@@ -162,6 +162,13 @@ func AttackLogin(w *World, src, dst *Device, user, pass, proto string, port int)
 	if u := dst.FindUser(user); u.CheckPassword(pass) {
 		dst.Logf("notice", svc.Name, "accepted password for %s from %s (%s)", user, src.Hostname, srcIP)
 		w.Record("auth", src.Owner, srcIP, dst.ID, fmt.Sprintf("%s login %s@%s", proto, user, dst.Hostname), 3)
+		// §36: a working credential on a machine the internet reached is not a
+		// log line, it is an intrusion. Only the world's own attacker acts on
+		// it — a player's session is a session, and the credential-attempt
+		// primitive stays a primitive for the tests.
+		if src.ID == ScannerID {
+			w.plantFoothold(src, dst, u, proto, port)
+		}
 		return true
 	}
 	dst.Logf("notice", svc.Name, "failed password for %s from %s (%s)", user, src.Hostname, srcIP)

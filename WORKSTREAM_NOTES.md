@@ -1740,3 +1740,91 @@ carrying the notice.
 * **Random case generation**: every file has a complainant, an address and a
   record behind it. A desk that invented work would break §36's causality before
   §36 is even implemented.
+
+# 现实网络中的因果关系 (WS-1.14) — §36
+
+## The model
+
+§36 asks for one property, not a feature: nothing in this world happens for no
+reason. The failures people actually meet are conjunctions — an old disk *and*
+load *and* uptime; an exposed port *and* a weak credential *and* nobody
+watching; a bill that stayed unpaid. This workstream adds the chains that were
+missing and keeps every one of them readable from state a player can inspect.
+
+## What already existed (verified, not re-implemented)
+
+* RAM → swap → OOM → a service killed, with the OOM reckoning written to the
+  machine's own log (§17, `internal/core/resources.go`).
+* A wrong resolver → names fail while IPs work (§13/§5: the dnsmasq fault the
+  live scripts repair).
+* An unpaid household account → the ISP suspends the uplink, mains are cut with
+  it, and paying really restores service (`internal/core/npc.go`:
+  `UtilityTrouble` / `PayUtilities`).
+* A deterministic attacker: the world's scanner sweeps on its own schedule (a
+  player who reads the logs can predict the next sweep), and every attempt goes
+  through the same packet path as everything else.
+
+## What this adds: an intrusion is a consequence
+
+A working credential used to leave one log line. Now, when the world's own
+attacker guesses a credential that works on a machine the internet reached, the
+machine is *owned*, and the ownership is state:
+
+* a **process** in the machine's own process table (an implant whose name is not
+  a package),
+* a **payload** on disk under `/tmp` that the process runs from,
+* a **persistence line** in `/etc/cron.d` — the machine's real cron reads it, and
+  that is the difference between cleanup and believing you cleaned up: kill the
+  process and the line brings it back on the next tick, remove the line and the
+  implant dies,
+* a **beacon** the implant dials every 7 ticks: a real packet path to the
+  attacker, with the flow recorded where it really is — on the far side, because
+  a host cannot see its own egress any more than a real one can.
+
+Whether anyone notices is the target's own §33 tooling, asked one at a time:
+auditd sees the execution, aide sees the new file where it watches, rkhunter
+sees the new executable in `/tmp`, the IDS sees the sweep that preceded it. A
+machine with none of them is owned in silence, and `secstat compromise` says so
+in as many words: `noticed by:  nothing`.
+
+`secstat compromise` is the reader: every presence with its credential, its
+three artifacts, its beacon count and what noticed it — plus which artifacts are
+still on disk and running. `secstat compromise clean` removes the same three
+things a player would remove by hand (process, payload, persistence line) and
+keeps the record, because a machine that was owned once is worth remembering.
+The record survives a save.
+
+## The condition is the player's, not the seed's
+
+The bot's credential list deliberately does **not** contain the seed's default
+passwords. The world therefore does not own itself at boot: the conjunction
+§36 names — reachable ∧ weak credential ∧ unmonitored — is something the player
+builds by publishing a port (`uci set/add redirect`, commit, reload), leaving a
+default password on the exposed box, and installing no sensors. The tests build
+that conjunction explicitly and pin what follows; a live chain needs the
+`passwd` verb (see "Not implemented on purpose").
+
+## The tests
+
+`tests/intrusion_test.go` (six tests) pins the chain: a working guess leaves the
+three artifacts and the log line; killing the process alone does not end the
+presence because the persistence line restarts it, while removing the line does;
+the beacon is a real callback counted in the attacker's own flow record; a
+machine with no sensors notices nothing while the same intrusion on a watched
+machine lands in auditd's and the host monitor's alerts; a NATed household
+machine is never in the scanner's target list and so is never owned; and
+`CleanFoothold` really removes every artifact, with the record surviving a save.
+
+## Not implemented on purpose
+
+* **RDP as a service**: the sweep already tries 3389; there is no Windows stack in
+  this world to answer it. The chain is identical over ssh, which is the door
+  the world actually has.
+* **Random failures**: wear-driven disk death is the next chain in this
+  workstream, and it will be thresholds on real drivers (power-on hours, I/O
+  load, age), never a dice roll.
+* **A `passwd` verb**: changing a machine account's password is what makes the
+  weak-credential half of the conjunction a *choice* rather than a test-only
+  state. Until it exists, `chaos`-style "make yourself vulnerable" play is done
+  through configuration the world already has (publishing a port, installing no
+  sensors), and the credential half is exercised by the tests.

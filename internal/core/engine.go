@@ -252,6 +252,7 @@ func (w *World) Tick() {
 	// service really does nothing, which is what makes the tools installable
 	// rather than decorative.
 	w.ScannerTick()
+	w.IntrusionTick()
 	w.SecurityTick()
 	// §34: the organisations read what the scanner and the defenders really
 	// did in this same tick, and work their own cases on their own clocks.
