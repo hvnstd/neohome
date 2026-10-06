@@ -961,6 +961,8 @@ func cmdVps(s *Shell, args []string) int {
 			s.errf("%v", err)
 			return 1
 		}
+		fmt.Fprintf(s.Out, "provisioning %s...\n", d.Hostname)
+		fmt.Fprintf(s.Out, "image:     %s %s\n", d.OS.Distro, d.OS.Ver)
 		if rec := s.W.NodeOf(d); rec != nil {
 			country := "??"
 			if r, err := s.W.RegionByName(rec.Region); err == nil {
@@ -968,8 +970,6 @@ func cmdVps(s *Shell, args []string) int {
 			}
 			fmt.Fprintf(s.Out, "region:    %s (%s, %s, AS%d)\n", rec.Region, rec.Datacenter, country, regionASN(s, rec.Region))
 		}
-		fmt.Fprintf(s.Out, "provisioning %s...\n", d.Hostname)
-		fmt.Fprintf(s.Out, "image:     %s %s\n", d.OS.Distro, d.OS.Ver)
 		if d.NATed {
 			fmt.Fprintf(s.Out, "ipv4:      %s (shared — carrier-grade NAT, no inbound)\n", core.WANIPOf(d))
 		} else if d.FirstWANIP() != "" {

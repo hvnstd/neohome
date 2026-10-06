@@ -457,6 +457,9 @@ func cmdDig(s *Shell, args []string) int {
 	if family == 6 {
 		typ = "AAAA"
 	}
+	if core.IsArpaName(name) {
+		typ = "PTR"
+	}
 	fmt.Fprintf(s.Out, "; <<>> DiG <<>> %s @%s\n", name, resolver)
 	if !ok {
 		fmt.Fprintf(s.Out, ";; ->>HEADER<<- opcode: QUERY, status: %s, id: 12345\n", strings.ToUpper(how))
