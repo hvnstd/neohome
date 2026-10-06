@@ -518,6 +518,19 @@ func NewWorld() *World {
 			Help: "办公室的文件服务器上 /srv/projects 还是空的。从公司内网登进去(admin / meridian-admin)," +
 				"建 /srv/projects/handover/README 写清楚交接内容。共享已经在 smb.conf 里配好了。",
 			Verify: "meridian-share", Done: false},
+		// §35: the top of the ladder is work too. The unit's intake reads
+		// complaints and sends lawful requests; signing an order is a further
+		// permission, and the job text names the account that has it.
+		{ID: "J-106", Title: "网络犯罪组顶班:把报案变成合法的调证请求", Client: "le-cyber", Pay: 4200, Tier: 3, Target: "vps",
+			Help: "组里缺人。用 cases / cnu-cases-2026 登上 cnu.gov.example,abuse queue 看案卷," +
+				"abuse triage <编号> --note ... 把案卷收进来,再 abuse act <编号> request --note \"法律依据\" " +
+				"向持有该地址的运营商发出调证请求。请求要有理由,案卷要有盲区记录。",
+			Verify: "law-intake", Done: false},
+		{ID: "J-107", Title: "签出第一份搜查令", Client: "le-cyber", Pay: 6000, Tier: 4, Target: "vps",
+			Help: "证据够了才能签令。用 agent / cnu-agents-2026 登上 cnu.gov.example," +
+				"把一份已经披露了订户的案卷推到 law:disclosed,用 abuse act <编号> warrant --note \"依据\" 签令," +
+				"令要送达持有记录的网络。文件撑不住的时候,abuse 会拒绝你——那是设计,不是故障。",
+			Verify: "law-warrant", Done: false},
 	}
 
 	w.Prov = &Provider{DeviceID: provider.ID, APIKey: "np_live_9f3c2a",

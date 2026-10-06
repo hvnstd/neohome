@@ -45,6 +45,12 @@ func cmdAbuseView(s *Shell, args []string) int {
 		return cmdAbuseEvidence(s, args[1:])
 	case "desks":
 		return cmdAbuseDesks(s, args[1:])
+	case "hours":
+		return cmdAbuseHours(s, args[1:])
+	case "warrants":
+		return cmdAbuseWarrants(s, args[1:])
+	case "blind":
+		return cmdAbuseBlind(s, args[1:])
 	case "queue":
 		return cmdAbuseQueue(s, args[1:])
 	case "show":
@@ -390,7 +396,8 @@ func cmdAbuseAct(s *Shell, args []string) int {
 		return 1
 	}
 	if len(args) < 2 {
-		s.errf("usage: abuse act <ticket> notify|refer|suspend|escalate|close [--note text]")
+		s.errf("usage: abuse act <ticket> notify|refer|suspend|escalate|close [--note text]\n" +
+			"       on a law file: request|investigate|warrant|close --note \"legal basis or disposition\"")
 		return 1
 	}
 	id, action, note := args[0], args[1], ""
@@ -433,4 +440,73 @@ func orgDirectory(w *core.World) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ---- the unit's own view ---------------------------------------------------
+
+// cmdAbuseHours prints the unit's resource: investigator time is what decides
+// whether a file can move, so it is readable rather than hidden in a counter.
+func cmdAbuseHours(s *Shell, args []string) int {
+	if dk := s.requireDesk(); dk == nil || dk.Kind != core.DeskLaw {
+		if dk != nil {
+			s.errf("abuse: investigator hours are the unit's own ledger, not %s's", dk.Org)
+		}
+		return 1
+	}
+	le := s.W.LawEnforcement()
+	if le == nil {
+		s.errf("abuse: this world has no law enforcement unit")
+		return 1
+	}
+	u := s.W.LawUnit()
+	open := 0
+	for _, c := range s.W.Cases(le.DeviceID) {
+		if c.Stage == core.StageLEInvestigation || c.Stage == core.StageLEWarrant {
+			open++
+		}
+	}
+	fmt.Fprintf(s.Out, "%s — investigator hours: %.1f of %.0f\n", le.Org, u.Hours, float64(core.LawHoursCap))
+	fmt.Fprintf(s.Out, "files under investigation: %d of %d\n", open, u.Cap)
+	if len(u.Notes) > 0 {
+		fmt.Fprintln(s.Out, "the unit's log:")
+		for _, n := range u.Notes[max(0, len(u.Notes)-6):] {
+			fmt.Fprintf(s.Out, "  %s\n", n)
+		}
+	}
+	return 0
+}
+
+func cmdAbuseWarrants(s *Shell, args []string) int {
+	if dk := s.requireDesk(); dk == nil || dk.Kind != core.DeskLaw {
+		if dk != nil {
+			s.errf("abuse: orders are served on networks; %s does not hold them", dk.Org)
+		}
+		return 1
+	}
+	ws := s.W.LawWarrants()
+	if len(ws) == 0 {
+		fmt.Fprintln(s.Out, "no orders have been obtained: a warrant needs a file that stands on more than one network's records")
+		return 0
+	}
+	fmt.Fprintf(s.Out, "%-10s %-10s %-16s %-12s %s\n", "ORDER", "CASE", "ADDRESS", "SUBSCRIBER", "SERVED ON")
+	for _, w := range ws {
+		fmt.Fprintf(s.Out, "%-10s %-10s %-16s %-12s %s\n", w.ID, w.Case, w.Address, w.Subject, deskOrgName(s, w.ServedOn))
+	}
+	return 0
+}
+
+func deskOrgName(s *Shell, deskID string) string { return deskOrg(s.W, deskID) }
+
+// ---- the unit's console ----------------------------------------------------
+
+func cmdAbuseBlind(s *Shell, args []string) int {
+	if dk := s.requireDesk(); dk == nil {
+		return 1
+	}
+	dk := s.deskForDevice()
+	fmt.Fprintf(s.Out, "what %s cannot do, in its own words:\n", dk.Org)
+	for _, b := range s.W.LawBlindSpots() {
+		fmt.Fprintf(s.Out, "  - %s\n", b)
+	}
+	return 0
 }

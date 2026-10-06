@@ -74,28 +74,30 @@ type Desk struct {
 // the reporter supplied, what the desk found in its own records, what it mailed
 // and to whom, what the subject answered, and what was really done.
 type AbuseCase struct {
-	ID           string
-	DeskID       string
-	Opened       time.Time
-	Updated      time.Time
-	Stage        string
-	SubjectIP    string
-	SubjectHost  string
-	SubjectDev   string   // once the organisation's own records name a machine
-	Account      string   // what the provider's account record calls the holder
-	Reporter     string   // who filed it: a player, a device id, or the desk itself
-	AlsoReported []string // later reporters whose complaint was merged into this case
-	Kind         string
-	Evidence     []string // supplied by the reporter (their own logs)
-	Findings     []string // found in this organisation's own records
-	Notices      []string // mails sent about this case, with the delivery result
-	Reply        string   // the subject's own answer, if one arrived
-	TriagedBy    string   // the operator whose decision started the ladder
-	Action       string   // what was really done: suspended | filtered | none
-	ReferredTo   string   // desk id this was handed to
-	Law          bool     // now in law enforcement's hands
-	Due          time.Time
-	History      []string
+	ID             string
+	DeskID         string
+	Opened         time.Time
+	Updated        time.Time
+	Stage          string
+	SubjectIP      string
+	SubjectHost    string
+	SubjectDev     string   // once the organisation's own records name a machine
+	Account        string   // what the provider's account record calls the holder
+	Reporter       string   // who filed it: a player, a device id, or the desk itself
+	AlsoReported   []string // later reporters whose complaint was merged into this case
+	Kind           string
+	Evidence       []string // supplied by the reporter (their own logs)
+	Findings       []string // found in this organisation's own records
+	Notices        []string // mails sent about this case, with the delivery result
+	Reply          string   // the subject's own answer, if one arrived
+	TriagedBy      string   // the operator whose decision started the ladder
+	Action         string   // what was really done: suspended | filtered | none
+	ReferredTo     string   // desk id this was handed to
+	Requested      string   // desk id a lawful request was sent to
+	InvestigatedBy string   // the investigator who opened the investigation
+	Law            bool     // now in law enforcement's hands
+	Due            time.Time
+	History        []string
 }
 
 // AbuseLog is the world's case file: every investigation every organisation
@@ -123,7 +125,9 @@ const (
 
 func caseTerminal(stage string) bool {
 	switch stage {
-	case StageRejected, StageReferred, StageClosed, StageLEOpened, StageLEClosed:
+	case StageRejected, StageReferred, StageClosed, StageLEOpened:
+		return true
+	case StageLEClosed, StageLECharged, StageLEDropped:
 		return true
 	}
 	return false
@@ -358,9 +362,16 @@ func seedDesks(w *World) {
 	add(&Desk{DeviceID: "le-cyber", Kind: DeskLaw, Org: "Cybercrime National Unit", ASN: asGov,
 		Mailbox: "cases", Portal: "httpd", Staff: "le", SLA: 60, Notice: 240, Lawful: true},
 		map[string]*User{
-			"root":  {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
+			"root": {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
+			// an intake analyst reads the queue and sends a request; signing an
+			// order is an investigator's power, and the group is the difference
 			"cases": {Name: "cases", UID: 1000, Pass: "cnu-cases-2026", Groups: []string{"le"}, Home: "/home/cases", Shell: "/bin/bash"},
+			"agent": {Name: "agent", UID: 1001, Pass: "cnu-agents-2026", Groups: []string{"le", "agents"}, Home: "/home/agent", Shell: "/bin/bash"},
 		})
+
+	// §35: the unit that works the top of the ladder has its own state — the
+	// hours it can spend and the orders it has obtained
+	w.ensureLaw()
 
 	// the zone gains the names an outsider would actually use
 	w.Records = append(w.Records,
@@ -741,6 +752,18 @@ func (w *World) CaseByID(id string) *AbuseCase {
 	return nil
 }
 
+// CaseAboutAt reports whether a desk already holds a case (open or not) about an
+// address, which is how an intake avoids opening a second file about the same
+// complaint.
+func (w *World) CaseAboutAt(deskID, ip string) bool {
+	for _, c := range w.Cases(deskID) {
+		if c.SubjectIP == ip {
+			return true
+		}
+	}
+	return false
+}
+
 // CasesInvolving lists the cases a person is part of, on either side: as the
 // one who reported, or as the holder of the machine being investigated. A
 // player should be able to read their own file — and nothing else, which is
@@ -982,6 +1005,12 @@ func (w *World) recentCase(dk *Desk, ip string, window time.Duration) bool {
 
 // advanceCase moves one case one step, if its own deadline has come.
 func (w *World) advanceCase(dk *Desk, c *AbuseCase) {
+	if dk.Kind == DeskLaw {
+		// §35: a file at the unit is walked by LawTick, on the unit's own
+		// ladder — intake, request, disclosure, investigation, order. The
+		// network ladder (notice, referral, suspension) is not the unit's.
+		return
+	}
 	d := w.DeskDevice(dk)
 	switch c.Stage {
 	case StageFiled:
@@ -1076,35 +1105,11 @@ func (w *World) advanceCase(dk *Desk, c *AbuseCase) {
 		}
 		w.openLawCase(le, c)
 
-	case StageLERequest:
-		if w.Sim.Before(c.Due) {
-			return
-		}
-		// the provider answers, or explains why it cannot: this is the step
-		// where an address becomes a subscriber record, and the step where a
-		// shared address becomes a dead end
-		sub := w.subscriberRecord(c.SubjectIP)
-		if sub == "" {
-			// the honest end of the road, and the reason §13 draws the
-			// distinction in the first place: a shared address belongs to
-			// many subscribers, so there is nobody to name
-			if w.SharedAddress(c.SubjectIP) {
-				c.History = append(c.History, fmt.Sprintf("%s the network answered: carrier-grade NAT, no single subscriber", w.Sim.Format("15:04")))
-				w.caseStage(c, StageLEClosed, "the address is carrier-grade NAT: the provider cannot name one subscriber")
-				return
-			}
-			w.caseStage(c, StageLEClosed, "the network answered: no subscriber record for this address in the retention window")
-			return
-		}
-		c.Account = sub
-		c.History = append(c.History, fmt.Sprintf("%s provider disclosed subscriber %q under lawful request", w.Sim.Format("15:04"), sub))
-		w.caseStage(c, StageLEDisclose, "subscriber record obtained under lawful request")
-
-	case StageLEDisclose:
-		if w.Sim.Before(c.Due) {
-			return
-		}
-		w.lawOutcome(dk, c)
+	case StageLERequest, StageLEDisclose, StageLEInvestigation, StageLEWarrant:
+		// the unit's own rungs are walked by LawTick: a file at the unit is
+		// read by its intake, sent to the network that holds the address,
+		// answered, investigated and closed — each step on the file's clock
+		return
 	}
 }
 
@@ -1285,7 +1290,9 @@ func (w *World) openLawCase(le *Desk, from *AbuseCase) {
 	nc := w.openCase(le, from.SubjectIP, from.DeskID, from.Kind, ev, le.SLA)
 	nc.Law = true
 	nc.History = append(nc.History, fmt.Sprintf("%s case opened from %s's referral %s", w.Sim.Format("15:04"), orgOf(w, from.DeskID), from.ID))
-	w.caseStage(nc, StageLERequest, "lawful request for subscriber records sent to the network that holds the address")
+	// §35: nothing teleports. The referral opens a *file*, and the unit's own
+	// intake reads it, sends its own request under its own lawful basis, and
+	// lives with whatever answer comes back.
 	w.caseStage(from, StageLEOpened, "law enforcement opened a file ("+nc.ID+")")
 	if d := w.DeskDevice(le); d != nil {
 		d.Logf("notice", "cases", "%s: lawful request for subscriber records for %s", nc.ID, nc.SubjectIP)
@@ -1295,28 +1302,6 @@ func (w *World) openLawCase(le *Desk, from *AbuseCase) {
 			dd.Logf("notice", "compliance", "%s: lawful request from %s received; subscriber records under review", nc.ID, le.Org)
 		}
 	}
-}
-
-// lawOutcome is what the file can actually support. A world where every report
-// ends in a raid would be as dishonest as one where nothing has consequences:
-// a unit acts on what the file shows, and says so when it is thin.
-func (w *World) lawOutcome(le *Desk, c *AbuseCase) {
-	support := len(c.Findings) + len(c.Evidence) + len(c.Account)
-	if support < 3 {
-		w.caseStage(c, StageLEClosed, "no further action: the file does not support a warrant")
-		return
-	}
-	if c.SubjectDev != "" {
-		if d := w.Devices[c.SubjectDev]; d != nil && d.Owner != "" {
-			if pc := w.Devices[w.PlayerDeviceID(d.Owner)]; pc != nil {
-				w.DeliverLocal(pc, "cases@"+hostnameOf(w, le), d.Owner, "investigation "+c.ID,
-					fmt.Sprintf("%s has opened an investigation (%s) into conduct attributed to this household's connection.\nNothing has been seized. If you have something to say about it, answer this message and quote the case number.\n", le.Org, c.ID))
-			}
-			w.AddEvent(le.DeviceID, "warn", "cases", "%s opened an investigation into %s (%s)", le.Org, d.Owner, c.ID)
-			w.News = append(w.News, fmt.Sprintf("%s opened an investigation into conduct from %s", le.Org, c.SubjectIP))
-		}
-	}
-	w.caseStage(c, StageLEClosed, "subscriber identified; matter recorded and closed for now")
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -1593,6 +1578,30 @@ func (w *World) CasesHandledBy(name string) int {
 	return n
 }
 
+// LawWorked counts the files at the unit that carry a human operator's mark for
+// a particular action. It is how the unit's shift jobs are verified: the world
+// reads what was done by hand, not that a job was accepted.
+func (w *World) LawWorked(action string) int {
+	le := w.lawDesk()
+	if le == nil || w.Abuse == nil {
+		return 0
+	}
+	needle := ": " + action + " — "
+	n := 0
+	for _, c := range w.Abuse.List {
+		if c.DeskID != le.DeviceID {
+			continue
+		}
+		for _, h := range c.History {
+			if strings.Contains(h, " operator ") && strings.Contains(h, needle) {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
 // CasesWorkedAt counts the cases at a desk that carry a human operator's mark,
 // whoever the operator was. A shift is covered by the account that worked it,
 // and a player covering a shift signs in as that account rather than as
@@ -1674,7 +1683,16 @@ func (w *World) DeskTriage(caseID, actor, note string) (*AbuseCase, error) {
 	if note == "" {
 		return nil, fmt.Errorf("a triage decision needs a note explaining it")
 	}
-	c.Findings = append(c.Findings, w.deskFindings(dk, c.SubjectIP)...)
+	if dk.Kind == DeskLaw {
+		// §35: the unit has no network of its own, so triage pools nothing: it
+		// records what the file is and what the unit cannot see for itself
+		if !w.lawSpend(c, lawCost.triage, "triage") {
+			return nil, fmt.Errorf("no investigator hours left: the file waits for the next shift")
+		}
+		c.Findings = append(c.Findings, lawNoNetwork)
+	} else {
+		c.Findings = append(c.Findings, w.deskFindings(dk, c.SubjectIP)...)
+	}
 	c.TriagedBy = actor
 	w.caseStage(c, StageTriaged, "triaged by "+actor+": "+note)
 	c.Due = w.Sim.Add(time.Duration(dk.SLA) * time.Minute)
@@ -1698,6 +1716,12 @@ func (w *World) DeskAct(caseID, actor, action, note string) (*AbuseCase, error) 
 	dk := w.deskByID(c.DeskID)
 	if dk == nil {
 		return nil, fmt.Errorf("no desk holds %s", c.ID)
+	}
+	if dk.Kind == DeskLaw {
+		// §35: law enforcement's powers are its own. The unit does not suspend,
+		// refer or filter — it requests records under a lawful basis, works a
+		// file, obtains an order, and closes with a disposition.
+		return w.lawDeskAct(dk, c, actor, action, note)
 	}
 	switch action {
 	case "notify":
@@ -1750,7 +1774,7 @@ func (w *World) DeskSummary(deskID string) []string {
 			closed++
 		case StageClosed, StageRejected:
 			closed++
-		case StageLEOpened, StageLEClosed:
+		case StageLEOpened, StageLEClosed, StageLECharged, StageLEDropped:
 			law++
 			closed++
 		default:

@@ -46,6 +46,7 @@ type World struct {
 	// are world state, so a case survives a save exactly as a ban does.
 	Desks []*Desk
 	Abuse *AbuseLog
+	Law   *LawUnit
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int

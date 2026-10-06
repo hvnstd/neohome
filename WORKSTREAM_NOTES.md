@@ -1607,3 +1607,136 @@ world's own scanner appearing in the gateway's own record (`24 filtered` from
   Modelling queue depth would change no state a player can see.
 * **Disk quotas and cgroup memory limits**: one machine, one disk, one RAM
   limit — the failures people actually meet.
+
+# 取证 / 网管 / ISP / Provider 与 Law Enforcement (WS-1.13) — §34 + §35
+
+## The model
+
+Two spec sections share one question: who can find out what, from which records,
+and who is allowed to act on it. §34 builds the organisations that answer for an
+address — registry, ISP, hosting provider, datacenter, corporate SOC — and the
+case ladder each of them runs. §35 builds the unit at the top: Law Enforcement,
+with its own resources, its own permissions and its own blind spots.
+
+Neither layer teleports. A desk works from its own records on its own machine,
+and the unit works from what the networks disclose to it, in writing. "IP 查到谁"
+stops where the world says it stops: an address resolves to an ASN, a range and
+an abuse contact, and to a subscriber only when a network hands one over under a
+request that is written down.
+
+## What exists — §34
+
+* **Eight kinds of desk**, each a real host with a real ASN, an MTA, an abuse
+  mailbox, a service level and a portal: `registry` (RDAP/whois on :43, the
+  allocation records and nothing else), `netcrest-noc` (the access ISP, AS64510,
+  residential lines), `novapanel-abuse` + `novapanel-dc` (hosting provider and
+  its datacenter, AS64520), `meridian-soc` (the enterprise SOC, AS64530, with
+  `meridian-hq|dc|fs|ws`), and `le-cyber` (§35, AS64540, "GovNet").
+* **A report is refused unless the reporter's own records hold the address.** An
+  opinion, a note, or an address nothing on the reporter's machine saw is not
+  evidence, and `abuse report` says which record is missing.
+* **Findings come only from the desk's own AS**: a complaint from outside the
+  network is hearsay, and a desk that has no address in its own range will not
+  pretend to have logs about one.
+* **The case ladder is a state machine on the world clock**: filed → triaged →
+  notified (the subject is told, in their own mailbox) → enforced (port
+  suspended for a 24 h term that lapses on its own) → referred (to the network
+  that really answers for the address) → escalated (to the unit) → closed. Every
+  rung writes a line to the case history, and the history *is* the audit trail.
+* **Open cases absorb repeats**: a second report about an open case merges into
+  it and records `AlsoReported`, so a desk does not open the same file twice;
+  self-initiated tickets honour a six-hour cooldown.
+* **A desk notices its own customers**: with the datacenter's `netflowd`
+  exporter running, a provider sees its own addresses attacking other networks
+  and opens a case without being told; stop the exporter and it goes back to
+  knowing only what it is mailed.
+* **The console is a Unix group, not a role flag**: `abuse queue|show|triage|act`
+  requires an account in the organisation's own group on the organisation's own
+  machine (`OnDeskStaff`), and shift accounts with their own passwords are what
+  the job board hands out.
+* **A carrier-grade NAT address is a dead end for everyone**: the provider can be
+  asked about it, and no subscriber can be named for it.
+
+## What exists — §35
+
+* **The unit is state**: a ledger of investigator hours (24 to a shift, refilled
+  at 1 per sim hour), a cap of three open files, an intake cursor into its own
+  mailbox, the orders it has obtained, and its published blind spots.
+* **Intake is a real mailbox**: a complaint mailed to `cases@cnu.gov.example`
+  becomes a file — naming the complainant, carrying the complaint as evidence,
+  and quoting the first address in the text. A complaint that names no address is
+  written into the unit's log instead of being turned into a guess, and an
+  address already on file is not filed twice.
+* **The ladder is walked, not jumped**: intake → lawful request → disclosure →
+  investigation → order → disposition. Requesting records costs 2 hours,
+  investigating 8, an order 4; with no hours left the file waits for the next
+  shift (a 30-minute push and a line in the unit's log, never a hidden sleep).
+* **A lawful request is a written message to the network that announces the
+  address**, and it is refused without a stated basis. The registry is refused
+  too: it publishes allocation records, so it can name the network and is not the
+  network to ask. An address no network announces ends the file with that reason.
+* **A disclosure is a name or it is not a disclosure**: a platform that can name
+  the rack but no customer on file ends the file ("there is nobody to name on an
+  order"), and a NAT address ends it as carrier-grade NAT.
+* **A warrant is the last rung and a real document**: `WR-%06d`, signed by an
+  account in the unit's `agents` group, served into the network's own mailbox,
+  with the subscriber told. It needs a named subscriber *and* a file standing on
+  at least five artifacts (the complainant's evidence, the disclosures, the
+  network's own records). Sampled off the console, `abuse act <case> warrant`
+  refuses with exactly what is missing.
+* **The unit's permissions are groups**: an intake analyst (`cases`, group `le`)
+  reads, requests and closes; an investigator (`agent`, groups `le`+`agents`)
+  opens the investigation and signs the order. Both refusals name the group.
+* **What the unit cannot do is in the file**: it has no network of its own, so
+  every record came from somebody else; it cannot reach a machine, so nothing is
+  seized; it cannot make a NAT address resolve to a person. `abuse blind` prints
+  the same list the code enforces.
+* **Every file ends with a disposition**: charged, dropped or closed, with the
+  reason on the record.
+
+## The tests
+
+`tests/abuse_test.go` (eight tests, 30+ assertions) drives §34 end to end.
+`tests/law_test.go` (nine tests) pins §35: that a fresh file refuses both an
+investigation and an order and that the unit has none of the network's powers;
+that a lawful request is a real message in the ISP's mailbox and the disclosure
+is what turns an address into an account; that the two permission levels are
+Unix groups; that an order is served on the network and the subscriber is told;
+that hours are a resource spent and refilled on the world clock; that intake
+files a complaint with an address and refuses to guess at one without; that the
+registry, an unannounced address and a rack with no customer on it each end a
+file honestly; that a machine with nobody's name on it yields no order; and that
+J-106/J-107 pass only after the work exists in the world.
+
+## Verified
+
+`gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green.
+`tools/abuse_verify.sh` walks the live entry in eight sections: the household's
+DNS fault repaired on the router, `whois` naming the network and never the
+subscriber (including the CGNAT pool answer), the console refusals, eight real
+rejected logins at the provider's desk, the world's own scanner found in the
+gateway's flow record and reported with that record as evidence, the ticket read
+back by its own filer, and then §35 from the other side: the household mails the
+unit, the unit's intake turns it into a file, an analyst without the `agents`
+group is refused the order, the file itself is refused the order, intake triages
+and requests in writing, the hours ledger drops, `abuse blind` prints the unit's
+limits, the network answers on its own service level, and a second file — about
+the household's own line, complained about by the provider — is disclosed,
+investigated, signed against and served, with the subscriber's own mailbox
+carrying the notice.
+
+## Not implemented on purpose
+
+* **A teleporting raid**: an order ends at records retention on the line. The
+  unit has no path to a machine in this world, which is the point of §35's blind
+  spots; a seizure would need a device-level mechanic that does not exist.
+* **Cross-border requests / MLAT**: there is one jurisdiction, so there is one
+  unit. A treaty layer would decide nothing a file does not already decide.
+* **Court dockets and trials**: `charged` is where the world stops. A trial would
+  need a second party with standing, and there is none.
+* **A warrant for a NAT address**: refused by design. The provider can be
+  compelled for the retention records it holds, and it cannot name a subscriber
+  it never had.
+* **Random case generation**: every file has a complainant, an address and a
+  record behind it. A desk that invented work would break §36's causality before
+  §36 is even implemented.

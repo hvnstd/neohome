@@ -177,7 +177,8 @@ func cmdMail(s *Shell, args []string) int {
 			fmt.Fprintln(s.Out, "permission denied")
 			return 1
 		}
-		fmt.Fprint(s.Out, body)
+		// the mailbox is text; Fprint on a []byte would print a byte array
+		fmt.Fprint(s.Out, string(body))
 		return 0
 	}
 	switch args[0] {
@@ -201,7 +202,7 @@ func cmdMail(s *Shell, args []string) int {
 			}
 			lines = append(lines, l)
 		}
-		if err := s.W.SendMail(s.User.Name, to, subject, strings.Join(lines, "\n")); err != nil {
+		if err := s.W.SendMailFrom(s.Dev, s.User.Name, to, subject, strings.Join(lines, "\n")); err != nil {
 			s.errf("%v", err)
 			return 1
 		}

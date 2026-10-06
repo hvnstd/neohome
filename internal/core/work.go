@@ -135,6 +135,33 @@ func (w *World) VerifyJob(j *Job) (bool, string) {
 		}
 		return true, "the handover document is on the office file server"
 
+	case "law-intake":
+		// the unit's shift is covered when a lawful request really went out by
+		// hand: the request is a mail to a named network, not a button
+		if n := w.LawWorked("request"); n > 0 {
+			return true, fmt.Sprintf("%d lawful request(s) sent by hand from the unit", n)
+		}
+		return false, "the unit's intake has not sent a lawful request yet: read a file, then abuse act <ticket> request --note \"basis\""
+
+	case "law-warrant":
+		ws := w.LawWarrants()
+		if len(ws) == 0 {
+			return false, "no order has been obtained: a file needs intake, a lawful request, a disclosure and an investigator's hours first"
+		}
+		if w.LawWorked("warrant") == 0 {
+			return false, "an order exists but no investigator signed it on the file"
+		}
+		served := false
+		for _, wr := range ws {
+			if wr.ServedOn != "" {
+				served = true
+			}
+		}
+		if !served {
+			return false, "the order was never served on a network: an order nobody holds changes nothing"
+		}
+		return true, fmt.Sprintf("%d order(s) obtained and served", len(ws))
+
 	case "clean":
 		// "clean up your act": no leftover fail2ban strikes on the home router
 		r := w.RouterForPlayer(j.Accepted)
@@ -338,6 +365,29 @@ func (w *World) SendMail(from, to, subject, body string) error {
 	src := w.MailSourceFor(from)
 	if src == nil {
 		return fmt.Errorf("no mail host for sender %s", from)
+	}
+	res := w.RouteMail(src, from, to, subject, body)
+	switch {
+	case res.Delivered:
+		return nil
+	case res.Queued:
+		return fmt.Errorf("queued for %s: %s", to, res.Diagnostic)
+	default:
+		return fmt.Errorf("%s", res.Diagnostic)
+	}
+}
+
+// SendMailFrom submits a message from a named machine: the one the account is
+// logged into. `mail send` in a session has to leave from the host you are
+// standing on — the same account name can exist on several organisations'
+// machines, and picking the first one in the world would put a stranger's
+// hostname on your message.
+func (w *World) SendMailFrom(src *Device, from, to, subject, body string) error {
+	if src == nil {
+		return w.SendMail(from, to, subject, body)
+	}
+	if src.Svc("smtpd") == nil {
+		return fmt.Errorf("no mail transfer agent on %s", src.Hostname)
 	}
 	res := w.RouteMail(src, from, to, subject, body)
 	switch {

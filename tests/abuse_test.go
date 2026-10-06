@@ -91,6 +91,7 @@ func ladderWith(t *testing.T, w *core.World, id string, beat func(), cond func(*
 			beat()
 		}
 		w.AbuseTick()
+		w.LawTick()
 		if n := len(w.CaseByID(id).History); n == prev {
 			if stalls++; stalls > 2 {
 				break
@@ -110,6 +111,7 @@ func fastForward(w *core.World, d time.Duration) {
 		w.Sim = w.Sim.Add(2 * time.Hour)
 		w.TickCount++
 		w.AbuseTick()
+		w.LawTick()
 	}
 }
 

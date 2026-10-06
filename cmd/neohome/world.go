@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,8 +50,25 @@ func hostKey(w *core.World) ([]byte, error) {
 // saveInterval is how often the engine commits the world to disk.
 const saveInterval = 12 // ticks (≈36s at 3s/tick)
 
+// tickInterval is the wall-clock cost of one half-minute of world time. §37
+// compresses real minutes into game seconds, and NEOHOME_TICK_MS exists so a
+// live walk-through of a ladder measured in sim-hours (a desk's service level, a
+// law file's rungs) can be watched in one sitting. State is still only moved by
+// Tick(): the knob changes the ratio, never the rules.
+func tickInterval() time.Duration {
+	if v := os.Getenv("NEOHOME_TICK_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 20 {
+			return time.Duration(ms) * time.Millisecond
+		}
+		log.Printf("NEOHOME_TICK_MS=%q is not a usable interval (>=20); using 3000", v)
+	}
+	return 3 * time.Second
+}
+
 func engine(w *core.World, path string) {
 	tick := 0
+	interval := tickInterval()
+	log.Printf("engine: one tick = 30s of world time every %s", interval)
 	for {
 		w.Lock()
 		w.Tick()
@@ -66,7 +84,7 @@ func engine(w *core.World, path string) {
 				log.Println("world save failed:", err)
 			}
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(interval)
 	}
 }
 
