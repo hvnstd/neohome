@@ -43,10 +43,16 @@ func (w *World) AssistantWork() {
 				}
 			}
 		case "pkg-busybox":
-			if repo := w.Repos["main"]; repo != nil {
-				if p := repo.Pkgs["busybox"]; p != nil {
-					a.InstallPkg(p)
-					ok = true
+			// the assistant installs from the catalogue it can reach, and even
+			// it goes through the payload format (InstallRendered)
+			if p := w.FindPkg("busybox"); p != nil {
+				for _, r := range w.Repos {
+					if r.Pkgs[p.Name] != nil && r.Pkgs[p.Name] == p {
+						if _, err := w.InstallRendered(a, r, p); err == nil {
+							ok = true
+						}
+						break
+					}
 				}
 			}
 		}

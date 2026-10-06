@@ -275,6 +275,15 @@ func (d *Device) ResolverIP() string {
 				return f[1]
 			}
 		}
+		// A box running its own resolver asks itself: dnsmasq on the router
+		// is what a real /etc/resolv.conf points at. The query still goes
+		// through the resolver chain, so a router with a broken upstream
+		// fails its own lookups exactly like its clients do.
+		if svc := d.Svc(firstSvc(d, "dnsmasq", "nsd")); svc != nil && svc.State == "running" {
+			if ip := d.resolverSelfIP(); ip != "" {
+				return ip
+			}
+		}
 		// file exists but has no nameserver line → that IS the config: broken
 		return ""
 	}
@@ -291,6 +300,23 @@ func (d *Device) ResolverIP() string {
 		}
 		if i.GW != "" && d.Profile == "router" {
 			return "8.8.8.8" // routers hardwire upstream by default
+		}
+	}
+	return ""
+}
+
+// resolverSelfIP is the address this device's own resolver listens on: the LAN
+// address for a router, otherwise any address of ours that the resolver maps
+// back to this device.
+func (d *Device) resolverSelfIP() string {
+	for _, i := range d.Ifaces {
+		if i.Zone == "lan" && i.IP != "" {
+			return i.IP
+		}
+	}
+	for _, i := range d.Ifaces {
+		if i.IP != "" && d.W != nil && d.W.IPMap[i.IP] == d.ID {
+			return i.IP
 		}
 	}
 	return ""

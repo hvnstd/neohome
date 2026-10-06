@@ -59,9 +59,16 @@ func NewWorld() *World {
 	// the git server (WS-0.8): repositories with real history over https
 	gitd := w.addDevice("git", "git.neohome.example", "infra", "", OSInfo{"Debian", "13", "6.12.5", "x86_64", "bash"},
 		Hardware{"VM", 1, 1000, 1024, 20480, 100, false, false}, "10.0.0.10")
+	// the official package archive (WS-1.6): the origin every mirror in this
+	// world syncs from, with its own address, service and logs
+	archive := w.addDevice("archive", "archive.neohome.example", "infra", "", OSInfo{"Debian", "13", "6.12.5", "x86_64", "bash"},
+		Hardware{"VM", 4, 2400, 8192, 512000, 2000, false, false}, "10.0.0.11")
+	// a third-party CDN that publishes its own tree with its own key (§11)
+	cdn := w.addDevice("cdn", "cdn.sashimi-cdn.example", "peer", "", OSInfo{"Debian", "12", "6.1.0", "x86_64", "bash"},
+		Hardware{"VM", 2, 2000, 4096, 102400, 1000, false, false}, "10.0.0.12")
 	_ = core
 
-	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd, gitd} {
+	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd, gitd, archive, cdn} {
 		d.Ifaces = append(d.Ifaces, &Iface{Name: "eth1", IP: w.allocPublicFor(d.Profile), MAC: macFor(d.ID + "-wan"), Zone: "wan", Up: true, GW: "10.0.0.1"})
 	}
 	pubISP := wanIP(ispDNS)
@@ -73,7 +80,7 @@ func NewWorld() *World {
 	pubJobs := wanIP(jobsd)
 	pubBBS := wanIP(bbsd)
 	pubGit := wanIP(gitd)
-	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd, gitd} {
+	for _, d := range []*Device{ispDNS, ns1, mirror, provider, ircd, bankd, jobsd, bbsd, gitd, archive, cdn} {
 		w.IPMap[d.Ifaces[1].IP] = d.ID
 	}
 
@@ -260,6 +267,8 @@ func NewWorld() *World {
 		{Name: "jobs.hiring.example", IP: pubJobs},
 		{Name: "bbs.neohome.example", IP: pubBBS},
 		{Name: "git.neohome.example", IP: pubGit},
+		{Name: "archive.neohome.example", IP: wanIP(archive)},
+		{Name: "cdn.sashimi-cdn.example", IP: wanIP(cdn)},
 		{Name: "dns.isp.example", IP: pubISP},
 		{Name: "home.alex.neohome.example", IP: pubHome},
 	}
@@ -305,6 +314,14 @@ func NewWorld() *World {
 	pc.Services["rsyslog"] = &Service{Name: "rsyslog", Desc: "system logging", Port: 0, Proto: "udp", Scope: "any", State: "running", Handler: "syslog"}
 	asst.Services["syslogd"] = &Service{Name: "syslogd", Desc: "BusyBox syslogd", Port: 0, Proto: "udp", Scope: "lan", State: "running", Handler: "syslog"}
 	mirror.Services["rsyslog"] = &Service{Name: "rsyslog", Desc: "system logging", Port: 0, Proto: "udp", Scope: "any", State: "running", Handler: "syslog"}
+	// the package serving hosts: the archive publishes what upstream signs,
+	// the mirror republishes it, the CDN publishes a third-party tree
+	archive.Services["nginx"] = &Service{Name: "nginx", Desc: "archive web", Port: 80, Proto: "tcp",
+		Scope: "any", State: "running", Handler: "http-archive", Banner: "nginx", Conf: "/etc/nginx/sites-enabled/archive"}
+	archive.Services["rsyslog"] = &Service{Name: "rsyslog", Desc: "system logging", Port: 0, Proto: "udp", Scope: "any", State: "running", Handler: "syslog"}
+	cdn.Services["nginx"] = &Service{Name: "nginx", Desc: "cdn web", Port: 80, Proto: "tcp",
+		Scope: "any", State: "running", Handler: "http-repo", Banner: "nginx", Conf: "/etc/nginx/sites-enabled/cdn"}
+	cdn.Services["rsyslog"] = &Service{Name: "rsyslog", Desc: "system logging", Port: 0, Proto: "udp", Scope: "any", State: "running", Handler: "syslog"}
 
 	// ---- the scripted fault: corrupt dnsmasq after power blip ----
 	w.CauseFault = Fault{
@@ -313,9 +330,6 @@ func NewWorld() *World {
 		Story:      "dnsmasq.conf points resolv-file at /var/run/dnsmasq/resolv.conf which no longer exists after the 03:12 power blip → every query SERVFAIL",
 		ExplainFix: "edit /etc/dnsmasq.conf: resolv-file=/etc/dnsmasq.upstream, write 'nameserver 10.0.0.2' there, restart dnsmasq",
 	}
-
-	w.Repos["main"] = BuildMainRepo()
-	w.Repos["contrib"] = BuildContribRepo()
 
 	seedFS(pc, "pc")
 	seedFS(router, "router")
@@ -326,6 +340,12 @@ func NewWorld() *World {
 	seedFS(ispDNS, "infra")
 	seedFS(ns1, "infra")
 	seedFS(mirror, "infra")
+	archive.FS.Write("/etc/nginx/sites-enabled/archive",
+		"server {\n  listen 80;\n  root /srv/www/archive;\n  autoindex on;\n}\n", 0644, "root", "root")
+	cdn.FS.Write("/etc/nginx/sites-enabled/cdn",
+		"server {\n  listen 80;\n  root /srv/www/repo;\n  autoindex on;\n}\n", 0644, "root", "root")
+	seedFS(archive, "infra")
+	seedFS(cdn, "infra")
 	seedFS(provider, "infra")
 	seedFS(ircd, "infra")
 	seedFS(bankd, "infra")
@@ -384,6 +404,13 @@ func NewWorld() *World {
 			}
 		}
 	}
+	// the mirror is operated by hand: root has no password (no interactive
+	// login at all) and the ops account is the one the job's mail provides
+	mkUsers(mirror, map[string]*User{
+		"root": {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
+		"ops":  {Name: "ops", UID: 1000, Pass: "mirror-ops-2026", Groups: []string{"ops", "sudo"}, Home: "/home/ops", Shell: "/bin/bash"},
+	})
+
 	// workstream seeds — each implemented in its own file (wan.go/cron.go/vm.go/tls.go)
 	seedWAN(w)
 	seedCron(w)
@@ -395,6 +422,7 @@ func NewWorld() *World {
 	seedIoT(w)
 	seedSMS(w)
 	seedUSB(w)
+	SeedPackageWorld(w)
 
 	// the LAN plan is checked before the world can be used: a static inside
 	// the DHCP band or two devices on one address panics right here

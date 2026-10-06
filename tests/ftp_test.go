@@ -300,7 +300,7 @@ func TestPlayerRunsTheSameFTPServer(t *testing.T) {
 	pc := w.Devices["pc-alex"]
 	nas := w.Devices["nas-alex"]
 
-	pkg := w.Repos["main"].Pkgs["vsftpd"]
+	pkg := w.Repos["debian"].Pkgs["vsftpd"]
 	if pkg == nil {
 		t.Fatal("vsftpd must be installable from the repository")
 	}

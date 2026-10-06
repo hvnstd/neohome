@@ -145,8 +145,9 @@ func seedFS(d *Device, kind string) {
 		v.Write("/etc/resolv.conf", "nameserver 10.0.0.3\n", 0644, "root", "root")
 		v.Write("/etc/motd", "Managed infrastructure node. All actions logged to central SIEM.\n", 0644, "root", "root")
 	case "vps":
-		v.Write("/etc/resolv.conf", "nameserver 1.1.1.1\n", 0644, "root", "root")
-		v.Write("/etc/apt/sources.list", "deb http://mirror.neohome.example/debian stable main\n", 0644, "root", "root")
+		v.Write("/etc/resolv.conf", "nameserver "+PublicResolver+"\n", 0644, "root", "root")
+		// the sources configuration is the image's, written by the provider
+		// (provisionPkgImage) — not one line baked in here for every distro
 		v.MkdirAll("/home/deploy", 0755, "deploy", "deploy")
 	}
 	refreshPasswd(d)

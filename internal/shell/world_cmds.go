@@ -888,27 +888,34 @@ func cmdVps(s *Shell, args []string) int {
 			fmt.Fprintf(s.Out, "  %-10s %d vCPU  %5d MiB  %6d MiB  %-9s  %s/mo\n",
 				p.Name, p.Cores, p.RAM, p.Disk, p.Region, fmtMoney(p.Monthly))
 		}
-		fmt.Fprintln(s.Out, "\nusage: vps create <plan> [hostname]")
+		fmt.Fprintln(s.Out, "\nimages: debian alpine ubuntu fedora arch")
+		fmt.Fprintln(s.Out, "usage: vps create <plan> [hostname] [image]")
 		return 0
 	case "create", "buy", "new":
 		if len(args) < 2 {
-			s.errf("usage: vps create <plan> [hostname]")
+			s.errf("usage: vps create <plan> [hostname] [image]")
 			return 1
 		}
 		hostname := ""
 		if len(args) > 2 {
 			hostname = args[2]
 		}
-		d, creds, err := s.W.ProvisionVPS(s.User.Name, args[1], hostname)
+		image := "debian"
+		if len(args) > 3 {
+			image = args[3]
+		}
+		d, creds, err := s.W.ProvisionVPSWithOS(s.User.Name, args[1], hostname, image)
 		if err != nil {
 			s.errf("%v", err)
 			return 1
 		}
 		fmt.Fprintf(s.Out, "provisioning %s...\n", d.Hostname)
+		fmt.Fprintf(s.Out, "image:     %s %s\n", d.OS.Distro, d.OS.Ver)
 		fmt.Fprintf(s.Out, "public ip: %s\n", d.FirstWANIP())
 		fmt.Fprintf(s.Out, "dns:       %s.neohome.example\n", d.Hostname)
 		fmt.Fprintf(s.Out, "%s\n", creds)
 		fmt.Fprintf(s.Out, "\nssh in: ssh deploy@%s\n", d.Hostname)
+		fmt.Fprintf(s.Out, "packages: %s\n", provisionPkgHint(d))
 		fmt.Fprintln(s.Out, "the node is now addressable by everything else in the world.")
 		return 0
 	case "list-mine":
@@ -917,7 +924,7 @@ func cmdVps(s *Shell, args []string) int {
 			d := s.W.Devices[id]
 			if d.Profile == "vps" && d.Owner == s.User.Name {
 				found = true
-				fmt.Fprintf(s.Out, "%-16s %-16s %d vCPU %d MiB\n", d.Hostname, d.FirstWANIP(), d.HW.Cores, d.HW.RAMMB)
+				fmt.Fprintf(s.Out, "%-16s %-16s %-14s %d vCPU %d MiB\n", d.Hostname, d.FirstWANIP(), d.OS.Distro+" "+d.OS.Ver, d.HW.Cores, d.HW.RAMMB)
 			}
 		}
 		if !found {
@@ -925,7 +932,7 @@ func cmdVps(s *Shell, args []string) int {
 		}
 		return 0
 	}
-	s.errf("usage: vps [list|create PLAN [hostname]|list-mine]")
+	s.errf("usage: vps [list|create PLAN [hostname] [image]|list-mine]")
 	return 1
 }
 
@@ -988,3 +995,13 @@ func tailLines(s string, n int) string {
 }
 
 var _ = strconv.Atoi
+
+// provisionPkgHint tells the buyer which command actually manages packages on
+// the image they just booted.
+func provisionPkgHint(d *core.Device) string {
+	mg := core.ManagerFor(d)
+	if mg == "" {
+		return "none"
+	}
+	return mg
+}

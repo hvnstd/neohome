@@ -413,6 +413,10 @@ func fetchURL(s *Shell, url string) (string, error) {
 	}
 	host := strings.SplitN(rest, "/", 2)[0]
 	host = strings.SplitN(host, ":", 2)[0]
+	urlPath := "/"
+	if i := strings.Index(rest, "/"); i >= 0 {
+		urlPath = rest[i:]
+	}
 	if host == "" {
 		return "", fmt.Errorf("empty host")
 	}
@@ -428,19 +432,26 @@ func fetchURL(s *Shell, url string) (string, error) {
 	if svc == nil {
 		return "", fmt.Errorf(msg)
 	}
-	_ = dst
 	if scheme == "https" {
 		if _, _, err := s.W.Handshake(s.Dev, host, svc); err != nil {
 			return "", err
 		}
 	}
-	return serveHTTP(s, svc, host), nil
+	_ = dst
+	return serveHTTP(s, svc, host, ip, urlPath), nil
 }
 
-func serveHTTP(s *Shell, svc *core.Service, host string) string {
+func serveHTTP(s *Shell, svc *core.Service, host, ip, urlPath string) string {
 	switch svc.Handler {
-	case "http-mirror":
-		return "mirror.neohome.example index\n# main repo: http://mirror.neohome.example/debian\n# contrib: http://mirror.neohome.example/debian/contrib\n"
+	case "http-mirror", "http-archive", "http-repo":
+		// repositories are served from the host's real files: the same bytes
+		// apt verifies, the mirror syncs and a player can read or host
+		if dst, ok := s.W.Devices[s.W.IPMap[ip]]; ok {
+			if body, served := core.ServeFile(dst, urlPath); served {
+				return string(body)
+			}
+		}
+		return "404 Not Found\n"
 	case "http-vps":
 		return "nova panel API — POST /v1/instances\n"
 	case "http-bank":

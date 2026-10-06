@@ -287,6 +287,7 @@ func (w *World) CreateVM(hostID, name string, vcpu float64, ramMB, diskMB int) (
 		name:   {Name: name, UID: 1000, Pass: name + "-pass", Groups: []string{name}, Home: "/home/" + name, Shell: "/bin/bash"},
 	})
 	refreshPasswd(d)
+	provisionPkgImage(w, d, "debian")
 	// a fresh guest exposes ssh, exactly like a real cloud instance
 	d.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp",
 		Scope: "any", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}

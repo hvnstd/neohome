@@ -134,11 +134,12 @@ type Device struct {
 	Notes        string
 	Purposes     string
 
-	Installed map[string]*VPkg
-	Mounts    []Mount
-	Sessions  map[string]*TermSession
-	Active    []Login
-	Fail2Ban  map[string]int // source ip -> failed count
+	Installed     map[string]*VPkg
+	InstalledFrom map[string]string // package name -> repository that served it
+	Mounts        []Mount
+	Sessions      map[string]*TermSession
+	Active        []Login
+	Fail2Ban      map[string]int // source ip -> failed count
 }
 
 type Mount struct {
@@ -376,30 +377,84 @@ type Plan struct {
 	Region  string
 }
 
+// Repo is one repository tree as the world serves it: a real path on a real
+// device, with the metadata those files carry. The catalogue in Pkgs is the
+// list of packages the repository *can* carry; what a box can actually
+// install is decided by the served index files, verified through the
+// distribution's own rules (see pkgfiles.go / pkgnet.go).
 type Repo struct {
 	Name     string
 	URL      string
-	DeviceID string
-	Distro   string
-	Comps    []string
-	Signed   bool
-	Status   string
-	Pkgs     map[string]*VPkg
-	SyncLag  string
+	DeviceID string // the mirror that serves installs
+	Distro   string // debian|ubuntu|alpine|arch|fedora|openwrt
+	Suite    string
+	// SuiteAliases are the other names a mirror publishes the same tree
+	// under (stable == bookworm, v3.20 == edge at times).
+	SuiteAliases []string
+	Comps        []string
+	Signed       bool
+	Status       string // SYNCED|BEHIND|OFFLINE|PARTIAL|CORRUPTED
+	// StatusWhy is always the honest cause of Status, never a mood.
+	StatusWhy string
+	Pkgs      map[string]*VPkg
+	SyncLag   string
+
+	// Path is the URL subpath this tree lives under on the serving host.
+	Path string
+	// UpstreamID is the archive host this mirror syncs from ("" when the
+	// repo IS the archive).
+	UpstreamID string
+	// SignKey is the fingerprint the served metadata claims. A device can
+	// only install from this repo if its keyring holds that key.
+	SignKey string
+	// LastSync is sim time of the last successful sync; a repo that drifts
+	// past the threshold is BEHIND, which is a fact about the world, not a
+	// timer the player waits out.
+	LastSync time.Time
+	// ReleaseHash is what the served InRelease claims, per component. It is
+	// computed from the bytes that were written, so a sync interrupted
+	// between writing an index and its release file really does mismatch.
+	ReleaseHash map[string]string
+	// SyncPhase: 0 idle; >0 a sync process is running (see MirrorTick).
+	SyncPhase int
+	// SyncDirty records that the running sync already rewrote index files:
+	// interrupting after that leaves the tree inconsistent (CORRUPTED).
+	SyncDirty bool
+	// Missing lists components the upstream no longer carries: the real
+	// cause of PARTIAL, and the reason those indexes are gone from the tree.
+	Missing []string
 }
 
 type VPkg struct {
-	Name      string
-	Version   string
-	Arch      string
-	Desc      string
-	Size      int
+	Name    string
+	Version string
+	Arch    string
+	Desc    string
+	Size    int
+	// Comp is the repository component the package lives in (main,
+	// contrib, community…). Sources decide which components a box sees.
+	Comp      string
 	Depends   []string
 	Signed    bool
 	Files     map[string]*PkgFile
 	Service   *SvcSpec
+	Procs     []ProcSpec
 	PostInst  string
+	PreRemove string
 	Malicious bool
+}
+
+// ProcSpec is a background process a package starts. Removing the package
+// stops exactly the processes it declared — that symmetry is what makes
+// "postinst started something you did not ask for" findable and undoable.
+type ProcSpec struct {
+	Name string
+	Args string
+	User string
+	CPU  float64
+	Mem  int
+	// Kind is the process kind recorded on the device (builtin|task|…).
+	Kind string
 }
 
 type PkgFile struct {
@@ -455,6 +510,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		Notes                        string
 		Purposes                     string
 		Installed                    map[string]*VPkg
+		InstalledFrom                map[string]string
 		Mounts                       []Mount
 		Sessions                     map[string]*TermSession
 		Active                       []Login
@@ -465,7 +521,8 @@ func (d *Device) GobEncode() ([]byte, error) {
 		Ifaces: d.Ifaces, Boot: d.Boot, PowerOK: d.PowerOK, MeterKWh: d.MeterKWh, BillDue: d.BillDue,
 		NetUp: d.NetUp, MainsDropped: d.MainsDropped, UPS: d.UPS, BootSet: d.BootSet,
 		Dmesg: d.Dmesg, Firewall: d.Firewall, PortFwd: d.PortFwd, DHCPL: d.DHCPL, Notes: d.Notes,
-		Purposes: d.Purposes, Installed: d.Installed, Mounts: d.Mounts, Sessions: d.Sessions,
+		Purposes: d.Purposes, Installed: d.Installed, InstalledFrom: d.InstalledFrom,
+		Mounts: d.Mounts, Sessions: d.Sessions,
 		Active: d.Active, Fail2Ban: d.Fail2Ban,
 	}
 	var buf bytes.Buffer
@@ -500,6 +557,7 @@ func (d *Device) GobDecode(b []byte) error {
 		Notes                        string
 		Purposes                     string
 		Installed                    map[string]*VPkg
+		InstalledFrom                map[string]string
 		Mounts                       []Mount
 		Sessions                     map[string]*TermSession
 		Active                       []Login
@@ -513,6 +571,7 @@ func (d *Device) GobDecode(b []byte) error {
 	d.Ifaces, d.Boot, d.PowerOK, d.MeterKWh, d.BillDue = shadow.Ifaces, shadow.Boot, shadow.PowerOK, shadow.MeterKWh, shadow.BillDue
 	d.Dmesg, d.Firewall, d.PortFwd, d.DHCPL, d.Notes = shadow.Dmesg, shadow.Firewall, shadow.PortFwd, shadow.DHCPL, shadow.Notes
 	d.Purposes, d.Installed, d.Mounts, d.Sessions = shadow.Purposes, shadow.Installed, shadow.Mounts, shadow.Sessions
+	d.InstalledFrom = shadow.InstalledFrom
 	d.Active, d.Fail2Ban = shadow.Active, shadow.Fail2Ban
 	d.NetUp, d.MainsDropped, d.UPS, d.BootSet = shadow.NetUp, shadow.MainsDropped, shadow.UPS, shadow.BootSet
 	return nil

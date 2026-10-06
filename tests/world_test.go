@@ -457,10 +457,14 @@ func TestInstallCreatesFilesAndService(t *testing.T) {
 		t.Fatal("a provisioned VPS must have a public IP")
 	}
 	// nginx install must create the binary, config and a registered service
-	nginx := w.Repos["main"].Pkgs["nginx"]
+	nginx := w.Repos["debian"].Pkgs["nginx"]
 	actions := vps.InstallPkg(nginx)
 	if _, ok := vps.FS.Get("/usr/sbin/nginx"); !ok {
 		t.Fatal("install did not create the virtual binary")
+	}
+	// and the box now records where the package came from, from its own sources
+	if vps.InstalledFrom["nginx"] != "debian" {
+		t.Fatalf("provenance should name the repository this box uses, got %q", vps.InstalledFrom["nginx"])
 	}
 	if vps.Svc("nginx") == nil {
 		t.Fatal("install did not register the service")

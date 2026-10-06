@@ -4,7 +4,7 @@ One section per workstream, oldest first. Each section owns its files; check
 ownership there before touching cross-cutting files (`world.go` pointers,
 `engine.go` tick calls, `world_init.go` seeds, `resolver.go` backcompat).
 
-## Index (status 2026-10-05, tip `ea8eb1d`)
+## Index (status 2026-10-06, tip WS-1.6)
 
 | Workstream | Commit | What it added | Where |
 |---|---|---|---|
@@ -23,6 +23,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | LAN plan (hardcode removal) | this commit | one owner for household addresses; `AllocLANStatic` replaces the MCP const; `ValidateLAN` panics at boot on duplicates/pool-collisions; the router's dhcp-range renders from the constants | `internal/core/addr.go`, `tests/lan_test.go` |
 | FTP + reachability (WS-1.4) | this commit | real FTP sessions over the wire; the seeded drop box is reachable, attackable and defended; a port-forward is now a hole that really forwards | §"FTP workstream (WS-1.4)" |
 | coupling patch (WS-1.5) | this commit | `irc` goes through the real ircd service and the resolver; the assistant node is reachable by key, as §24 intends, and `ssh host command` exists | §"Coupling patch (WS-1.5)" |
+| package ecosystem (WS-1.6) | this commit | five real package managers on five distributions, repositories as signed files served over HTTP by real hosts, a mirror that syncs on the world's own schedule, dependency-aware install and honest removal, and the third-party supply-chain decision | §"Package ecosystem (WS-1.6)" |
 
 Verification status at tip: full `go test ./...` green, `go vet` clean,
 `bash tools/all_verify.sh` — all 14 scripts exit ok, suspicious counts zero
@@ -745,10 +746,147 @@ same helper drives telnet, which had the identical nil-reader crash.
 
 ## Still open (recorded, not fixed here)
 
-The audit that found these also found the larger blocks: one Debian package
-universe pretending to be four distros (§9–§11), no dependency resolution or
-package removal, dead `Repo.Status`/`SyncLag`, `apt` working with the mirror
-host switched off, no player-side firewall/port-forward/DMZ controls (§14), no
-IPv6/CGNAT/dynamic-WAN (§13), VPS lifecycle beyond create+ssh (§12), and the
-§33 defence tools beyond the fail2ban counter. Those are the next workstreams;
-the assistant/IRC/coupling items above were the cheap, load-bearing ones.
+The audit that found these also found the larger blocks. WS-1.6 closed the
+§9–§11 block (see the section below); what remains is: player-side
+firewall/port-forward/DMZ controls (§14), IPv6/CGNAT/dynamic-WAN (§13), VPS
+lifecycle beyond create+ssh (§12), and the §33 defence tools beyond the
+fail2ban counter. Phase 2 (multiplayer, §31/§34/§35) has not been started and
+needs a household-boundary decision first.
+
+---
+
+# Package ecosystem (WS-1.6) — §9 软件包系统, §10 repository/mirror, §11 软件安全
+
+Ownership: `internal/core/distro.go`, `internal/core/pkgfiles.go`,
+`internal/core/pkgnet.go`, `internal/core/pkgapply.go`,
+`internal/core/pkgs.go`, `internal/shell/pkg_cmds.go`, `tests/pkgs_test.go`.
+Touched, with their owners' sections updated here: `internal/core/engine.go`
+(install bookkeeping + `MirrorTick` in `Tick`), `internal/core/world.go`
+(`Device.InstalledFrom`), `internal/core/net.go` (a device that runs its own
+resolver asks itself), `internal/core/vfs.go` (`MkdirAll` cannot spin on a
+relative path), `internal/core/world_init.go` + `devseed.go` + `npc.go` +
+`vm.go` + `addr.go` (archive/cdn hosts, per-distro images), `internal/shell/
+net.go` (http is served from the host's real files) and `internal/shell/
+world_cmds.go` (`vps create PLAN [hostname] [image]`).
+
+## The model
+
+A package is not a Go struct that appears on a device. It is:
+
+    catalogue (Go)  →  files on the archive host  →  files on the mirror host
+                    →  fetched + verified by the client  →  state on the device
+
+* **Files, not memory.** Each repository renders real index files, real
+  payload files and a real signed release file onto the host that publishes
+  it (`RenderTree`/`WriteTree`). `curl`, `grep` and `nano` on the mirror see
+  exactly what the package managers read.
+* **Five families, five layouts.** Debian (`dists/<suite>/InRelease`,
+  `binary-amd64/Packages`, pool `.vpkg`), Alpine (`APKINDEX` + `.apk`),
+  Arch (`<repo>/os/x86_64/<repo>.db`, `.pkg.tar.zst`), Fedora (`repodata`,
+  `.rpm`), OpenWrt (`packages/<arch>/Packages`, `.ipk`). Each family has its
+  own sources file, keyring, list cache and command semantics; the family
+  fixes the index layout, so a wrong path is a file that is not there.
+* **The client really fetches.** `FetchHTTP` resolves the mirror's name
+  through the device's own resolver chain, dials port 80 through the real
+  firewall and NAT rules, and reads the file the serving host has on disk. A
+  stopped nginx, a powered-off mirror or a broken resolver all fail the
+  install, with the reason.
+* **Verification is byte-level.** The release file names its signing key; the
+  device must have that key in its keyring or the update is refused with
+  `NO_PUBKEY` and a hint naming the keyring directory. Every index is checked
+  against the hash the release file publishes for it, and every payload
+  against the hash its index entry publishes. A half-finished sync, a deleted
+  index or an edited index is therefore *detectable*, not asserted.
+* **Mirror state is derived from the served bytes.** `World.RepoIntegrity`
+  runs the client's verification on the mirror host. `CORRUPTED` means the
+  release file does not describe the files next to it; `BEHIND` means the
+  last successful sync is older than the threshold (and, if the crontab's
+  `mirror-sync <tree>` line is commented out, the status says so);
+  `PARTIAL` means upstream no longer carries a component. A sync that dies
+  after writing bytes that still match its release file is not called
+  corruption.
+
+## What exists
+
+* **Managers**: `apt`, `apk`, `pacman`, `dnf`, `opkg` — one command per
+  family, gated on the device's distribution. The wrong manager on a box is
+  `command not found`; a non-root user gets that manager's real lock refusal.
+  `update` fetches and verifies, `install` reads the cached lists, `remove`
+  refuses to break a dependency, `search`/`list`/`list --installed` read the
+  served index and the device's own database.
+* **Dependency engine**: `PlanInstall` (topological, dependency-first,
+  reported failure), `RemoveCheck` (reverse dependencies, real refusal),
+  `RemovePkg` (stops and deregisters services, removes the files the package
+  owns, clears the record, keeps files another package still provides).
+* **Provenance**: `Device.InstalledFrom[name]` records the repository a
+  package came from, chosen from the sources that device actually has, so
+  `apt list --installed` and `dnf list installed` can show `origin=debian`
+  or `@fedora` instead of guessing from the catalogue.
+* **Mirror lifecycle**: the world's `archive` host publishes every tree; the
+  `mirror` host copies indexes *and* the pool it points at, verifies the
+  release against the bytes it just wrote, and is driven by the world's own
+  cron (`*/15 * * * * mirror-sync <tree>`, seeded by `seedMirrorSchedule`).
+  The debian line is commented out after a disk incident, which is the whole
+  cause of the seeded BEHIND state; `mirror-sync <tree>` (a shell builtin,
+  root only) runs one sync by hand and `mirror-sync` alone prints the table.
+* **Third-party source (§11)**: `sashimi` is a real tree on the `cdn` host
+  signed with a key that is in no keyring. Its key is published with the tree
+  (`keys/<fingerprint>.asc`), so trusting it is a real act with real material
+  behind it; until then every update naming it fails. Its `nettop` package
+  ships a background `updater` — the world logs it, `ps` shows it, and the
+  event log records that a third-party package started a background service.
+* **Provisioning**: `vps create PLAN [hostname] [image]` and
+  `ProvisionVPSWithOS` give the buyer debian|ubuntu|alpine|arch|fedora with
+  that distribution's sources file, keyring and manager, a locked root and a
+  sudo account; VM guests get the same real package management.
+
+## Verified
+
+`tests/pkgs_test.go` (all with a fresh world, all asserting world state):
+
+* every distribution has exactly one manager and its own sources file, and
+  the others are `command not found`;
+* install before update refuses (`no package lists are cached`), a non-root
+  user is refused by the lock, `apt update` fetches the mirror's metadata,
+  `apt install htop` lands the payload's file, records the package and its
+  origin, `apt list --installed` reads it back, removal removes the files and
+  the record, and re-installing works;
+* nginx pulls libc, creates its files, user and running service; removing
+  libc is refused while nginx needs it and succeeds after nginx is removed;
+* the seeded debian tree is `BEHIND` *with the disabled cron line named*, the
+  client warns on every update, a stale tree still installs, and
+  `mirror-sync debian` makes the warning go away;
+* deleting a served index makes the tree `CORRUPTED` (by file, not by flag),
+  the client refuses to install from it, and a real sync repairs it;
+* a third-party source is refused with `NO_PUBKEY` until its published key is
+  trusted, and then installs a package that starts a background process and
+  says so in the event log;
+* stopping the mirror's web server breaks updates and starting it fixes them;
+* a VPS bought as alpine/arch/fedora really has that manager, that sources
+  file, a root account, the archive key, and installs over `sudo`;
+* publishing a new package upstream, then killing the sync between its index
+  and its release file, leaves damage both ends can prove (`hash sum
+  mismatch`), and the repair sync makes the new package installable;
+* the mirror keeps itself current from its own crontab, and the tree whose
+  line is commented out is the one that stays behind.
+
+Full gate with this workstream: `go vet ./...` clean, `go test ./...` green
+(27 test files, ~172 tests). `tests/world_test.go` and `tests/ftp_test.go`
+now reference `w.Repos["debian"]` (the old `main`/`contrib` repos are gone),
+and `tests/tls_test.go` fetches the mirror's front page, which is now a real
+index of the trees it serves instead of a hardcoded string.
+
+## Not implemented on purpose
+
+* **Player-hosted caches/mirrors** (§10 wants them): the pieces are there —
+  files, sync, verification — but a player-run cache would need a "serve this
+  tree from my box" command and a client that accepts a second source. Not
+  faked; recorded here.
+* **Package version anomalies as events** (§11 包版本异常): a repository can
+  publish an old version and a client will install it, but nothing yet
+  compares versions or alerts on a rollback. `PublishPackage` is the hook a
+  future "upstream regressed" incident would use.
+* **Source packages (`deb-src`), multi-arch, and `apt`'s deb822 drop-ins**
+  are parsed where the format is trivial and ignored where it is not.
+* **Removal does not garbage-collect the pool**: a mirror keeps files an
+  index no longer references, as real mirrors do.
