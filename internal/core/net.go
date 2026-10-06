@@ -439,22 +439,38 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 		return nil, dst, "No route to host"
 	}
 
-	// home/office router applies port-forward translation for WAN traffic
+	// The router in front of a home network applies NAT: WAN traffic lands on
+	// an inner host only where a redirect says to translate it (§14). A
+	// redirect with no destination port is a DMZ and matches every port; a
+	// UPnP lease is the same thing with a shorter life. Nothing else opens the
+	// door — a permissive zone rule alone cannot, because without a
+	// translation rule there is nowhere to send the packet, which is why the
+	// misconfiguration people actually hit is a forward or a WAN accept.
 	forwarded := false
 	outer := dst
-	if dst.Profile != "core" && dst.Profile != "vps" && dst.Profile != "infra" && fromWAN {
+	if dst.Profile != "core" && dst.Profile != "vps" && dst.Profile != "infra" && dst.Profile != "peer" && dst.Profile != "server" && fromWAN {
 		r := dst.W.routerFor(dst)
 		if r != nil {
-			fwd := r.matchFwd(port)
-			if fwd == nil {
-				return nil, dst, "Connection timed out (filtered)"
+			via := r.matchFwd(port)
+			if via == nil {
+				// a packet with no translation rule can only be answered by
+				// the router itself, and only if its own WAN policy allows it
+				if r != dst || !dst.PermitsWAN(port) {
+					r.logFiltered(src, port, dst == r)
+					return nil, dst, "Connection timed out (filtered)"
+				}
+				forwarded = true
+			} else {
+				// DNAT: land on the internal target instead
+				if id, ok := src.W.IPMap[via.DstIP]; ok {
+					dst = src.W.Devices[id]
+				}
+				if via.DPort > 0 {
+					port = via.DPort
+				}
+				forwarded = true
+				r.logForward(src, via, port)
 			}
-			// DNAT: land on the internal target instead
-			if id, ok := src.W.IPMap[fwd.DstIP]; ok {
-				dst = src.W.Devices[id]
-			}
-			port = fwd.DPort
-			forwarded = true
 		}
 	}
 
@@ -485,7 +501,12 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 			}
 			return nil, dst, "Connection refused (service " + s.State + ")"
 		}
-		if fromWAN && s.Scope == "lan" {
+		// A forwarded connection has already been translated by the owner's
+		// router, which is the accept that makes a LAN-bound service reachable
+		// — that is what forwarding a port to the NAS or the camera really
+		// does. Everything else must have been allowed by the target's own
+		// configuration.
+		if fromWAN && s.Scope == "lan" && !forwarded && !dst.PermitsWAN(port) {
 			return nil, dst, "Connection refused (service bound to LAN only)"
 		}
 		// success — record evidence on the target
@@ -519,11 +540,11 @@ func ForwardTarget(src *Device, ip string, port int) *Device {
 	if r == nil {
 		return d
 	}
-	fwd := r.matchFwd(port)
-	if fwd == nil {
+	via := r.matchFwd(port)
+	if via == nil {
 		return d
 	}
-	if iid, ok := src.W.IPMap[fwd.DstIP]; ok {
+	if iid, ok := src.W.IPMap[via.DstIP]; ok {
 		if inner := src.W.Devices[iid]; inner != nil {
 			return inner
 		}
@@ -559,41 +580,59 @@ func (d *Device) sourceIPFor(dst *Device) string {
 	return "127.0.0.1"
 }
 
-func (r *Device) matchFwd(port int) *FwdRule {
-	for i := range r.PortFwd {
-		f := &r.PortFwd[i]
-		if f.Enable && f.WPort == port {
-			return f
-		}
-	}
-	return nil
+// matchFwd finds the redirect that carries this WAN port inside: a configured
+// forward, a DMZ, or a live UPnP mapping. It reads the router's real
+// configuration every time, so a player who edits `/etc/config/firewall` (or
+// runs `uci set`) changes what the next packet does.
+func (r *Device) matchFwd(port int) *Redirect {
+	return r.FW().RedirectFor(port)
 }
 
-// FWDrop on router: default WAN→LAN deny unless fwd opened it.
-func (d *Device) FWDrop(fromWAN bool, dstIP string, port int) bool {
-	for _, r := range d.Firewall {
-		if r.Chain == "WAN-TO-LAN" || r.Chain == "FORWARD" {
-			if r.Proto == "tcp" && r.Port == port && r.Action == "ACCEPT" {
-				return false
-			}
-		}
-	}
-	return fromWAN
-}
-
-// FWDropInput on end device: rules with chain INPUT.
-func (d *Device) FWDropInput(fromWAN bool, port int) bool {
-	for _, r := range d.Firewall {
-		if r.Chain == "INPUT" && r.Proto == "tcp" && r.Port == port {
-			if r.Action == "ACCEPT" {
-				return false
-			}
-			return true
-		}
-	}
-	// no explicit rule: WAN input default drop on home devices; infra/vps ok
-	if fromWAN && (d.Profile == "pc" || d.Profile == "nas" || d.Profile == "router") {
+// PermitsWAN reports whether this device's own configuration lets a WAN packet
+// reach one of its ports: an explicit ACCEPT rule for that port, or a policy
+// that accepts WAN input outright.
+func (d *Device) PermitsWAN(port int) bool {
+	st := d.FW()
+	if st.WANAllowsPort(port) {
 		return true
 	}
-	return false
+	if d.Profile == "router" {
+		return strings.EqualFold(st.WANInput, "ACCEPT")
+	}
+	return strings.EqualFold(st.HostInput, "ACCEPT")
+}
+
+// FWDropInput on an end device: would its own ruleset discard this packet?
+func (d *Device) FWDropInput(fromWAN bool, port int) bool {
+	return fromWAN && !d.PermitsWAN(port)
+}
+
+// logFiltered records a dropped WAN packet when the router's config asks for
+// drop logging — the setting that turns "the internet is scanning me" into
+// something a player can read in logread instead of guess.
+func (r *Device) logFiltered(src *Device, port int, toSelf bool) {
+	st := r.FW()
+	if !st.LogDrops {
+		return
+	}
+	where := "lan"
+	if toSelf {
+		where = "router"
+	}
+	r.Logf("info", "firewall", "DROP wan %d/tcp from %s -> %s (no rule permits it)",
+		port, src.sourceIPFor(r), where)
+}
+
+// logForward records the translation a WAN packet really received. This is the
+// evidence that a forwarded port is a hole somebody opened, and the line a
+// player finds when they go looking for why a stranger reached the NAS.
+func (r *Device) logForward(src *Device, via *Redirect, dport int) {
+	why := "redirect " + via.Name
+	if via.UPnP {
+		why = "UPnP mapping " + via.Desc
+	} else if via.DMZ {
+		why = "DMZ to " + via.DstIP
+	}
+	r.Logf("info", "firewall", "DNAT %s:%d -> %s:%d (%s, from %s)",
+		r.Hostname, via.WPort, via.DstIP, dport, why, src.sourceIPFor(r))
 }

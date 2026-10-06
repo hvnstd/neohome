@@ -4,7 +4,7 @@ One section per workstream, oldest first. Each section owns its files; check
 ownership there before touching cross-cutting files (`world.go` pointers,
 `engine.go` tick calls, `world_init.go` seeds, `resolver.go` backcompat).
 
-## Index (status 2026-10-06, tip WS-1.6)
+## Index (status 2026-10-06, tip WS-1.7)
 
 | Workstream | Commit | What it added | Where |
 |---|---|---|---|
@@ -24,8 +24,12 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | FTP + reachability (WS-1.4) | this commit | real FTP sessions over the wire; the seeded drop box is reachable, attackable and defended; a port-forward is now a hole that really forwards | §"FTP workstream (WS-1.4)" |
 | coupling patch (WS-1.5) | this commit | `irc` goes through the real ircd service and the resolver; the assistant node is reachable by key, as §24 intends, and `ssh host command` exists | §"Coupling patch (WS-1.5)" |
 | package ecosystem (WS-1.6) | this commit | five real package managers on five distributions, repositories as signed files served over HTTP by real hosts, a mirror that syncs on the world's own schedule, dependency-aware install and honest removal, and the third-party supply-chain decision | §"Package ecosystem (WS-1.6)" |
+| household network (WS-1.7) | this commit | exposure *is* configuration: `uci` stages then commits, `iptables` on a host, real NAT and filtering in the packet path, UPnP with leases, a DMZ, and the router's own management surface | §"Household network (WS-1.7)" |
 
-Verification status at tip: full `go test ./...` green, `go vet` clean,
+Verification status at tip: full `go test ./...` green (~182 tests, 29 files),
+`go vet` clean, `gofmt -l` empty across the tree (the pre-existing debt in
+`git.go`, `iot.go`, `tls.go`, `sftp_cmds.go` and `world_cmds.go` was paid off
+with WS-1.7),
 `bash tools/all_verify.sh` — all 14 scripts exit ok, suspicious counts zero
 except `live_verify`'s single scripted-fault dnsmasq log (expected).
 `tools/ftp_verify.sh` is the one script that finds its own checkout and Go
@@ -890,3 +894,143 @@ index of the trees it serves instead of a hardcoded string.
   are parsed where the format is trivial and ignored where it is not.
 * **Removal does not garbage-collect the pool**: a mirror keeps files an
   index no longer references, as real mirrors do.
+
+---
+
+# Household network (WS-1.7) — §14 家庭网络, and the §28 attack surface it feeds
+
+Ownership: `internal/core/uci.go` (UCI parse/render/stage),
+`internal/core/firewall.go` (the packet path's view of exposure),
+`internal/shell/fw_cmds.go` (`uci`, `iptables`, `upnpc`),
+`tests/firewall_test.go`. Touched, with their owners' sections updated here:
+`internal/core/net.go` (`Dial`'s forwarding block, `PermitsWAN`, DMZ, the
+bypass of the target's LAN scope), `internal/core/world.go` (`Device.Firewall`
+and `Device.PortFwd` deleted, with `FWRule`/`FwdRule`),
+`internal/core/devseed.go` + `world_init.go` (shipped configs, mara's
+forward), `internal/core/iot.go` + `internal/shell/iot_cmds.go` (`camctl`,
+`World.CameraCloud`), `internal/shell/vscript.go` (`reload` verb) and
+`internal/shell/world_cmds.go` (recon).
+
+## The model
+
+Exposure is not a flag on a device. It is a configuration file, read fresh on
+every packet:
+
+* **Router** = `/etc/config/firewall` (OpenWrt UCI: `config defaults`,
+  `config redirect`, `config rule`) + `/etc/config/upnpd` + the daemon's live
+  lease file `/var/run/miniupnpd.leases`.
+* **Host** = `/etc/iptables/rules.v4` (Fedora/RHEL: `/etc/sysconfig/iptables`),
+  iptables-save format.
+* `Device.FW()` returns `FirewallState{Redirects, Rules, UPnPLeases, WANInput,
+  ForwardPolicy, HostInput, LogDrops, Errors}` and re-reads those files every
+  call, so there is no cache to invalidate and no way for the log and the
+  packet path to disagree. `AllRedirects()` adds the UPnP mappings when the
+  daemon is enabled. `PermitsWAN(port)` is the one question the packet path
+  asks; `RedirectFor(port)` is the NAT decision, where `WPort == 0` is a DMZ
+  matching every port.
+* **Fail closed.** A file that does not parse yields *no* rules — never the
+  last-known-good set. `FirewallState.Errors` carries the reason, recon and
+  `/etc/init.d/firewall reload` print it, and `uci` refuses to edit a file it
+  cannot parse, the way real uci does, so a broken config cannot be quietly
+  rewritten from a lossy parse.
+* **Two verbs, one meaning.** `uci set/add/delete` stage; only `uci commit`
+  writes the file. Before the commit, the packet path is untouched — which is
+  the whole reason the tool has two verbs, and what makes "half-applied
+  firewall" a real failure mode.
+
+## What exists
+
+* **`uci`** (root only): `show`, `get`, `set`, `add`, `add_list`, `delete`,
+  `commit`, `changes`, `revert`. `uci add firewall redirect cam-rtsp` makes an
+  anonymous section and prints its ref (`@redirect[0]`); `uci set
+  firewall.cam-rtsp=redirect` creates a named one. `uci changes` lists the
+  pending commands per config; `uci commit <config>` applies exactly those and
+  clears them; `uci revert` throws them away.
+* **`iptables`** (root only, INPUT chain): `-S`, `-L`/`-n`/`-v`, `-A`, `-I`,
+  `-D`, `-F`, `-P`, with `-p tcp|udp`, `-i <iface>`, `--dport`, `-j
+  ACCEPT|DROP|REJECT`, and an optional trailing `# comment`. It reads and
+  rewrites the same file `iptables-save` would, so `cat`, `iptables -L` and
+  the packet path can never disagree (both the `:INPUT DROP [0:0]` policy
+  line and `-P INPUT DROP` are understood).
+* **Real NAT and filtering in `Dial`**: a connection arriving on a router's WAN
+  port consults `PermitsWAN`; a permitted port that has a redirect is DNATed to
+  the LAN target and the connection *continues* there (no shortcut: the target's
+  own service, scope and rules decide the outcome); a DMZ is a redirect with no
+  destination port. A forward deliberately bypasses the target's LAN-only
+  scope — that is what publishing a port means — and every translated or
+  dropped packet is logged (`DNAT gateway:554 -> 10.77.1.40:554 (redirect
+  cam-rtsp, from 203.0.113.3)`, `DROP wan 554/tcp ... (no rule permits it)`)
+  when `log_drops` is on.
+* **UPnP** (§14's one hole nobody typed): `upnpc -l/-a/-d` is the client half
+  and only finds a gateway *upstream* of itself, so it works from a LAN host
+  (and from the camera) but not on the router itself. `World.UPnPMap` writes a
+  real lease file, logs on the router, and posts an event; `upnpd.enabled=0`
+  stops honouring the leases without deleting them (so re-enabling restores
+  the mapping), and `upnpc -d 554 tcp` from a LAN host deletes one, naming the
+  host that did it.
+* **`camctl`** (the vendor CLI on the camera): `status`, `cloud on|off`.
+  Turning cloud viewing on is a real UPnP request through the router; it fails
+  closed (`cloud viewing unavailable: ...`) when UPnP is off, and a failed
+  request writes no config. `status` reports configuration and reachability
+  *separately* — "cloud viewing: on" plus "no mapping on the gateway" is how a
+  camera looks when somebody quietly un-mapped it, and that gap is the point.
+* **`/etc/init.d/firewall reload`** is a check verb, not decoration: it reports
+  what is in force right now, the redirects by name, the default policies, the
+  parse errors if any, and writes `/var/run/firewall.applied`.
+* **recon** prints the router's `ExposureSummary()`: every redirect with its
+  target (UPnP mappings labelled as such), the DMZ as "all ports", the WAN
+  input policy, and a warning when the router's own management interface is
+  exposed.
+
+## Defaults and the shipped household
+
+`router` seeds `wan_input REJECT`, `forward REJECT`, `log_drops 1`, UPnP
+enabled, and zero redirects; `pc`, `nas` and the assistant seed DROP plus the
+LAN accepts they need (ssh everywhere, SMB on the NAS); a VPS and the
+infrastructure hosts seed ACCEPT plus ssh, because a public host that answers
+is what "public host" means. Unruled WAN input is dropped for
+`pc|nas|router` and allowed for `core/vps/infra/peer/server`.
+
+## The tests
+
+`tests/firewall_test.go`, ten tests, each with a happy path, a permission or
+policy boundary and a recovery:
+
+* the shipped household filters 22/23/80/443/554/445/2049 from the internet,
+  logs the drops, still serves the LAN, and has an empty exposure summary;
+* `uci set` changes nothing until `commit`, `revert` discards, and a committed
+  `enabled=0` closes the hole;
+* a port-forward really translates (the camera's stream case, and the NAS's web
+  console), logs the DNAT, recon follows it to the machine behind, and closing
+  it restores the default;
+* a DMZ carries *every* port to one host — one that answers, one that refuses —
+  and removing the section restores the router;
+* `src wan ... ACCEPT` exposes the router's own sshd; flipping
+  `wan_input=ACCEPT` exposes its telnetd too and makes `ExposureSummary` warn,
+  and flipping it back closes it;
+* a VPS: a non-root user is refused by `iptables`, `-P INPUT DROP` closes
+  everything but the published ssh, `-A`/`-D` publish and unpublish, and the
+  file, `iptables -L` and the packet path agree;
+* UPnP: the camera asks, the lease and the logs and the event appear, the
+  internet reaches the stream, `upnpd enabled=0` stops honouring it without
+  deleting the lease, a request while disabled fails without changing the
+  camera's config, re-enabling works, and a LAN host removing the mapping
+  closes it and is named in the log;
+* the camera's console requires a real gateway and starts off;
+* **no simulation step ever opens a port** — 200 ticks with the mirror
+  syncing, NPC routines, cron and IoT, and the router is still closed;
+* a malformed config fails closed, `reload` says why, `uci` refuses to edit it,
+  and a hand-repaired file restores service.
+
+## Not implemented on purpose
+
+* **IPv6 firewalling**: `ip -6 addr` still shows no inet6 on this network, and
+  the firewall model is IPv4 (`v4`-path files). §13 is where addresses grow,
+  and ip6tables follows the same shape if it is ever needed.
+* **conntrack states** (`-m state`), `ipset`, `fw3`, and per-rule packet
+  counters: the ruleset is real but simple, and the renderer writes the file
+  the tools read rather than pretending to be netfilter.
+* **A web UI for the router**: managing it means `ssh` + `uci`, which is the
+  honest interface for the images this world ships.
+* **Wireless client isolation and VLANs**: the guest network exists as an
+  interface, but §14's per-network policy is not modelled yet.

@@ -163,7 +163,6 @@ func cmdBank(s *Shell, args []string) int {
 
 // ---- IRC ----
 
-
 // ---- mail ----
 
 func cmdMail(s *Shell, args []string) int {
@@ -682,20 +681,40 @@ func cmdRecon(s *Shell, args []string) int {
 
 	// A home router's port-forwards are owner-opened holes: recon has to name
 	// the machine each one lands on, because that machine — not the router — is
-	// what the player can actually attack.
+	// what the player can actually attack. The list comes from the router's
+	// own configuration and its UPnP leases, so a mapping a program opened an
+	// hour ago shows up here the way it shows up in the router's log.
 	var behind []*core.Device
-	for _, f := range target.PortFwd {
-		if !f.Enable {
+	for _, f := range target.FW().AllRedirects() {
+		if !f.Enabled {
 			continue
 		}
-		svc, inner, msg := core.Dial(s.Dev, ip, f.WPort)
+		landing := f.WPort
+		label := fmt.Sprintf("%d/tcp", f.WPort)
+		if f.DMZ {
+			landing = 1 // the DMZ answers any port; probe one to find out
+			label = "all ports (DMZ)"
+		}
+		svc, inner, msg := core.Dial(s.Dev, ip, landing)
 		if svc == nil || msg != "connected" {
-			fmt.Fprintf(s.Out, "  %d/tcp -> %s (unreachable now: %s)\n", f.WPort, f.DstIP, msg)
+			fmt.Fprintf(s.Out, "  %s -> %s (unreachable now: %s)\n", label, f.DstIP, msg)
 			continue
 		}
 		behind = append(behind, inner)
-		fmt.Fprintf(s.Out, "  %d/tcp -> forwarded to %s (%s): %s running\n",
-			f.WPort, inner.Hostname, inner.FirstLANIP(), svc.Name)
+		how := "forwarded to"
+		if f.UPnP {
+			how = "opened by UPnP ->"
+		}
+		fmt.Fprintf(s.Out, "  %s -> %s %s (%s): %s running\n",
+			label, how, inner.Hostname, inner.FirstLANIP(), svc.Name)
+	}
+	// and the router's own management, if its config publishes it
+	if target.Profile == "router" {
+		for _, port := range []int{22, 23, 80, 443} {
+			if target.PermitsWAN(port) {
+				fmt.Fprintf(s.Out, "  %d/tcp -> the router's own management is exposed to the internet\n", port)
+			}
+		}
 	}
 
 	// vulnerabilities, checked against the host that really answers the port

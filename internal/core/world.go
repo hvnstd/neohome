@@ -52,6 +52,12 @@ type World struct {
 	assistTracks    []string
 	assistantCanFix bool
 
+	// uci's staging area: `uci set` records pending edits here and `uci
+	// commit` applies them to the config file. Unexported, so a save does not
+	// carry them — uncommitted changes are exactly the kind of thing a reboot
+	// loses, which is the behaviour the tool is famous for.
+	uciStage map[string]*uciPending
+
 	// ---- workstream slots (WS-0). Shape owned by mail.go.
 	mail *MailBox
 
@@ -128,8 +134,6 @@ type Device struct {
 	MeterKWh     float64
 	BillDue      int64
 	Dmesg        []string
-	Firewall     []FWRule
-	PortFwd      []FwdRule
 	DHCPL        map[string]Lease
 	Notes        string
 	Purposes     string
@@ -162,22 +166,6 @@ type TermSession struct {
 	User  string
 	Proc  *Proc
 	Alive bool
-}
-
-type FWRule struct {
-	Chain  string // INPUT|FORWARD
-	Proto  string
-	Port   int
-	Src    string
-	Action string // ACCEPT|DROP
-}
-
-type FwdRule struct {
-	Proto  string
-	WPort  int
-	DstIP  string
-	DPort  int
-	Enable bool
 }
 
 type Lease struct {
@@ -504,8 +492,6 @@ func (d *Device) GobEncode() ([]byte, error) {
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
-		Firewall                     []FWRule
-		PortFwd                      []FwdRule
 		DHCPL                        map[string]Lease
 		Notes                        string
 		Purposes                     string
@@ -520,7 +506,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		OS: d.OS, HW: d.HW, FS: d.FS, Users: d.Users, Procs: d.Procs, Services: d.Services,
 		Ifaces: d.Ifaces, Boot: d.Boot, PowerOK: d.PowerOK, MeterKWh: d.MeterKWh, BillDue: d.BillDue,
 		NetUp: d.NetUp, MainsDropped: d.MainsDropped, UPS: d.UPS, BootSet: d.BootSet,
-		Dmesg: d.Dmesg, Firewall: d.Firewall, PortFwd: d.PortFwd, DHCPL: d.DHCPL, Notes: d.Notes,
+		Dmesg: d.Dmesg, DHCPL: d.DHCPL, Notes: d.Notes,
 		Purposes: d.Purposes, Installed: d.Installed, InstalledFrom: d.InstalledFrom,
 		Mounts: d.Mounts, Sessions: d.Sessions,
 		Active: d.Active, Fail2Ban: d.Fail2Ban,
@@ -551,8 +537,6 @@ func (d *Device) GobDecode(b []byte) error {
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
-		Firewall                     []FWRule
-		PortFwd                      []FwdRule
 		DHCPL                        map[string]Lease
 		Notes                        string
 		Purposes                     string
@@ -569,7 +553,7 @@ func (d *Device) GobDecode(b []byte) error {
 	d.ID, d.Hostname, d.Profile, d.Owner = shadow.ID, shadow.Hostname, shadow.Profile, shadow.Owner
 	d.OS, d.HW, d.FS, d.Users, d.Procs, d.Services = shadow.OS, shadow.HW, shadow.FS, shadow.Users, shadow.Procs, shadow.Services
 	d.Ifaces, d.Boot, d.PowerOK, d.MeterKWh, d.BillDue = shadow.Ifaces, shadow.Boot, shadow.PowerOK, shadow.MeterKWh, shadow.BillDue
-	d.Dmesg, d.Firewall, d.PortFwd, d.DHCPL, d.Notes = shadow.Dmesg, shadow.Firewall, shadow.PortFwd, shadow.DHCPL, shadow.Notes
+	d.Dmesg, d.DHCPL, d.Notes = shadow.Dmesg, shadow.DHCPL, shadow.Notes
 	d.Purposes, d.Installed, d.Mounts, d.Sessions = shadow.Purposes, shadow.Installed, shadow.Mounts, shadow.Sessions
 	d.InstalledFrom = shadow.InstalledFrom
 	d.Active, d.Fail2Ban = shadow.Active, shadow.Fail2Ban

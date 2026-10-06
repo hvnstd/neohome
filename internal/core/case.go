@@ -59,13 +59,23 @@ func (w *World) NPCReactToHeat() {
 		u.Pass = "X7k!pLq92mz"
 		npc.Logf("info", "passwd", "password changed for user devops after incident")
 	}
-	router := w.Devices["npc-router"]
-	if router != nil && len(router.PortFwd) > 0 {
-		for i := range router.PortFwd {
-			router.PortFwd[i].Enable = false
+	// Real hardening, in her router's real configuration: the forward that
+	// exposed her machine stops carrying packets, and the change is a file on
+	// a disk — visible to anyone who looks.
+	if router := w.Devices["npc-router"]; router != nil {
+		closed := 0
+		for _, r := range router.Redirects() {
+			if !r.Enabled {
+				continue
+			}
+			if router.EnableRedirect(r.Name, false) {
+				closed++
+				router.Logf("warn", "firewall", "WAN port-forward %d/tcp disabled by owner", r.WPort)
+			}
 		}
-		router.Logf("warn", "firewall", "WAN port-forward 21/tcp disabled by owner")
-		w.AddEvent(router.ID, "warn", "firewall", "%s closed the FTP port-forward after the incident", router.Owner)
+		if closed > 0 {
+			w.AddEvent(router.ID, "warn", "firewall", "%s closed the FTP port-forward after the incident", router.Owner)
+		}
 	}
 	// she files a report — a case the world can later investigate
 	w.AddEvent("world", "warn", "abuse", "incident report filed by %s against an unidentified source", npc.Owner)

@@ -266,12 +266,14 @@ func TestFTPGatesFollowTheWorld(t *testing.T) {
 
 	// (3) the owner closing the port-forward closes the hole: the same address
 	// now filters, exactly as before the forward existed
-	w.Devices["npc-router"].PortFwd[0].Enable = false
+	if !w.Devices["npc-router"].EnableRedirect("ftp-darkden", false) {
+		t.Fatal("the forward should be a redirect in the router's firewall config")
+	}
 	out = ftpExec(t, w, pc, "alex", "ftp -A "+pub, "bye")
 	if !strings.Contains(out, "Connection timed out (filtered)") {
 		t.Fatalf("without the forward the host is unreachable:\n%s", out)
 	}
-	w.Devices["npc-router"].PortFwd[0].Enable = true
+	w.Devices["npc-router"].EnableRedirect("ftp-darkden", true)
 
 	// (4) a session does not outlive the daemon: the next command answers 421
 	sess, err := w.FTPLogin(pc, "alex", npc, "anonymous", "anonymous@")
@@ -398,7 +400,7 @@ func TestFTPExploitChainRunsOverTheWire(t *testing.T) {
 	}
 
 	// and the same chain fails once the owner closes the hole
-	w.Devices["npc-router"].PortFwd[0].Enable = false
+	w.Devices["npc-router"].EnableRedirect("ftp-darkden", false)
 	out = run(t, w, pc, "alex", "exploit "+pub+" vsftpd-anon-upload")
 	if !strings.Contains(out, "precondition failed") && !strings.Contains(out, "failed") {
 		t.Fatalf("a closed forward must stop the exploit:\n%s", out)

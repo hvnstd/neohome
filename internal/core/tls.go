@@ -128,12 +128,12 @@ func (w *World) IssueCert(domain string, ca *TLSCert) (*TLSCert, error) {
 	tpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: domain, Organization: []string{"neohome"}},
-			DNSNames:     []string{domain},
-			NotBefore:    now.Add(-time.Minute),
-			NotAfter:     now.AddDate(1, 0, 0),
-			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		}
+		DNSNames:     []string{domain},
+		NotBefore:    now.Add(-time.Minute),
+		NotAfter:     now.AddDate(1, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, caPub, &key.PublicKey, caKey)
 	if err != nil {
 		return nil, err
@@ -373,4 +373,3 @@ func seedTLS(w *World) {
 		}
 	}
 }
-

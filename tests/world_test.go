@@ -573,7 +573,7 @@ func TestNPCHardensAfterHeat(t *testing.T) {
 	if npc.FindUser("devops").Pass != "Summer2024!" {
 		t.Fatal("precondition: expected the leaked password")
 	}
-	if len(router.PortFwd) == 0 || !router.PortFwd[0].Enable {
+	if !openForward(router, 21) {
 		t.Fatal("precondition: expected an open port-forward")
 	}
 
@@ -587,7 +587,7 @@ func TestNPCHardensAfterHeat(t *testing.T) {
 	if npc.FindUser("devops").Pass == "Summer2024!" {
 		t.Fatal("NPC should have rotated the compromised credential")
 	}
-	if router.PortFwd[0].Enable {
+	if openForward(router, 21) {
 		t.Fatal("NPC should have closed the exposed port-forward")
 	}
 }
@@ -756,4 +756,15 @@ func TestNFSMountFailsWhenServiceStopped(t *testing.T) {
 	if strings.Contains(out, "mounted") {
 		t.Fatalf("mount reported success with nfsd stopped:\n%s", out)
 	}
+}
+
+// openForward reports whether a router's configuration currently forwards a
+// WAN port — read from the config, so it is the same fact the packet path sees.
+func openForward(router *core.Device, port int) bool {
+	for _, r := range router.Redirects() {
+		if r.Enabled && r.WPort == port {
+			return true
+		}
+	}
+	return false
 }

@@ -239,9 +239,8 @@ func NewWorld() *World {
 		// "ftp"/"anonymous" before it ever consults the account records.
 		"ftp": {Name: "ftp", UID: 21, Groups: []string{"ftp"}, Home: "/srv/ftp", Shell: "/usr/sbin/nologin"},
 	})
-	// mara forwarded her ftp to the world — a genuine attack surface she set up
-	npcr.PortFwd = append(npcr.PortFwd, FwdRule{Proto: "tcp", WPort: 21, DstIP: "10.88.1.11", DPort: 21, Enable: true})
-	npcr.Firewall = []FWRule{{Chain: "WAN-TO-LAN", Proto: "tcp", Port: 0, Action: "DROP"}}
+	// mara forwarded her ftp to the world — a genuine attack surface she set
+	// up herself, written into her router's real firewall configuration
 	npcpc.Services["vsftpd"] = &Service{Name: "vsftpd", Desc: "FTP daemon", Port: 21, Proto: "tcp", Scope: "any",
 		State: "running", Handler: "npc-ftp", Banner: "220 (vsFTPd 3.0.5)", Conf: "/etc/vsftpd.conf"}
 	npcpc.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan",
@@ -361,6 +360,10 @@ func NewWorld() *World {
 	})
 	seedFS(npcpc, "pc")
 	seedFS(npcr, "router")
+	// mara forwarded her ftp to the world — a genuine attack surface she set
+	// up herself, written into her router's real firewall configuration (after
+	// the image seed, which starts every router with nothing forwarded)
+	seedMaraForward(w, npcr)
 
 	// The fault's own history goes into the router log AFTER seeding, otherwise
 	// seedFS's empty-file write would erase it. This is what makes the chain
@@ -443,4 +446,26 @@ func mkUsers(d *Device, m map[string]*User) {
 		}
 		d.FS.MkdirAll(u.Home, 0755, u.Name, u.Name)
 	}
+}
+
+// seedMaraForward gives the NPC's router the port-forward that the FTP
+// storyline runs through: a redirect in /etc/config/firewall, readable with
+// `uci show firewall` and closable with `uci set ...enabled=0`.
+func seedMaraForward(w *World, router *Device) {
+	f, _, ok := router.ReadUCIFile("firewall")
+	if !ok {
+		return
+	}
+	s := f.Add("redirect", "ftp-darkden")
+	s.Set("target", "DNAT")
+	s.Set("src", "wan")
+	s.Set("proto", "tcp")
+	s.Set("src_dport", "21")
+	s.Set("dest_ip", "10.88.1.11")
+	s.Set("dest_port", "21")
+	s.Set("name", "darkden ftp")
+	s.Set("enabled", "1")
+	router.WriteUCIFile(f)
+	router.Logf("info", "firewall", "redirect 'ftp-darkden' active: wan tcp/21 -> 10.88.1.11:21")
+	_ = w
 }

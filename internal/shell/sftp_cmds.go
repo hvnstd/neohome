@@ -15,8 +15,9 @@ import (
 )
 
 // scpPath splits an scp argument into its local or remote form:
-//   file             → local
-//   [user@]host:path → remote
+//
+//	file             → local
+//	[user@]host:path → remote
 func scpPath(s *Shell, arg string) (user, host, p string, remote bool) {
 	i := strings.Index(arg, ":")
 	if i < 0 {
