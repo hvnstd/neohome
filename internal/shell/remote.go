@@ -20,9 +20,15 @@ func init() {
 }
 
 // cmdSsh: connect to a remote device and drive a shell on it.
+//
+// Two real ssh shapes are supported: `ssh [user@]host` opens an interactive
+// session on the target, and `ssh [user@]host command` runs that one command
+// there and returns its status. The command form is what a session without a
+// terminal (a script, a cron job, a test) must use — a nested loop with no
+// input has nothing to read.
 func cmdSsh(s *Shell, args []string) int {
 	if len(args) < 1 {
-		s.errf("usage: ssh [user@]host")
+		s.errf("usage: ssh [user@]host [command]")
 		return 1
 	}
 	target := args[0]
@@ -47,22 +53,17 @@ func cmdSsh(s *Shell, args []string) int {
 		s.errf("ssh: connect to %s (%s): Connection refused", host, ip)
 		return 1
 	}
-	// auth: check credentials on the target
+	// auth: check credentials on the target. §33: a rejection is recorded by
+	// the *target* — that is the evidence a fail2ban jail counts and an IDS
+	// alerts on. Whether a brute force is cut off is the target's decision
+	// (its own jail configuration), never the client's.
 	u := dst.FindUser(user)
 	if u == nil {
 		// never leak whether the account exists — real sshd does not
 		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
 		s.ReadPasswordLine("")
-		s.Dev.Fail2Ban[ip]++
+		dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "ssh password for "+user)
 		fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
-		return 1
-	}
-	// fail2ban
-	if s.Dev.Fail2Ban == nil {
-		s.Dev.Fail2Ban = map[string]int{}
-	}
-	if s.Dev.Fail2Ban[ip] > 3 {
-		fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: Connection timed out\n", host)
 		return 1
 	}
 	// password auth (only if the service allows it)
@@ -76,23 +77,41 @@ func cmdSsh(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: %s\n", host, svc.Banner)
 		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
 		pass := s.ReadPasswordLine("")
-		if pass != u.Pass {
-			s.Dev.Fail2Ban[ip]++
+		if !u.CheckPassword(pass) {
+			dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "ssh password for "+user)
 			fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
 			return 1
 		}
 	} else {
 		// key-based: accept if the target is the assistant node and trusts
 		// the player's key (see seed: assistant authorized_keys has alex's key).
-		if !s.W.AssistantKeyTrusted(dst) {
+		if !s.W.AssistantKeyTrusted(s.Dev, dst) {
 			fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: Permission denied (publickey)\n", host)
 			return 1
 		}
 	}
-	// success: spawn a nested shell on the target
+	// success
 	fmt.Fprintf(s.Out, "Welcome to %s, %s!\n", dst.Hostname, user)
+	return s.openRemoteSession("ssh", dst, u, args[1:])
+}
+
+// openRemoteSession is the far side of ssh/telnet: with a command it runs that
+// command on the target and returns its status; without one it hands this
+// terminal to a shell on the target. The nested shell shares the session's
+// buffered reader instead of wrapping it again — a second bufio.Reader over
+// the same input would starve on bytes the outer reader already holds.
+func (s *Shell) openRemoteSession(name string, dst *core.Device, u *core.User, cmd []string) int {
 	nested := NewShell(s.W, dst, u, s.Out, s.srcIP, s.TTY)
-	nested.RunLoop(s.bufrd)
+	if len(cmd) > 0 {
+		return nested.ExecLineStatus(strings.Join(cmd, " "))
+	}
+	if s.bufrd == nil {
+		s.errf("%s: no interactive terminal on this session (try: %s %s@%s COMMAND)",
+			name, name, u.Name, dst.Hostname)
+		return 1
+	}
+	nested.bufrd = s.bufrd
+	nested.RunLoop(nil)
 	return 0
 }
 
@@ -135,14 +154,12 @@ func cmdTelnet(s *Shell, args []string) int {
 		loginUser = entered
 	}
 	u := dst.FindUser(loginUser)
-	// never reveal whether the account exists
+	// never reveal whether the account exists, and never let a service account
+	// with no stored password authenticate by pressing enter
 	fmt.Fprint(s.Out, "Password: ")
 	pass := s.ReadPasswordLine("")
-	if u == nil || pass != u.Pass {
-		if s.Dev.Fail2Ban == nil {
-			s.Dev.Fail2Ban = map[string]int{}
-		}
-		s.Dev.Fail2Ban[ip]++
+	if !u.CheckPassword(pass) {
+		dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "telnet password for "+loginUser)
 		s.W.Record("auth", s.User.Name, s.srcIP, dst.ID,
 			"failed telnet login as "+loginUser, 3)
 		fmt.Fprintf(s.Out, "Login incorrect\n")
@@ -151,7 +168,5 @@ func cmdTelnet(s *Shell, args []string) int {
 	s.W.Record("auth", s.User.Name, s.srcIP, dst.ID,
 		"telnet login "+loginUser+"@"+dst.Hostname, 1)
 	fmt.Fprintf(s.Out, "Welcome to %s (%s)\n", dst.Hostname, dst.OS.Distro)
-	nested := NewShell(s.W, dst, u, s.Out, s.srcIP, s.TTY)
-	nested.RunLoop(s.bufrd)
-	return 0
+	return s.openRemoteSession("telnet", dst, u, nil)
 }

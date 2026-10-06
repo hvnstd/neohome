@@ -102,7 +102,7 @@ func (w *World) IMAPSelect(d *Device, user, pass string) ([]IMAPMessage, error) 
 		return nil, fmt.Errorf("no such mail host")
 	}
 	u := d.FindUser(user)
-	if u == nil || u.Pass == "" || pass != u.Pass {
+	if !u.CheckPassword(pass) {
 		return nil, fmt.Errorf("login failed")
 	}
 	data, exists, permitted := ReadInbox(d, user, u)

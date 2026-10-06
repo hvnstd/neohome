@@ -43,8 +43,14 @@ func TestPublicAllocationFollowsASOwnership(t *testing.T) {
 	if as == nil {
 		t.Fatalf("no AS announces the vps address %s", vps.FirstWANIP())
 	}
-	if as.Org != "NovaPanel Hosting BV" {
-		t.Fatalf("a VPS bought from novapanel should be attributed to its provider, got %s", as.Org)
+	// §12: the plan's region decides which of the provider's datacenters the
+	// node is numbered from, so the org is the provider (or its regional
+	// entity) — never anything to do with the customer
+	if !strings.HasPrefix(as.Org, "NovaPanel") {
+		t.Fatalf("a VPS bought from novapanel should be attributed to its provider, got %s (%s)", as.Org, as.Name)
+	}
+	if !strings.Contains(as.Abuse, "novapanel.example") {
+		t.Fatalf("a VPS's abuse contact must be the provider's, got %s", as.Abuse)
 	}
 	router := w.Devices["router-alex"]
 	ras := w.WAN.ASFor(router.FirstWANIP())

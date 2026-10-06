@@ -132,7 +132,7 @@ func (s *Shell) RunLoop(r io.Reader) {
 		// The machine may have lost power since the last prompt, whether
 		// because the player cut it or because a UPS finally ran flat.
 		if s.Dev != nil && !s.Dev.Powered() {
-			fmt.Fprintln(s.Out, "\nConnection to host lost (no power).")
+			fmt.Fprintf(s.Out, "\nConnection to host lost (%s).\n", s.Dev.UnavailableReason())
 			return
 		}
 		fmt.Fprint(s.Out, s.PS1())
@@ -213,7 +213,7 @@ func (s *Shell) ExecLineStatus(line string) int {
 	// well as in the read loop so a single command can never run on a box that
 	// has already gone dark.
 	if s.Dev != nil && !s.Dev.Powered() {
-		fmt.Fprintln(s.Out, "\nConnection to host lost (no power).")
+		fmt.Fprintf(s.Out, "\nConnection to host lost (%s).\n", s.Dev.UnavailableReason())
 		s.exitFlag = true
 		return 1
 	}
@@ -269,6 +269,14 @@ func (s *Shell) execOne(cmd string) bool {
 	// stdin. Exit status is the LAST stage's, exactly like a real shell.
 	if stages := splitPipeline(toks); len(stages) > 1 {
 		return s.runPipeline(stages) == 0
+	}
+
+	// §33 tools are installed software: a machine that never installed
+	// fail2ban really has no fail2ban-client, and says so the way a shell
+	// does. Everything else in the table is part of the world's base image.
+	if s.pkgCommandMissing(name) {
+		fmt.Fprintf(s.Out, "%s: %s: command not found\r\n", s.Dev.Hostname, name)
+		return false
 	}
 
 	fn, ok := builtinTable[name]
@@ -329,13 +337,36 @@ func (s *Shell) execOne(cmd string) bool {
 		}
 		return rc == 0
 	}
+	s.auditExec(name)
 	rc := fn(s, args)
 	return rc == 0
 }
 
+// auditExec tells the kernel's audit rule set that this process ran, if the
+// machine has auditd running with a rule that matches. A machine without auditd
+// records nothing — which is the entire reason to install it (§33).
+func (s *Shell) auditExec(name string) {
+	if s.Dev == nil || s.Dev.W == nil {
+		return
+	}
+	// the path a `which` would report: the first one that exists
+	p := name
+	for _, dir := range []string{"/usr/local/bin/", "/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/"} {
+		if _, ok := s.Dev.FS.Get(dir + name); ok {
+			p = dir + name
+			break
+		}
+	}
+	who := ""
+	if s.User != nil {
+		who = s.User.Name
+	}
+	s.Dev.Audit("exec", who, p, name)
+}
+
 func (s *Shell) commandExists(name string) bool {
 	if _, ok := builtinTable[name]; ok {
-		return true
+		return !s.pkgCommandMissing(name)
 	}
 	// installed virtual binaries
 	for _, dir := range []string{"/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/", "/usr/local/bin/"} {
@@ -364,7 +395,7 @@ var bbApplets = []string{
 	"cat", "cp", "mv", "rm", "mkdir", "ls", "pwd", "touch", "echo", "ps", "kill",
 	"top", "ip", "route", "ifconfig", "nslookup", "wget", "dmesg", "grep", "head", "tail",
 	"wc", "df", "free", "uname", "hostname", "uptime", "whoami", "id", "env", "sort",
-	"uniq", "date", "logread", "ping", "traceroute", "udhcpc",
+	"uniq", "date", "logread", "logger", "ping", "traceroute", "udhcpc",
 }
 
 var bbSet = map[string]bool{}
@@ -483,27 +514,52 @@ func (s *Shell) ResolveVFS(p string) (*core.VFS, string, string) {
 	return s.Dev.FS, p, ""
 }
 
+// tokenize splits a command line the way a shell does. The quote rules are the
+// real ones, because they decide what a script means: inside single quotes every
+// character is data (a backslash included — `printf '%s\n'` must reach printf
+// with its backslash intact), inside double quotes only $ ` " \ and a newline
+// lose theirs, and outside quotes a backslash escapes whatever follows.
 func tokenize(cmd string) []string {
 	var out []string
 	var cur []byte
 	var q byte
-	esc := false
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
-		if esc {
-			cur = append(cur, c)
-			esc = false
-			continue
-		}
 		switch {
-		case c == '\\':
-			esc = true
-		case q != 0:
-			if c == q {
+		case q == '\'':
+			if c == '\'' {
 				q = 0
 			} else {
 				cur = append(cur, c)
 			}
+		case q == '"':
+			switch c {
+			case '"':
+				q = 0
+			case '\\':
+				if i+1 < len(cmd) {
+					n := cmd[i+1]
+					if n == '"' || n == '\\' || n == '$' || n == '`' || n == '\n' {
+						i++
+						if n != '\n' {
+							cur = append(cur, n)
+						}
+						continue
+					}
+				}
+				cur = append(cur, c)
+			default:
+				cur = append(cur, c)
+			}
+		case c == '\\':
+			if i+1 < len(cmd) {
+				i++
+				if cmd[i] != '\n' {
+					cur = append(cur, cmd[i])
+				}
+				continue
+			}
+			cur = append(cur, c)
 		case c == '"' || c == '\'':
 			q = c
 		case c == ' ' || c == '\t':

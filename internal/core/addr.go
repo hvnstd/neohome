@@ -24,6 +24,10 @@ const (
 	// static must stay outside this band or a lease will eventually collide.
 	LANDHCPFirst = 50
 	LANDHCPLast  = 200
+	// PublicResolver is the world's public recursive resolver (dns.isp.example).
+	// Nodes on the WAN — provisioned VPSes, VM guests — are configured with it,
+	// the way a cloud image ships with a real nameserver.
+	PublicResolver = "10.0.0.2"
 )
 
 // lanIP renders a household address from its last octet.

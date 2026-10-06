@@ -28,6 +28,19 @@ func run(t *testing.T, w *core.World, dev *core.Device, user string, line string
 	return out.String()
 }
 
+// remoteStatus executes one line and reports its exit status, for the paths
+// (ssh command form, cmdSsh) where the status is part of the contract.
+func remoteStatus(t *testing.T, w *core.World, dev *core.Device, user string, line string) int {
+	t.Helper()
+	u := dev.FindUser(user)
+	if u == nil {
+		t.Fatalf("user %s not found on %s", user, dev.Hostname)
+	}
+	out := &bufOut{}
+	sh := shell.NewShell(w, dev, u, out, "10.77.1.11", "xterm")
+	return sh.ExecLineStatus(line)
+}
+
 // runWithStdin runs one command line with the given lines available on the
 // session's stdin — passwords and interactive command bodies, the way a
 // live session feeds them.
@@ -193,6 +206,48 @@ func TestGrepOptionsInPipeline(t *testing.T) {
 	}
 	if got := sh("printf 'a\nb\n' | grep -v a"); strings.Contains(got, "\na\n") {
 		t.Fatalf("grep -v should drop the matching line, got:\n%s", got)
+	}
+}
+
+// printf and the quote rules are what a scripted player actually writes with:
+// `printf 'a\nb\n' > /etc/...` is how a config file gets edited from a shell.
+// A tokenizer that eats the backslash inside single quotes, or a printf that
+// prints its format instead of formatting, turns that idiom into silent noise.
+func TestPrintfAndQuotingAreReal(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	sh := func(line string) string { return run(t, w, pc, "alex", line) }
+
+	// single quotes are literal: the backslash survives the tokenizer and
+	// printf is the one that turns it into a newline
+	if got := sh("printf 'a\\nb\\n'"); got != "a\nb\n" {
+		t.Fatalf("printf 'a\\nb\\n' should print two lines, got %q", got)
+	}
+	// the format repeats until the arguments run out
+	if got := sh("printf '%s\\n' one two"); got != "one\ntwo\n" {
+		t.Fatalf("printf should reuse its format for each argument, got %q", got)
+	}
+	// conversions consume their argument and keep width and flags
+	if got := sh("printf '%03d-%s' 7 ok"); got != "007-ok" {
+		t.Fatalf("printf %%03d should pad, got %q", got)
+	}
+	// %b reads the escapes from the data, echo -e does the same for a whole run
+	if got := sh("printf '%b' 'x\\ty\\n'"); got != "x\ty\n" {
+		t.Fatalf("printf %%b should interpret the argument's escapes, got %q", got)
+	}
+	if got := sh("echo -e 'p\\tq'"); got != "p\tq\n" {
+		t.Fatalf("echo -e should interpret escapes, got %q", got)
+	}
+	// without -e the backslash is data, which is the whole reason -e exists
+	if got := sh("echo 'p\\tq'"); got != "p\\tq\n" {
+		t.Fatalf("plain echo must not interpret escapes, got %q", got)
+	}
+	// and the writable form: a real file with real lines
+	if got := sh("printf 'watch = /etc\\ninterval = 1m\\n' > /home/alex/probe.conf"); strings.Contains(got, "error") {
+		t.Fatalf("writing a file with printf failed: %s", got)
+	}
+	if got := sh("cat /home/alex/probe.conf"); got != "watch = /etc\ninterval = 1m\n" {
+		t.Fatalf("the file printf wrote is not what it printed, got %q", got)
 	}
 }
 
@@ -444,10 +499,14 @@ func TestInstallCreatesFilesAndService(t *testing.T) {
 		t.Fatal("a provisioned VPS must have a public IP")
 	}
 	// nginx install must create the binary, config and a registered service
-	nginx := w.Repos["main"].Pkgs["nginx"]
+	nginx := w.Repos["debian"].Pkgs["nginx"]
 	actions := vps.InstallPkg(nginx)
 	if _, ok := vps.FS.Get("/usr/sbin/nginx"); !ok {
 		t.Fatal("install did not create the virtual binary")
+	}
+	// and the box now records where the package came from, from its own sources
+	if vps.InstalledFrom["nginx"] != "debian" {
+		t.Fatalf("provenance should name the repository this box uses, got %q", vps.InstalledFrom["nginx"])
 	}
 	if vps.Svc("nginx") == nil {
 		t.Fatal("install did not register the service")
@@ -556,7 +615,7 @@ func TestNPCHardensAfterHeat(t *testing.T) {
 	if npc.FindUser("devops").Pass != "Summer2024!" {
 		t.Fatal("precondition: expected the leaked password")
 	}
-	if len(router.PortFwd) == 0 || !router.PortFwd[0].Enable {
+	if !openForward(router, 21) {
 		t.Fatal("precondition: expected an open port-forward")
 	}
 
@@ -570,7 +629,7 @@ func TestNPCHardensAfterHeat(t *testing.T) {
 	if npc.FindUser("devops").Pass == "Summer2024!" {
 		t.Fatal("NPC should have rotated the compromised credential")
 	}
-	if router.PortFwd[0].Enable {
+	if openForward(router, 21) {
 		t.Fatal("NPC should have closed the exposed port-forward")
 	}
 }
@@ -739,4 +798,15 @@ func TestNFSMountFailsWhenServiceStopped(t *testing.T) {
 	if strings.Contains(out, "mounted") {
 		t.Fatalf("mount reported success with nfsd stopped:\n%s", out)
 	}
+}
+
+// openForward reports whether a router's configuration currently forwards a
+// WAN port — read from the config, so it is the same fact the packet path sees.
+func openForward(router *core.Device, port int) bool {
+	for _, r := range router.Redirects() {
+		if r.Enabled && r.WPort == port {
+			return true
+		}
+	}
+	return false
 }

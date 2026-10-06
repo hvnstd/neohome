@@ -43,9 +43,13 @@ func cmdWhois(s *Shell, args []string) int {
 		return 1
 	}
 	ip := target
-	if !strings.Contains(ip, ".") {
-		// a hostname: resolve it the way a real whois client does
+	if core.ClassifyAddr(ip).Family == 0 {
+		// a hostname: resolve it the way a real whois client does. A v6 literal
+		// contains no dot, so "does it look like an address" has to be a real
+		// parse rather than a substring test.
 		if r, ok, _ := core.DNSAnswer(s.Dev, ip); ok {
+			ip = r
+		} else if r, ok, _ := core.DNSAnswerFamily(s.Dev, ip, 6); ok {
 			ip = r
 		} else {
 			fmt.Fprintf(s.Out, "whois: no match for \"%s\"\n", target)
@@ -55,11 +59,13 @@ func cmdWhois(s *Shell, args []string) int {
 
 	a, ok := s.W.Lookup(ip)
 	if !ok {
-		if strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "192.168.") ||
-			strings.HasPrefix(ip, "172.16.") || strings.HasPrefix(ip, "127.") {
+		info := core.ClassifyAddr(ip)
+		switch info.Kind {
+		case core.KindPrivate, core.KindLoopback, core.KindLinkLocal, core.KindULA:
 			fmt.Fprintf(s.Out, "whois: %s\n", ip)
 			fmt.Fprintf(s.Out, "No match for \"%s\".\n", ip)
-			fmt.Fprintf(s.Out, "This is a private address; no registry holds a record of it.\n")
+			fmt.Fprintf(s.Out, "This is a %s address (%s); no registry holds a record of it.\n",
+				info.Kind, info.Scope)
 			return 1
 		}
 		fmt.Fprintf(s.Out, "whois: invalid address \"%s\"\n", target)
@@ -82,9 +88,15 @@ func cmdWhois(s *Shell, args []string) int {
 	fmt.Fprintf(s.Out, "status:       %s\n", a.Status)
 	fmt.Fprintf(s.Out, "rdns:         %s\n", a.RDNS)
 	fmt.Fprintf(s.Out, "abuse-mailbox: %s\n", a.Abuse)
+	if a.Note != "" {
+		fmt.Fprintf(s.Out, "note:         %s\n", a.Note)
+	}
 	fmt.Fprintf(s.Out, "\n")
 	fmt.Fprintf(s.Out, "Registrant contact is withheld. The address identifies a network,\n")
 	fmt.Fprintf(s.Out, "not a person: allocation records are not published in this registry.\n")
+	if a.Kind == core.KindShared {
+		fmt.Fprintf(s.Out, "A subscriber behind carrier-grade NAT has no address of their own to look up.\n")
+	}
 	return 0
 }
 

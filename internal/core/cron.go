@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -346,6 +347,69 @@ func ParseCrontab(text string) ([]*CronEntry, []CronLineError) {
 	return out, errs
 }
 
+// CronDotDir is where system crontabs live: one file per job set, each line
+// naming the user the job runs as. This is the directory packages ship their
+// schedules into — a nightly backup belongs here, not in a person's spool.
+const CronDotDir = "/etc/cron.d"
+
+// ParseSystemCrontab parses a file from /etc/cron.d: the same 5 schedule
+// fields, then the user, then the command. It also honours the two file-level
+// conventions system crontabs have: environment assignments and comments.
+func ParseSystemCrontab(text string) ([]*CronEntry, []CronLineError) {
+	var out []*CronEntry
+	var errs []CronLineError
+	for i, raw := range strings.Split(text, "\n") {
+		line := strings.TrimRight(raw, "\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if k := strings.Index(trimmed, "="); k > 0 && !strings.ContainsAny(trimmed[:k], " \t") {
+			switch strings.ToUpper(strings.TrimSpace(trimmed[:k])) {
+			case "SHELL", "PATH", "MAILTO", "CRON_TZ":
+				continue
+			}
+		}
+		spec, rest := splitCrontabLine(trimmed)
+		if spec == "" {
+			errs = append(errs, CronLineError{Line: i + 1, Text: trimmed, Err: "expected 5 schedule fields"})
+			continue
+		}
+		user, cmd, found := strings.Cut(strings.TrimSpace(rest), " ")
+		if !found || strings.TrimSpace(cmd) == "" {
+			errs = append(errs, CronLineError{Line: i + 1, Text: trimmed, Err: "expected a user and a command"})
+			continue
+		}
+		ps, err := ParseCronSpec(spec)
+		if err != nil {
+			errs = append(errs, CronLineError{Line: i + 1, Text: trimmed, Err: err.Error()})
+			continue
+		}
+		out = append(out, &CronEntry{Spec: ps.raw, Command: strings.TrimSpace(cmd), User: user, spec: ps})
+	}
+	return out, errs
+}
+
+// CronDotFiles lists the system crontabs on a device, in the order cron reads
+// them. A name containing a dot is skipped, exactly as Vixie cron skips it —
+// which is why an editor's backup file is never a schedule.
+func (d *Device) CronDotFiles() []string {
+	var out []string
+	for _, p := range d.FS.List(CronDotDir) {
+		n, ok := d.FS.Get(p)
+		if !ok || n.IsDir {
+			continue
+		}
+		name := p[strings.LastIndex(p, "/")+1:]
+		if strings.Contains(name, ".") {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // splitCrontabLine separates the 5 schedule fields from the command, keeping
 // the command text byte-for-byte (quoted arguments included). A leading '-' on
 // the first field is the Vixie overlap guard and stays with the spec.
@@ -513,21 +577,18 @@ func (w *World) ReloadCrontabs() {
 		if d == nil {
 			continue
 		}
-		for _, user := range d.CronUsers() {
-			text, ok := d.ReadCrontab(user)
-			if !ok {
-				continue
-			}
-			entries, errs := ParseCrontab(text)
+		arm := func(entries []*CronEntry, owner string, errs []CronLineError, where string) {
 			for _, e := range errs {
-				d.Logf("err", "crond", "crontab for %s: %v", user, e)
+				d.Logf("err", "crond", "%s: %v", where, e)
 			}
 			for _, e := range entries {
 				e.DeviceID = d.ID
-				e.User = user
+				if owner != "" {
+					e.User = owner
+				}
 				if prev, found := old[e.key()]; found {
-					// unchanged job: keep its runtime state (next fire, run
-					// count, last exit code) and adopt the re-parsed spec
+					// unchanged job: keep its runtime state (next fire,
+					// run count, last exit code) and adopt the re-parsed spec
 					prev.spec = e.spec
 					fresh = append(fresh, prev)
 					continue
@@ -541,6 +602,25 @@ func (w *World) ReloadCrontabs() {
 				}
 				fresh = append(fresh, e)
 			}
+		}
+		for _, user := range d.CronUsers() {
+			text, ok := d.ReadCrontab(user)
+			if !ok {
+				continue
+			}
+			entries, errs := ParseCrontab(text)
+			arm(entries, user, errs, "crontab for "+user)
+		}
+		// §33: a package's own schedule (the nightly backup, a mirror sync)
+		// lands in /etc/cron.d, which is where a package may write — and cron
+		// reads it as a system crontab, with the user named on each line.
+		for _, path := range d.CronDotFiles() {
+			data, ok := d.FS.Read(path)
+			if !ok {
+				continue
+			}
+			entries, errs := ParseSystemCrontab(string(data))
+			arm(entries, "", errs, path)
 		}
 	}
 	w.Cron.Entries = fresh

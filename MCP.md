@@ -11,7 +11,10 @@ The initial tool set is deliberately small:
 * `world_status` reports simulation time and the AI character's own device.
 * `run_shell` runs one virtual shell command as `mcp-agent`. Commands can
   change persistent simulated state, so treat this tool as a game-control
-  capability, not a read-only chat interface.
+  capability, not a read-only chat interface. There is no per-command
+  allowlist: the tool carries every NeoHome builtin, which includes the
+  network-facing ones (`whois`, `scan`, `recon`, `ftp`, `sftp`, `scp`, …), so
+  additions to the shell surface need no change here.
 
 All MCP clients currently share this one character and its permissions;
 per-client identities and authorization policies are not implemented yet.

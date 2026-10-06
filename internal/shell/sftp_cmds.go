@@ -15,8 +15,9 @@ import (
 )
 
 // scpPath splits an scp argument into its local or remote form:
-//   file             → local
-//   [user@]host:path → remote
+//
+//	file             → local
+//	[user@]host:path → remote
 func scpPath(s *Shell, arg string) (user, host, p string, remote bool) {
 	i := strings.Index(arg, ":")
 	if i < 0 {
@@ -43,15 +44,8 @@ func sshLogin(s *Shell, user, host, ip string, dst *core.Device) (*core.User, in
 	if u == nil {
 		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
 		s.ReadPasswordLine("")
-		s.Dev.Fail2Ban[ip]++
+		dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "sftp password for "+user)
 		fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
-		return nil, 1
-	}
-	if s.Dev.Fail2Ban == nil {
-		s.Dev.Fail2Ban = map[string]int{}
-	}
-	if s.Dev.Fail2Ban[ip] > 3 {
-		fmt.Fprintf(s.Out, "%s: connect to host %s port 22: Connection timed out\n", "ssh", host)
 		return nil, 1
 	}
 	allowPass := true
@@ -63,12 +57,12 @@ func sshLogin(s *Shell, user, host, ip string, dst *core.Device) (*core.User, in
 	if allowPass {
 		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
 		pass := s.ReadPasswordLine("")
-		if pass != u.Pass {
-			s.Dev.Fail2Ban[ip]++
+		if !u.CheckPassword(pass) {
+			dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "sftp password for "+user)
 			fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
 			return nil, 1
 		}
-	} else if !s.W.AssistantKeyTrusted(dst) {
+	} else if !s.W.AssistantKeyTrusted(s.Dev, dst) {
 		fmt.Fprintf(s.Out, "%s: connect to host %s port 22: Permission denied (publickey)\n", "ssh", host)
 		return nil, 1
 	}

@@ -8,6 +8,7 @@ package shell
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"neohome/internal/core"
 )
@@ -15,7 +16,68 @@ import (
 func init() {
 	builtinTable["camera"] = cmdCamera
 	builtinTable["lock"] = cmdLock
+	// camctl lives on the camera itself: it is the vendor's own CLI, the thing
+	// an owner (or someone who guessed the default admin password) runs to
+	// switch cloud viewing on. §14's "Exposed IoT" starts here.
+	builtinTable["camctl"] = cmdCamctl
 }
+
+func cmdCamctl(s *Shell, args []string) int {
+	if s.Dev.Profile != "iot" {
+		s.errf("camctl: this tool runs on the camera")
+		return 1
+	}
+	sub := "status"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "status", "":
+		state := "off"
+		if s.W.CameraCloudOn() {
+			state = "on"
+		}
+		fmt.Fprintf(s.Out, "neoiot camera firmware 3.1\nstream: rtsp://%s:554/stream\ncloud viewing: %s\n",
+			s.Dev.FirstLANIP(), state)
+		// what the camera is configured to do and what the network actually
+		// does are two different things; status must not blur them, because
+		// a stale config is exactly how an "off" camera stays on the internet
+		mapped := false
+		if router := s.W.RouterFor(s.Dev); router != nil {
+			for _, l := range router.FW().UPnPLeases {
+				if l.IP != s.Dev.FirstLANIP() {
+					continue
+				}
+				mapped = true
+				fmt.Fprintf(s.Out, "upstream mapping: %s/%d -> %s:%d (%s)\n",
+					forEachProto(l.Proto), l.EPort, l.IP, l.IPort, l.Desc)
+			}
+		}
+		switch {
+		case s.W.CameraCloudOn() && !mapped:
+			fmt.Fprintln(s.Out, "warning: cloud viewing is configured but the gateway holds no mapping — the stream is not reachable from the internet")
+		case !s.W.CameraCloudOn() && mapped:
+			fmt.Fprintln(s.Out, "warning: cloud viewing is off but the gateway still forwards the stream")
+		}
+		return 0
+	case "cloud":
+		on := true
+		if len(args) > 1 {
+			on = args[1] == "on" || args[1] == "enable" || args[1] == "1"
+		}
+		msg, err := s.W.CameraCloud(s.Dev, on)
+		if err != nil {
+			s.errf("camctl: %v", err)
+			return 1
+		}
+		fmt.Fprintln(s.Out, msg)
+		return 0
+	}
+	s.errf("usage: camctl [status|cloud on|cloud off]")
+	return 1
+}
+
+func forEachProto(p string) string { return strings.ToUpper(p) }
 
 func cmdCamera(s *Shell, args []string) int {
 	sub := ""

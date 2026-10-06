@@ -290,27 +290,213 @@ func cmdTouch(s *Shell, args []string) int {
 func cmdEcho(s *Shell, args []string) int {
 	sep := " "
 	nl := true
+	escapes := false
 	var parts []string
 	for _, a := range args {
-		if a == "-n" {
+		switch a {
+		case "-n":
 			nl = false
+			continue
+		case "-e":
+			// -e is the flag that turns \n into a newline; without it the
+			// backslash is data, which is why `echo -e` exists at all
+			escapes = true
+			continue
+		case "-E":
+			escapes = false
 			continue
 		}
 		parts = append(parts, a)
 	}
-	fmt.Fprint(s.Out, strings.Join(parts, sep))
+	line := strings.Join(parts, sep)
+	if escapes {
+		line = printfText(line)
+	}
+	fmt.Fprint(s.Out, line)
 	if nl {
 		fmt.Fprint(s.Out, "\n")
 	}
 	return 0
 }
 
+// cmdPrintf is BusyBox printf: FORMAT [ARG...]. Escapes are applied, the
+// conversions really consume arguments, and the format repeats until every
+// argument is used — which is what makes `printf '%s\n' a b c` the idiom it is,
+// and what a shell script writing a config file depends on.
 func cmdPrintf(s *Shell, args []string) int {
 	if len(args) == 0 {
 		return 0
 	}
-	fmt.Fprintf(s.Out, "%s %s\n", args[0], strings.Join(args[1:], " "))
+	format, rest := args[0], args[1:]
+	for {
+		out, used, conv := printfOnce(format, rest)
+		fmt.Fprint(s.Out, out)
+		if !conv || used >= len(rest) {
+			break
+		}
+		rest = rest[used:]
+	}
 	return 0
+}
+
+// printfOnce renders one pass of the format. It reports how many arguments the
+// pass consumed and whether the format had any conversion at all (a format
+// without conversions prints once, however many arguments were given).
+func printfOnce(format string, args []string) (string, int, bool) {
+	var b strings.Builder
+	used, conv := 0, false
+	for i := 0; i < len(format); {
+		c := format[i]
+		if c == '\\' {
+			esc, n := printfEscape(format[i:])
+			b.WriteString(esc)
+			i += n
+			continue
+		}
+		if c != '%' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		// flags, width and precision travel to Go's own formatter unchanged:
+		// %-5s, %08.2f and %#x mean the same thing in both.
+		j := i + 1
+		for j < len(format) && strings.IndexByte("-+ #0.0123456789", format[j]) >= 0 {
+			j++
+		}
+		if j >= len(format) {
+			b.WriteString(format[i:])
+			break
+		}
+		prefix, verb := format[i:j], format[j]
+		i = j + 1
+		if verb == '%' {
+			b.WriteByte('%')
+			continue
+		}
+		conv = true
+		arg := ""
+		if used < len(args) {
+			arg = args[used]
+			used++
+		}
+		switch verb {
+		case 's':
+			b.WriteString(fmt.Sprintf(prefix+"s", arg))
+		case 'q':
+			b.WriteString(strconv.Quote(arg))
+		case 'c':
+			if arg != "" {
+				b.WriteString(fmt.Sprintf(prefix+"c", []rune(arg)[0]))
+			}
+		case 'b':
+			// %b is echo -e on one argument: the escapes are in the data
+			b.WriteString(fmt.Sprintf(prefix+"s", printfText(arg)))
+		case 'd', 'i', 'u', 'o', 'x', 'X':
+			n, _ := strconv.ParseInt(strings.TrimSpace(arg), 0, 64)
+			goVerb := verb
+			if goVerb == 'i' || goVerb == 'u' {
+				goVerb = 'd'
+			}
+			b.WriteString(fmt.Sprintf(prefix+string(goVerb), n))
+		case 'f', 'e', 'E', 'g', 'G':
+			f, _ := strconv.ParseFloat(strings.TrimSpace(arg), 64)
+			b.WriteString(fmt.Sprintf(prefix+string(verb), f))
+		default:
+			// an unknown verb is echoed as written rather than invented
+			b.WriteString(prefix + string(verb))
+		}
+	}
+	return b.String(), used, conv
+}
+
+// printfText applies backslash escapes to a whole string. This is what a shell
+// means by "the escapes are in the data" (%b), and it is the one place escapes
+// are interpreted — a double-quoted argument keeps its backslash, exactly as a
+// real shell does with echo.
+func printfText(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '\\' {
+			esc, n := printfEscape(s[i:])
+			b.WriteString(esc)
+			i += n
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// printfEscape reads one backslash escape and reports the bytes it consumed.
+// An escape nobody knows keeps its backslash, which is what the C library does.
+func printfEscape(s string) (string, int) {
+	if len(s) < 2 {
+		return "\\", 1
+	}
+	switch s[1] {
+	case 'n':
+		return "\n", 2
+	case 't':
+		return "\t", 2
+	case 'r':
+		return "\r", 2
+	case 'a':
+		return "\a", 2
+	case 'b':
+		return "\b", 2
+	case 'f':
+		return "\f", 2
+	case 'v':
+		return "\v", 2
+	case 'e':
+		return "\x1b", 2
+	case '\\':
+		return "\\", 2
+	case '"':
+		return "\"", 2
+	case '\'':
+		return "'", 2
+	case '0', '1', '2', '3', '4', '5', '6', '7':
+		n, used := 0, 0
+		for k := 1; k < len(s) && k <= 3; k++ {
+			d := s[k]
+			if d < '0' || d > '7' {
+				break
+			}
+			n = n*8 + int(d-'0')
+			used++
+		}
+		return string(rune(n)), 1 + used
+	case 'x':
+		n, used := 0, 0
+		for k := 2; k < len(s) && k <= 3; k++ {
+			d := hexDigit(s[k])
+			if d < 0 {
+				break
+			}
+			n = n*16 + d
+			used++
+		}
+		if used == 0 {
+			return "\\", 1
+		}
+		return string(rune(n)), 1 + used
+	}
+	return s[:2], 2
+}
+
+func hexDigit(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
 }
 
 func cmdLn(s *Shell, args []string) int {

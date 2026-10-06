@@ -18,12 +18,15 @@ func TestFastfetchReportsDeviceSpecificState(t *testing.T) {
 		{
 			deviceID: "pc-alex",
 			user:     "alex",
-			want:     []string{"NeoOS 13.2", "Generic Desktop", "x86_64", "eth0[lan]=10.77.1.11", "IPv6: not configured"},
+			// §13: the household has real v6 — the host reports both its
+			// global address and its ULA, and not the link-local one every
+			// v6 interface has whether or not it can reach anything
+			want: []string{"NeoOS 13.2", "Generic Desktop", "x86_64", "eth0[lan]=10.77.1.11", "IPv6: configured (2001:db8:fbfe:10::b/64", "fd00:77:1::b/64"},
 		},
 		{
 			deviceID: "router-alex",
 			user:     "root",
-			want:     []string{"NeoWRT 24.10", "Archer C7 (stock)", "mips", "eth0[lan]=10.77.1.1", "eth0[wan]="},
+			want:     []string{"NeoWRT 24.10", "Archer C7 (stock)", "mips", "eth0[lan]=10.77.1.1", "eth0.2[wan]="},
 		},
 		{
 			deviceID: "asst-alex",

@@ -114,6 +114,10 @@ func (d *Device) LanNet() string { return lanNetOf(d) }
 // AllocPublic exported for VPS creation.
 func (w *World) AllocPublic() string { return w.allocPublic() }
 
+// AllocPublicFor exported for callers that want an address out of a particular
+// operator's block (the provider lending a reserved address, for instance).
+func (w *World) AllocPublicFor(profile string) string { return w.allocPublicFor(profile) }
+
 // AddIP exported.
 func (w *World) AddIP(ip, id string) { w.IPMap[ip] = id }
 
@@ -233,6 +237,15 @@ func LoadWorld(path string) (*World, error) {
 		// saves from before sticks existed; a no-op unless a stick exists
 		seedUSB(w)
 	}
+	if w.Prov != nil {
+		// saves from before the panel kept regions or node records
+		if len(w.Prov.Regions) == 0 {
+			w.Prov.Regions = DefaultRegions()
+		}
+		if w.Prov.Nodes == nil {
+			w.Prov.Nodes = map[string]*NodeRecord{}
+		}
+	}
 	return w, nil
 }
 
@@ -255,3 +268,7 @@ func (d *Device) MemUsed() int {
 
 // sourceIPFor exported for shell.
 func (d *Device) SourceIPFor(dst *Device) string { return d.sourceIPFor(dst) }
+
+// UpstreamsForTest exposes a forwarder's upstream list to tests that need to
+// see the resolver chain rather than guess it.
+func UpstreamsForTest(d *Device) []string { return d.upstreamServers() }

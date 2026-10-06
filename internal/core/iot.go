@@ -30,8 +30,8 @@ type IoT struct {
 	WrongPIN     int
 	LockoutUntil int // tick; three wrong codes buy a lockout
 
-	SeenEvents int // recorder cursor into World.Events
-	ClipSeq    int
+	SeenEvents  int // recorder cursor into World.Events
+	ClipSeq     int
 	lastDropLog int // tick of the last "recordings dropped" notice
 }
 
@@ -256,4 +256,79 @@ func (w *World) LockCommand(src *Device, u *User, action, code string) (string, 
 		return "fresh batteries: 100%", nil
 	}
 	return "", fmt.Errorf("unknown action %q", action)
+}
+
+// ---- cloud viewing: the §14 "Exposed IoT" surface ----
+
+// CameraCloudPort is the stream port the vendor's cloud service maps when the
+// owner turns cloud viewing on.
+const CameraCloudPort = 554
+
+// CameraCloudConfig is the camera's own configuration file: turning the
+// feature on is a real edit, and the state survives a reboot.
+const CameraCloudConfig = "/etc/cam.conf"
+
+// CameraCloudOn reports whether cloud viewing is configured on the camera.
+// The file is the truth, not a flag in the world: a camera whose config says
+// on is a camera that asked its router for a hole.
+func (w *World) CameraCloudOn() bool {
+	cam := w.CameraDev()
+	if cam == nil {
+		return false
+	}
+	data, ok := cam.FS.Read(CameraCloudConfig)
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		key, val, has := strings.Cut(strings.TrimSpace(line), "=")
+		if has && strings.TrimSpace(key) == "cloud" {
+			return strings.TrimSpace(val) == "on"
+		}
+	}
+	return false
+}
+
+// CameraCloud turns cloud viewing on or off, and with it the UPnP mapping that
+// makes the stream reachable from the internet. Both halves are real: the
+// camera writes its own config, and the router only opens the port if its
+// UPnP daemon is running and it is asked properly.
+func (w *World) CameraCloud(actor *Device, on bool) (string, error) {
+	cam := w.CameraDev()
+	if cam == nil {
+		return "", fmt.Errorf("no camera in this world")
+	}
+	router := w.RouterFor(cam)
+	if router == nil {
+		return "", fmt.Errorf("the camera has no gateway")
+	}
+	if on {
+		lease := UPnPLease{Proto: "tcp", EPort: CameraCloudPort, IP: cam.FirstLANIP(),
+			IPort: CameraCloudPort, Desc: "cloud-cam"}
+		if err := w.UPnPMap(router, cam, lease); err != nil {
+			// fail closed: a camera that could not get its hole is not
+			// secretly reachable, and the owner is told why
+			cam.Logf("warn", "camctl", "cloud viewing unavailable: %v", err)
+			return "", fmt.Errorf("cloud viewing unavailable: %v", err)
+		}
+		cam.FS.Write(CameraCloudConfig,
+			"# vendor cloud service\ncloud = on\nstream_port = 554\nupload = recordings/highlights\n",
+			0644, "root", "root")
+		cam.Logf("info", "camctl", "cloud viewing enabled: stream mapped through %s", router.Hostname)
+		if actor != nil {
+			w.AddEvent(cam.ID, "warn", "camctl", "%s enabled cloud viewing on the front door camera",
+				actor.Hostname)
+		}
+		return fmt.Sprintf("cloud viewing on: %s now maps tcp/%d to %s:%d",
+			router.Hostname, CameraCloudPort, cam.FirstLANIP(), CameraCloudPort), nil
+	}
+	removed := w.UPnPUnmap(router, CameraCloudPort, "tcp", actor)
+	cam.FS.Write(CameraCloudConfig,
+		"# vendor cloud service\ncloud = off\nstream_port = 554\nupload = local\n",
+		0644, "root", "root")
+	cam.Logf("info", "camctl", "cloud viewing disabled")
+	if !removed {
+		return "cloud viewing off (no upstream mapping was open)", nil
+	}
+	return "cloud viewing off: the router's mapping was removed", nil
 }

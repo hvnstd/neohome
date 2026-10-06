@@ -152,7 +152,8 @@ func runPlayerSession(w *core.World, who, ip string, out io.Writer, in io.Reader
 	if !pc.Powered() {
 		bmc := w.OutOfBand()
 		if bmc != nil && bmc.Powered() {
-			fmt.Fprintf(out, "home-pc is down (no power) — connecting to %s over out-of-band management\r\n", bmc.Hostname)
+			fmt.Fprintf(out, "%s is down (%s) — connecting to %s over out-of-band management\r\n",
+				pc.Hostname, pc.UnavailableReason(), bmc.Hostname)
 			pc = bmc
 			landed = "bmc"
 		}

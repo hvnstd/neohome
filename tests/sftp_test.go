@@ -58,15 +58,26 @@ func TestSFTPTransferOverNetwork(t *testing.T) {
 
 func TestSFTPAuthIsReal(t *testing.T) {
 	w := core.NewWorld()
+	repairDNS(t, w)
+	quietMirrorCron(t, w)
 	pc := w.Devices["pc-alex"]
-	before := pc.Fail2Ban["10.77.1.30"]
+	nas := w.Devices["nas-alex"]
+	// §33: the door is closed by the *target's* fail2ban, and fail2ban is
+	// installed software. Without it the failures are recorded and nobody is
+	// banned — the honest starting point every machine begins from.
+	failsBefore := len(nas.Sec().Fails)
 
 	out := sftpExec(t, w, pc, "alex", "sftp alex@nas", "wrongpass", "quit")
 	if !strings.Contains(out, "Permission denied, please try again.") {
 		t.Fatalf("a wrong password must be refused:\n%s", out)
 	}
-	if pc.Fail2Ban["10.77.1.30"] != before+1 {
-		t.Fatal("the failed sftp login did not feed fail2ban")
+	if len(nas.Sec().Fails) != failsBefore+1 {
+		t.Fatal("the failed sftp login must be recorded on the machine it was aimed at")
+	}
+	// install the jail and let the failures speak for themselves
+	run(t, w, nas, "root", "apt update")
+	if out := run(t, w, nas, "root", "apt install fail2ban"); !strings.Contains(out, "Setting up fail2ban") {
+		t.Fatalf("fail2ban should install from the mirror:\n%s", out)
 	}
 	// an account that does not exist on the NAS is refused identically
 	out = sftpExec(t, w, pc, "alex", "sftp ghost@nas", "whatever", "quit")
@@ -74,13 +85,21 @@ func TestSFTPAuthIsReal(t *testing.T) {
 		t.Fatalf("an unknown account must be refused identically:\n%s", out)
 	}
 
-	// four bad attempts trip the ban: the next connection times out
+	// the shipped jail is three failures in ten minutes: the next connection
+	// times out, and the ban is visible in the jail's own report
 	for i := 0; i < 3; i++ {
 		sftpExec(t, w, pc, "alex", "sftp alex@nas", "wrongpass", "quit")
+	}
+	w.Tick()
+	if len(nas.ActiveBans()) == 0 {
+		t.Fatal("three failures should have tripped the shipped jail")
 	}
 	out = sftpExec(t, w, pc, "alex", "sftp alex@nas", "alex123", "quit")
 	if !strings.Contains(out, "Connection timed out") {
 		t.Fatalf("fail2ban did not close the door:\n%s", out)
+	}
+	if report := run(t, w, nas, "root", "fail2ban-client status"); !strings.Contains(report, "Currently banned:") {
+		t.Fatalf("the jail should report the ban:\n%s", report)
 	}
 }
 

@@ -115,6 +115,21 @@ func (w *World) FaultDNSActive() bool {
 
 func (d *Device) InstallPkg(p *VPkg) []string {
 	var actions []string
+	// recording the package is part of installing it: the old callers set this
+	// map by hand, which is exactly how a device ends up with files on disk and
+	// no record of what put them there.
+	if d.Installed == nil {
+		d.Installed = map[string]*VPkg{}
+	}
+	d.Installed[p.Name] = p
+	if d.InstalledFrom == nil {
+		d.InstalledFrom = map[string]string{}
+	}
+	if d.InstalledFrom[p.Name] == "" && d.W != nil {
+		if r := d.W.RepoForDevice(d, p.Name); r != nil {
+			d.InstalledFrom[p.Name] = r.Name
+		}
+	}
 	for pth, f := range p.Files {
 		mode := f.Mode
 		if mode == 0 {
@@ -153,9 +168,20 @@ func (d *Device) InstallPkg(p *VPkg) []string {
 			}
 		}
 	}
+	if len(p.Procs) > 0 {
+		d.UpsertProcs(p.Procs)
+	}
 	if p.Malicious {
-		d.AddProc(&Proc{Name: "updater", Args: "--daemon", User: "www-data", CPU: 40, Mem: 60, TTY: "?", State: "R", Start: d.W.Sim, Kind: "builtin"})
-		actions = append(actions, "postinst registered background updater (suspicious? check 'ps')")
+		// what the package does is declared in its payload; what makes it
+		// suspicious is that a third-party postinst started something the
+		// player did not ask for. Both facts land in the world's logs.
+		if len(p.Procs) == 0 {
+			d.AddProc(&Proc{Name: "updater", Args: "--daemon", User: "www-data", CPU: 40, Mem: 60,
+				TTY: "?", State: "R", Start: d.W.Sim, Kind: "builtin"})
+		}
+		d.Logf("warn", "pkg", "%s postinst started an unauthenticated background service", p.Name)
+		d.W.AddEvent(d.ID, "warn", "pkg", "%s started a background service from a third-party package", p.Name)
+		actions = append(actions, "postinst registered background updater (suspicious? check 'ps' and 'logread')")
 	}
 	if p.PostInst != "" {
 		actions = append(actions, "postinst: "+p.PostInst)
@@ -216,6 +242,19 @@ func (w *World) Tick() {
 	w.BBSTick()
 	w.IoTTick()
 	w.SMSTick()
+	w.MirrorTick()
+	w.LinkTick()
+	w.BatteryTick()
+	w.PrintTick()
+	// §33: the world's scanner acts first, then the defensive tools read what
+	// it really did. Order matters — a jail that bans a source must have done
+	// so before the resource accounting describes the machine, and a stopped
+	// service really does nothing, which is what makes the tools installable
+	// rather than decorative.
+	w.ScannerTick()
+	w.SecurityTick()
+	// §17 runs last: the numbers it charges describe the world as it now is
+	w.ResourceTick()
 }
 
 func (w *World) AssistantSkillCount() int { return w.assistSkills }

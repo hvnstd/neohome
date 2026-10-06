@@ -66,8 +66,12 @@ func cmdPs(s *Shell, args []string) int {
 func cmdTop(s *Shell, args []string) int {
 	procs := append([]*core.Proc{}, s.Dev.Procs...)
 	sort.Slice(procs, func(i, j int) bool { return procs[i].CPU > procs[j].CPU })
-	fmt.Fprintf(s.Out, "top - %s up %s, %d user, load average: 0.00, 0.01, 0.05\n",
-		s.Dev.Hostname, s.Dev.Uptime().Round(time.Second), 1)
+	tr := s.Dev.Resources()
+	fmt.Fprintf(s.Out, "top - %s up %s, %d user, load average: %.2f, %.2f, %.2f\n",
+		s.Dev.Hostname, s.Dev.Uptime().Round(time.Second), len(s.Dev.Users), tr.Load1, tr.Load5, tr.Load15)
+	fmt.Fprintf(s.Out, "Tasks: %d total, %d running, %d sleeping | Mem: %s/%d MiB | Swap: %s/%d MiB\n",
+		len(s.Dev.Procs)+1, runnable(s.Dev)+1, sleeping(s.Dev), fmtMem(s.Dev.MemUsed()),
+		s.Dev.HW.RAMMB, fmtMem(tr.SwapUsedMB), s.Dev.SwapTotalMB())
 	fmt.Fprintf(s.Out, "%-8s %6s %6s %6s %s\n", "PID", "USER", "PR", "NI", "VIRT")
 	for _, p := range procs {
 		if len(procs) > 20 {
@@ -83,19 +87,64 @@ func cmdTop(s *Shell, args []string) int {
 }
 
 func cmdHtop(s *Shell, args []string) int {
-	procs := append([]*core.Proc{}, s.Dev.Procs...)
+	d := s.Dev
+	r := d.Resources()
+	procs := append([]*core.Proc{}, d.Procs...)
 	sort.Slice(procs, func(i, j int) bool { return procs[i].CPU > procs[j].CPU })
-	if len(procs) > 25 {
-		procs = procs[:25]
+	shown := procs
+	if len(shown) > 25 {
+		shown = shown[:25]
 	}
-	fmt.Fprintf(s.Out, "Mem: %d/%d MiB\n", s.Dev.MemUsed(), s.Dev.HW.RAMMB)
-	fmt.Fprintf(s.Out, "CPU: %.1f%%\n", cpuUsed(s.Dev))
-	fmt.Fprintf(s.Out, "Uptime: %s\n\n", s.Dev.Uptime().Round(time.Second))
-	fmt.Fprintf(s.Out, "%-8s %-8s %6s %6s %s\n", "PID", "USER", "CPU", "MEM", "CMD")
-	for _, p := range procs {
-		fmt.Fprintf(s.Out, "%-8d %-8s %5.1f%% %5d %s\n", p.PID, p.User, p.CPU, p.Mem, p.Name)
+	// the percentages are of the whole machine, the way htop's bars are
+	capacity := d.CPUCapacity()
+	cpuPct := 0.0
+	if capacity > 0 {
+		cpuPct = cpuUsed(d) / capacity * 100
+	}
+	running, _ := d.LoadProcs()
+	fmt.Fprintf(s.Out, "%s — up %s, %d user(s), load average: %.2f %.2f %.2f\n",
+		d.Hostname, d.Uptime().Round(time.Second), len(d.Users), r.Load1, r.Load5, r.Load15)
+	fmt.Fprintf(s.Out, "Tasks: %d total, %d running | %d cores, %d MHz each\n",
+		len(d.Procs)+1, running+1, d.HW.Cores, d.HW.CPUMHz)
+	used := d.MemUsed()
+	fmt.Fprintf(s.Out, "Mem : %s/%d MiB (%.1f%%)\n", fmtMem(used), d.HW.RAMMB, pctOf(used, d.HW.RAMMB))
+	fmt.Fprintf(s.Out, "Swp : %s/%d MiB\n", fmtMem(r.SwapUsedMB), d.SwapTotalMB())
+	fmt.Fprintf(s.Out, "Cpu : %.1f%% total", cpuPct)
+	if r.Share < 1 {
+		fmt.Fprintf(s.Out, "  (%.0f%% of what the processes asked for — the queue is over capacity)", r.Share*100)
+	}
+	fmt.Fprintln(s.Out)
+	fmt.Fprintf(s.Out, "%-8s %-8s %6s %6s %6s %s\n", "PID", "USER", "CPU%", "WANT%", "MEM", "CMD")
+	for _, p := range shown {
+		want := ""
+		if p.WantCPU > p.CPU {
+			want = fmt.Sprintf("%.1f", p.WantCPU)
+		} else {
+			want = fmt.Sprintf("%.1f", p.CPU)
+		}
+		fmt.Fprintf(s.Out, "%-8d %-8s %5.1f%% %5s%% %5dM %s\n", p.PID, p.User, p.CPU, want, p.Mem, p.Name)
+	}
+	if used > d.HW.RAMMB {
+		fmt.Fprintf(s.Out, "\n! %d MiB over RAM: the kernel pages to swap, and kills the biggest process when that runs out\n", used-d.HW.RAMMB)
+	}
+	if d.DiskFull() {
+		fmt.Fprintf(s.Out, "! filesystem full (%d/%d MiB): writes are failing\n", d.FS.DiskUsedMB(), d.DiskLimitMB())
 	}
 	return 0
+}
+
+func fmtMem(mb int) string {
+	if mb >= 1024 {
+		return fmt.Sprintf("%.1fG", float64(mb)/1024)
+	}
+	return fmt.Sprintf("%dM", mb)
+}
+
+func pctOf(part, whole int) float64 {
+	if whole <= 0 {
+		return 0
+	}
+	return float64(part) / float64(whole) * 100
 }
 
 func cmdKill(s *Shell, args []string) int {
@@ -153,19 +202,45 @@ func cmdNice(s *Shell, args []string) int {
 }
 
 func cmdFree(s *Shell, args []string) int {
+	d := s.Dev
+	r := d.Resources()
+	used := d.MemUsed()
+	free := d.HW.RAMMB - used
+	if free < 0 {
+		free = 0
+	}
+	// a kb-first view like procps, but every number is the machine's own state
 	fmt.Fprintf(s.Out, "              total        used        free      shared  buff/cache   available\n")
 	fmt.Fprintf(s.Out, "Mem:      %10d %10d %10d %10d %10d %10d\n",
-		s.Dev.HW.RAMMB*1024, s.Dev.MemUsed()*1024, (s.Dev.HW.RAMMB-s.Dev.MemUsed())*1024,
-		0, 0, (s.Dev.HW.RAMMB-s.Dev.MemUsed())*1024)
-	fmt.Fprintf(s.Out, "Swap:     %10d %10d %10d\n", s.Dev.HW.RAMMB*512, 0, s.Dev.HW.RAMMB*512)
+		d.HW.RAMMB*1024, used*1024, free*1024, 0, 0, free*1024)
+	swapTotal, swapUsed := d.SwapTotalMB(), r.SwapUsedMB
+	fmt.Fprintf(s.Out, "Swap:     %10d %10d %10d\n", swapTotal*1024, swapUsed*1024, (swapTotal-swapUsed)*1024)
+	if used > d.HW.RAMMB {
+		fmt.Fprintf(s.Out, "\nwarning: %d MiB over RAM — the kernel is paging (%d MiB in swap, %d MiB max)\n",
+			used-d.HW.RAMMB, swapUsed, swapTotal)
+	}
+	if r.OOMCount > 0 {
+		fmt.Fprintf(s.Out, "OOM incidents: %d — %s\n", r.OOMCount, r.LastOOM)
+	}
 	return 0
 }
 
 func cmdDf(s *Shell, args []string) int {
+	d := s.Dev
+	limit, used := d.DiskLimitMB(), d.FS.DiskUsedMB()
+	pct := 0
+	if limit > 0 {
+		pct = used * 100 / limit
+	}
 	fmt.Fprintf(s.Out, "Filesystem      Size  Used Avail Use%% Mounted on\n")
-	fmt.Fprintf(s.Out, "overlay         %5dM %5dM %5dM  %d%% /\n",
-		s.Dev.HW.DiskMB, s.Dev.FS.DiskUsedMB(), s.Dev.HW.DiskMB-s.Dev.FS.DiskUsedMB(),
-		(s.Dev.FS.DiskUsedMB()*100)/s.Dev.HW.DiskMB)
+	fmt.Fprintf(s.Out, "overlay         %5dM %5dM %5dM  %d%% /\n", limit, used, d.DiskFreeMB(), pct)
+	if d.DiskFull() {
+		fmt.Fprintf(s.Out, "\nwarning: no space left on device — writes fail until something is removed\n")
+		fmt.Fprintf(s.Out, "  find what is big: du -a / | sort -n | tail   (or remove a file you made)\n")
+	}
+	if r := d.Resources(); r.LogDropped > 0 {
+		fmt.Fprintf(s.Out, "syslog dropped %d line(s) while the disk was full\n", r.LogDropped)
+	}
 	return 0
 }
 
@@ -183,8 +258,12 @@ func cmdDu(s *Shell, args []string) int {
 }
 
 func cmdUptime(s *Shell, args []string) int {
-	fmt.Fprintf(s.Out, " %s up %s, %d user,  load average: 0.00, 0.01, 0.05\n",
-		time.Now().Format("15:04:05"), s.Dev.Uptime().Round(time.Second), 1)
+	// §17: the load average is the machine's own, measured from its process
+	// table — not the host's, and not a constant
+	r := s.Dev.Resources()
+	fmt.Fprintf(s.Out, " %s up %s, %d user,  load average: %.2f, %.2f, %.2f\n",
+		s.W.Sim.Format("15:04:05"), s.Dev.Uptime().Round(time.Second), len(s.Dev.Users),
+		r.Load1, r.Load5, r.Load15)
 	return 0
 }
 
@@ -229,6 +308,26 @@ func (s *Shell) killPID(pid int) bool {
 	}
 	s.Dev.Procs = keep
 	return true
+}
+
+func runnable(d *core.Device) int {
+	n := 0
+	for _, p := range d.Procs {
+		if p.State == "R" || p.State == "D" {
+			n++
+		}
+	}
+	return n
+}
+
+func sleeping(d *core.Device) int {
+	n := 0
+	for _, p := range d.Procs {
+		if p.State == "S" {
+			n++
+		}
+	}
+	return n
 }
 
 func cpuUsed(d *core.Device) float64 {

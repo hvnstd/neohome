@@ -157,7 +157,23 @@ func (w *World) PayUtilities(who string) (int64, error) {
 
 // ProvisionVPS creates a genuine device with a public IP and OS, so it is
 // immediately addressable, SSH-able and scan-able by everything else.
+// ProvisionVPS is the default image: Debian, because that is what novapanel's
+// smallest plan ships with.
 func (w *World) ProvisionVPS(owner, plan, hostname string) (*Device, string, error) {
+	return w.ProvisionVPSWithOS(owner, plan, hostname, "debian")
+}
+
+// ProvisionVPSWithOS buys a node with a chosen distribution (§12: the player
+// picks the OS, and with it the package manager, the file layout and the
+// service manager the box will have).
+func (w *World) ProvisionVPSWithOS(owner, plan, hostname, distro string) (*Device, string, error) {
+	return w.provisionVPS(owner, plan, hostname, distro, "")
+}
+
+// provisionVPS creates a node in a chosen region ("" = the plan's default). It
+// is the single path a node is born through, so the panel's record of the
+// machine and the machine itself can never disagree.
+func (w *World) provisionVPS(owner, plan, hostname, distro, region string) (*Device, string, error) {
 	p := w.Players[owner]
 	if p == nil {
 		return nil, "", fmt.Errorf("no such player: %s", owner)
@@ -186,38 +202,107 @@ func (w *World) ProvisionVPS(owner, plan, hostname string) (*Device, string, err
 			return nil, "", fmt.Errorf("hostname already taken: %s", hostname)
 		}
 	}
+	reg, err := w.RegionByName(orDefault(region, chosen.Region))
+	if err != nil {
+		return nil, "", err
+	}
 	acc.Balance -= chosen.Monthly
-	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: -chosen.Monthly, Memo: "VPS " + hostname + " (" + plan + ")", Balance: acc.Balance})
+	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: -chosen.Monthly,
+		Memo: "VPS " + hostname + " (" + plan + ", " + reg.Name + ")", Balance: acc.Balance})
 	w.Prov.Issued++
 
-	os := OSInfo{Distro: "Debian", Ver: "13", Kernel: "6.12.5", Arch: "x86_64", Shell: "/bin/bash"}
+	os := vpsImage(distro)
 	hw := Hardware{Model: "Nova " + plan, Cores: chosen.Cores, CPUMHz: 2400, RAMMB: chosen.RAM, DiskMB: chosen.Disk, NetMbps: 1000}
 	id := "vps-" + hostname
 	d := w.addDevice(id, hostname, "vps", owner, os, hw, "")
 	d.Boot = w.Sim
-	pub := w.allocPublicFor("vps")
-	d.AttachWAN(pub, "10.0.0.1")
+	// §13: the plan decides what the node's networking really is. A public plan
+	// gets a routable IPv4; a shared plan gets an address inside the provider's
+	// carrier-grade NAT pool, which is on the interface, in use, and *not*
+	// routable — `whois` of it names the provider, and nothing can reach in;
+	// a v6-only plan gets no IPv4 at all, so the node lives on v6 alone.
+	pub := ""
+	switch chosen.IPMode {
+	case "shared":
+		pub = w.AttachSharedWAN(d, "10.0.0.1")
+	case "v6only":
+		d.AttachWAN6Only("10.0.0.1")
+	default:
+		// the address comes out of the region's own block, so `whois` names
+		// the datacenter the node was actually bought in
+		pub = w.allocInAS(reg.ASN)
+		d.AttachWAN(pub, "10.0.0.1")
+	}
+	if chosen.V6 {
+		d.AddWANv6(w.allocV6InAS(reg.ASN))
+	}
 	seedFS(d, "vps")
+	provisionPkgImage(w, d, distro)
 	refreshPasswd(d)
 	// a fresh VPS is reachable but exposes only sshd until the owner adds more
 	d.Services["sshd"] = &Service{Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "any",
 		State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
+	// a cloud image ships root locked, with a sudo account to escalate: no
+	// password means nobody logs in as root, and sudo still works.
+	d.Users["root"] = &User{Name: "root", UID: 0, Groups: []string{"root"},
+		Home: "/root", Shell: os.Shell}
 	d.Users["deploy"] = &User{Name: "deploy", UID: 1000, Pass: randPass(hostname), Groups: []string{"deploy", "sudo"},
-		Home: "/home/deploy", Shell: "/bin/bash"}
+		Home: "/home/deploy", Shell: os.Shell}
 	refreshPasswd(d)
 	d.AddProc(&Proc{Name: "sshd", User: "root", CPU: 0.2, Mem: 20, TTY: "?", State: "S", Start: w.Sim, Svc: "sshd", Kind: "builtin"})
 
-	// DNS registration: the node is now part of the observable internet
-	rec := DNSRecord{Name: hostname + ".neohome.example", IP: pub}
-	w.Records = append(w.Records, rec)
-	for i := range w.Records {
-		if w.Records[i].Name == "home."+owner+".neohome.example" {
-			_ = i
-		}
+	// DNS registration: the node is now part of the observable internet. A
+	// shared-address customer still gets a name — it resolves to the address
+	// the node *has*, which is exactly why resolving it does not make it
+	// reachable.
+	who := pub
+	if who == "" {
+		who = d.FirstWANv6()
 	}
-	w.AddEvent(id, "info", "provider", "VPS %s provisioned: %s (%s)", hostname, pub, plan)
+	if pub != "" {
+		w.Records = append(w.Records, DNSRecord{Name: hostname + ".neohome.example", IP: pub})
+	}
+	if v6 := d.FirstWANv6(); v6 != "" {
+		w.Records = append(w.Records, DNSRecord{Name: hostname + ".neohome.example", IP: v6})
+	}
+	w.AddEvent(id, "info", "provider", "VPS %s provisioned: %s (%s, %s, %s)", hostname, who, plan, chosen.IPMode, reg.Name)
+	// the panel's own record: what was bought, where it runs and how reverse
+	// DNS names it (§12's rDNS), which `vps show` and `dig -x` then read
+	w.recordNode(d, &NodeRecord{DeviceID: id, Plan: plan, Image: distro, Region: reg.Name,
+		Datacenter: reg.Datacenter, RDNS: hostname + ".neohome.example", Monthly: chosen.Monthly, CreatedAt: w.Sim})
 	creds := fmt.Sprintf("deploy@%s password: %s", hostname, d.Users["deploy"].Pass)
 	return d, creds, nil
+}
+
+// vpsImage is the OS image each distribution ships as on novapanel.
+func vpsImage(distro string) OSInfo {
+	switch lower(distro) {
+	case "alpine":
+		return OSInfo{Distro: "Alpine", Ver: "3.20", Kernel: "6.6.20", Arch: "x86_64", Shell: "/bin/ash"}
+	case "arch":
+		return OSInfo{Distro: "Arch", Ver: "rolling", Kernel: "6.12.7", Arch: "x86_64", Shell: "/bin/bash"}
+	case "fedora":
+		return OSInfo{Distro: "Fedora", Ver: "40", Kernel: "6.9.7", Arch: "x86_64", Shell: "/bin/bash"}
+	case "ubuntu":
+		return OSInfo{Distro: "Ubuntu", Ver: "24.04", Kernel: "6.8.0", Arch: "x86_64", Shell: "/bin/bash"}
+	}
+	return OSInfo{Distro: "Debian", Ver: "13", Kernel: "6.12.5", Arch: "x86_64", Shell: "/bin/bash"}
+}
+
+// provisionPkgImage makes the new node's package management real: the image
+// ships the archive key and the distribution's own sources configuration, but
+// no cached index lists — exactly like a fresh cloud image, where the first
+// thing you do is update.
+func provisionPkgImage(w *World, d *Device, distro string) {
+	spec := DistroFor(d)
+	if spec == nil {
+		return
+	}
+	d.FS.Write(spec.Keyring+"/neohome-archive.asc",
+		KeyFile(ArchiveKeyFP, ArchiveKeyOwner, ArchiveKeyValidUntil,
+			"signed package metadata for this world"), 0644, "root", "root")
+	// the image's own sources configuration, written by the provider
+	seedSources(d, spec)
 }
 
 func randPass(seed string) string {
@@ -226,7 +311,10 @@ func randPass(seed string) string {
 		h ^= uint32(seed[i])
 		h *= 16777619
 	}
-	const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+	// 32 characters: the index below is a bit-mask over 5 bits, so the
+	// alphabet must be a power of two or a hash with the high bits set
+	// indexes out of range.
+	const alphabet = "abcdefghjkmnpqrstuvwxyz234567890"
 	var b []byte
 	for i := 0; i < 12; i++ {
 		b = append(b, alphabet[(h>>uint(i*3))%32])

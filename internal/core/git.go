@@ -356,7 +356,8 @@ type gitURL struct {
 }
 
 // parseGitURL accepts the forms this world's client advertises:
-//   https?://[user[:pass]@]host[:port]/<name>.git
+//
+//	https?://[user[:pass]@]host[:port]/<name>.git
 func parseGitURL(raw string) (gitURL, error) {
 	g := gitURL{Scheme: "http", Port: 80}
 	rest := raw
@@ -630,7 +631,7 @@ func (w *World) GitPush(d *Device, dir string, u *User, user, pass string) (stri
 	// authentication is against the server's own account records — the same
 	// simulated check ssh, sudo and imapd perform
 	acc := dst.FindUser(user)
-	if acc == nil || acc.Pass == "" || pass != acc.Pass {
+	if !acc.CheckPassword(pass) {
 		dst.Logf("notice", "git", "push authentication failed for %s from %s", user, d.SourceIPFor(dst))
 		return "", fmt.Errorf("fatal: authentication failed for %s", g.Host)
 	}
@@ -710,7 +711,7 @@ func seedGit(w *World) {
 		d.FS.Write(ServerRepoPath(repo)+"/HEAD", "\n", 0644, "git", "git")
 	}
 	GitSeedCommit(w, "neohome-scripts", map[string]string{
-		"backup.sh":      "#!/bin/sh\n# nightly mirror of the NAS onto the assistant node\ntar -czf /srv/backup/home-$(date +%F).tgz /home\n",
+		"backup.sh":       "#!/bin/sh\n# nightly mirror of the NAS onto the assistant node\ntar -czf /srv/backup/home-$(date +%F).tgz /home\n",
 		"mirror-probe.sh": "#!/bin/sh\ncurl -s -o /tmp/probe.log http://mirror.neohome.example/debian/Release\n",
 	}, "alex", "init: backup and mirror probe scripts")
 	GitSeedCommit(w, "neohome-scripts", map[string]string{

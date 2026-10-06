@@ -2,9 +2,10 @@ package shell
 
 import (
 	"fmt"
-	"sort"
+	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"neohome/internal/core"
 )
@@ -14,7 +15,7 @@ func init() {
 		name string
 		fn   Cmd
 	}{
-		{"job", cmdJob}, {"jobs", cmdJob}, {"bank", cmdBank}, {"irc", cmdIRC},
+		{"job", cmdJob}, {"jobs", cmdJob}, {"bank", cmdBank},
 		{"mail", cmdMail}, {"assist", cmdAssist}, {"scan", cmdScan},
 		{"exploit", cmdExploit}, {"mount", cmdMount}, {"umount", cmdUmount},
 		{"recon", cmdRecon}, {"trace", cmdTrace}, {"evidence", cmdEvidence},
@@ -162,53 +163,6 @@ func cmdBank(s *Shell, args []string) int {
 }
 
 // ---- IRC ----
-
-func cmdIRC(s *Shell, args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintf(s.Out, "channels: ")
-		var chs []string
-		for c := range s.W.Chat.Channels {
-			chs = append(chs, c)
-		}
-		sort.Strings(chs)
-		fmt.Fprintln(s.Out, strings.Join(chs, "  "))
-		fmt.Fprintln(s.Out, "online:   "+strings.Join(s.W.IRCNicks(), "  "))
-		fmt.Fprintln(s.Out, "\nusage: irc read [#chan] | irc say <message> [#chan]")
-		return 0
-	}
-	switch args[0] {
-	case "read", "log", "tail":
-		ch := "#local"
-		if len(args) > 1 {
-			ch = args[1]
-		}
-		for _, m := range s.W.Chat.History {
-			if m.Chan != ch {
-				continue
-			}
-			fmt.Fprintf(s.Out, "[%s] <%s> %s\n", m.At.Format("15:04"), m.Nick, m.Text)
-		}
-		return 0
-	case "say", "msg":
-		if len(args) < 2 {
-			s.errf("usage: irc say MESSAGE [#chan]")
-			return 1
-		}
-		ch := "#local"
-		body := args[1:]
-		if len(body) > 1 && strings.HasPrefix(body[len(body)-1], "#") {
-			ch = body[len(body)-1]
-			body = body[:len(body)-1]
-		}
-		s.W.IRCSend(s.User.Name, ch, strings.Join(body, " "))
-		for _, m := range s.W.Chat.History[len(s.W.Chat.History)-3:] {
-			fmt.Fprintf(s.Out, "[%s] <%s> %s\n", m.At.Format("15:04"), m.Nick, m.Text)
-		}
-		return 0
-	}
-	s.errf("usage: irc [read|say]")
-	return 1
-}
 
 // ---- mail ----
 
@@ -393,10 +347,15 @@ func cmdScan(s *Shell, args []string) int {
 	// A real scanner takes an address or a CIDR, not just a hostname. Match
 	// candidate devices by any of their interface addresses; Dial() below then
 	// decides honest reachability (routing, NAT, firewall) for each port.
+	// The address a host is scanned on is the address that matched the target:
+	// scanning a public range must probe the public address, not the host's LAN
+	// address, or a forwarded service behind a home router could never be seen.
 	var targets []*core.Device
+	addrOf := map[string]string{}
 	if ip, ok, _ := core.DNSAnswer(s.Dev, target); ok {
 		if id, found := s.W.IPMap[ip]; found {
 			targets = append(targets, s.W.Devices[id])
+			addrOf[id] = ip
 		}
 	}
 	if len(targets) == 0 {
@@ -408,6 +367,7 @@ func cmdScan(s *Shell, args []string) int {
 			for _, a := range core.DeviceAddrs(d) {
 				if core.AddrInTarget(a, target) {
 					targets = append(targets, d)
+					addrOf[id] = a
 					break
 				}
 			}
@@ -421,21 +381,25 @@ func cmdScan(s *Shell, args []string) int {
 
 	foundAny := false
 	for _, d := range targets {
+		addr := addrOf[d.ID]
+		if addr == "" {
+			addr = d.FirstLANIP()
+		}
 		open := []string{}
-			for _, p := range ports {
-				svc, dst, msg := core.Dial(s.Dev, d.FirstLANIP(), p)
-				if svc != nil && msg == "connected" {
-					open = append(open, fmt.Sprintf("%d/tcp open  %s  %s", p, svc.Name, svc.Banner))
-					// scanning is an observable act — it leaves evidence on the
-					// target, in the syslog and in the world's event stream
-					// (which is what the front-door camera records)
-					d.Logf("notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
-					s.W.AddEvent(d.ID, "notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
-				}
+		for _, p := range ports {
+			svc, dst, msg := core.Dial(s.Dev, addr, p)
+			if svc != nil && msg == "connected" {
+				open = append(open, fmt.Sprintf("%d/tcp open  %s  %s", p, svc.Name, svc.Banner))
+				// scanning is an observable act — it leaves evidence on the
+				// target, in the syslog and in the world's event stream
+				// (which is what the front-door camera records)
+				d.Logf("notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
+				s.W.AddEvent(d.ID, "notice", "scan", "port scan from %s (%s)", s.User.Name, s.Dev.SourceIPFor(dst))
 			}
+		}
 		if len(open) > 0 {
 			foundAny = true
-			fmt.Fprintf(s.Out, "\nNmap scan report for %s (%s)\n", d.Hostname, d.FirstLANIP())
+			fmt.Fprintf(s.Out, "\nNmap scan report for %s (%s)\n", d.Hostname, addr)
 			fmt.Fprintf(s.Out, "Host is up (0.00%ds latency).\n", 1)
 			for _, o := range open {
 				fmt.Fprintf(s.Out, "  %s\n", o)
@@ -492,6 +456,14 @@ func cmdExploit(s *Shell, args []string) int {
 		return 1
 	}
 
+	// A forwarded port belongs to the machine behind the router, not to the
+	// router: exploit the address the player reached, against the host that
+	// really answers it. Exploiting the router would "succeed" against a
+	// service the router merely forwards.
+	if inner := core.ForwardTarget(s.Dev, ip, chosen.Port); inner != nil {
+		dst = inner
+	}
+
 	// the precondition is checked against real device state, not a flag
 	var svc *core.Service
 	for _, p := range portsOf(dst) {
@@ -517,10 +489,13 @@ func cmdExploit(s *Shell, args []string) int {
 	// it worked — apply the DECLARED EFFECT to world state, honestly
 	fmt.Fprintf(s.Out, "[*] %s\n", chosen.Name)
 	fmt.Fprintf(s.Out, "[*] target %s (%s) satisfies the precondition\n", dst.Hostname, ip)
-	effect := s.applyEffect(dst, chosen)
+	effect := s.applyEffect(dst, ip, chosen)
 	for _, l := range effect {
 		fmt.Fprintf(s.Out, " * %s\n", l)
 	}
+	// §33: the attempt is reported to the target, so a `suricata` running
+	// there raises its exploit rule on real evidence rather than a label.
+	dst.NoteExploit(s.Dev.SourceIPFor(dst), s.Dev.Hostname, chosen.ID)
 	// success still leaves evidence, proportional to how noisy the vuln is
 	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(dst), dst.ID,
 		"exploit "+chosen.ID+" succeeded", chosen.Detection)
@@ -545,29 +520,78 @@ func svcNameFor(d *core.Device, port int) string {
 	return ""
 }
 
-// applyEffect turns the vuln's declared outcome into real state changes.
-func (s *Shell) applyEffect(dst *core.Device, v *core.Vuln) []string {
+// applyEffect turns the vuln's declared outcome into real state changes — over
+// the wire, with the world's own protocol code, so an effect can only succeed
+// where the real service would really have accepted it. The FTP effects used to
+// write files straight into the target's VFS and read credentials out of the
+// account records; both now perform an anonymous session through Dial() and
+// read the credential out of the file the vuln names. Nothing here is a
+// shortcut around a service, a permission or a network gate.
+func (s *Shell) applyEffect(dst *core.Device, ip string, v *core.Vuln) []string {
 	var out []string
 	switch {
 	case strings.HasPrefix(v.Effect, "ftp-access"):
-		// anonymous write lands a real file in /srv/ftp/pub
-		dst.FS.MkdirAll("/srv/ftp/pub", 0777, "nobody", "nogroup")
-		dst.FS.Write("/srv/ftp/pub/.probe", "uploaded "+s.W.Sim.Format("15:04:05")+"\n", 0644, "nobody", "nogroup")
-		out = append(out, "anonymous write accepted: /srv/ftp/pub/.probe created")
-		out = append(out, "now readable: `ftp` the tree, or from here: cat the paths below")
-		// list what an attacker would actually now see
-		if data, ok := dst.FS.Read("/home/devops/deploy/notes.md"); ok {
-			s.stolen = append(s.stolen, "devops/notes.md")
-			out = append(out, "readable: /home/devops/deploy/notes.md")
-			_ = data
+		drop := strings.TrimPrefix(v.Effect, "ftp-access:")
+		sess, err := s.ftpEffectSession(dst, ip)
+		if err != nil {
+			out = append(out, "anonymous access failed: "+err.Error())
+			break
 		}
+		payload := "uploaded " + s.W.Sim.Format("15:04:05") + " from " + s.Dev.Hostname + "\n"
+		if err := sess.Stor(drop, []byte(payload)); err != nil {
+			sess.Close()
+			out = append(out, "anonymous upload refused: "+err.Error())
+			break
+		}
+		out = append(out, "anonymous write accepted: "+drop+" created on "+dst.Hostname)
+		out = append(out, "the drop directory is world-writable; the file is real and the daemon logged it")
+		if entries, err := sess.List(path.Dir(drop)); err == nil {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name)
+			}
+			out = append(out, "visible there now: "+strings.Join(names, " "))
+		}
+		sess.Close()
 	case strings.HasPrefix(v.Effect, "cred-leak"):
 		user := strings.TrimPrefix(v.Effect, "cred-leak:")
-		u := dst.FindUser(user)
-		if u != nil {
-			s.creds = append(s.creds, user+"@"+dst.Hostname+":"+u.Pass)
-			out = append(out, fmt.Sprintf("credential recovered: %s:%s", user, u.Pass))
+		sess, err := s.ftpEffectSession(dst, ip)
+		if err != nil {
+			out = append(out, "anonymous access failed: "+err.Error())
+			break
 		}
+		file := v.File
+		data, err := sess.Retr(file)
+		sess.Close()
+		if err != nil {
+			out = append(out, "read of "+file+" refused: "+err.Error())
+			break
+		}
+		local := "/tmp/" + path.Base(file)
+		if err := s.Dev.WriteGuest(local, data, s.User); err != nil {
+			out = append(out, "could not keep the copy locally: "+err.Error())
+			break
+		}
+		s.stolen = append(s.stolen, file)
+		out = append(out, "fetched "+file+" ("+fmt.Sprintf("%dB", len(data))+") -> "+local)
+		out = append(out, strings.TrimRight(string(data), "\n"))
+		// the credential is read out of the retrieved file, not out of the
+		// account record: if the file does not hold it, the exploit fails
+		pw := credentialFor(string(data), user)
+		if pw == "" {
+			out = append(out, "no credential for "+user+" in that file")
+			break
+		}
+		// and it must really work: a real authenticated login proves it
+		auth, err := s.W.FTPLogin(s.Dev, s.User.Name, dst, user, pw)
+		if err != nil {
+			out = append(out, "credential for "+user+" did not authenticate: "+err.Error())
+			break
+		}
+		auth.Close()
+		s.creds = append(s.creds, user+"@"+dst.Hostname+":"+pw)
+		out = append(out, "credential recovered and verified: "+user+":"+pw)
+		out = append(out, "use it yourself: ftp "+dst.Hostname+" then `user "+user+"`")
 	case strings.HasPrefix(v.Effect, "root-shell"):
 		s.creds = append(s.creds, "root@"+dst.Hostname+":"+dst.FindUser("root").Pass)
 		out = append(out, "root credentials: "+dst.FindUser("root").Pass)
@@ -576,14 +600,49 @@ func (s *Shell) applyEffect(dst *core.Device, v *core.Vuln) []string {
 	return out
 }
 
+// ftpEffectSession opens an anonymous FTP session for an exploit effect: DNS
+// was already resolved by the caller, and Dial() still has to let the
+// connection through (power, routing, the router's port-forward, the firewall
+// and the daemon's service state), so an exploit cannot succeed against a host
+// the player cannot actually reach.
+func (s *Shell) ftpEffectSession(dst *core.Device, ip string) (*core.FTPSession, error) {
+	svc, port := core.FTPDaemon(dst)
+	if svc == nil || svc.State != "running" {
+		return nil, fmt.Errorf("no FTP daemon is running on %s", dst.Hostname)
+	}
+	got, _, msg := core.Dial(s.Dev, ip, port)
+	if got == nil || got.Name != svc.Name {
+		return nil, fmt.Errorf("cannot reach %s:%d (%s)", dst.Hostname, port, msg)
+	}
+	return s.W.FTPLogin(s.Dev, s.User.Name, dst, "anonymous", "anonymous@")
+}
+
+// credentialFor reads "user:password" out of a leaked export, ignoring
+// comments — the same thing a player does with their eyes.
+func credentialFor(export, user string) string {
+	for _, line := range strings.Split(export, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if u, pw, ok := strings.Cut(line, ":"); ok && u == user && pw != "" {
+			return pw
+		}
+	}
+	return ""
+}
+
 func cmdRecon(s *Shell, args []string) int {
 	host := ""
 	if len(args) > 0 {
 		host = args[0]
 	}
 	var target *core.Device
+	ip := ""
 	if host != "" {
-		ip, ok, how := core.DNSAnswer(s.Dev, host)
+		var ok bool
+		var how string
+		ip, ok, how = core.DNSAnswer(s.Dev, host)
 		if !ok {
 			s.errf("cannot resolve %s: %s", host, how)
 			return 1
@@ -597,7 +656,7 @@ func cmdRecon(s *Shell, args []string) int {
 		return 1
 	}
 
-	fmt.Fprintf(s.Out, "recon on %s (%s)\n", target.Hostname, target.FirstLANIP())
+	fmt.Fprintf(s.Out, "recon on %s (%s)\n", target.Hostname, ip)
 	fmt.Fprintf(s.Out, "  profile:  %s\n", target.Profile)
 	fmt.Fprintf(s.Out, "  os:       %s %s (%s, %s)\n", target.OS.Distro, target.OS.Ver, target.OS.Kernel, target.OS.Arch)
 	if target.FirstWANIP() != "" {
@@ -605,6 +664,8 @@ func cmdRecon(s *Shell, args []string) int {
 	}
 	fmt.Fprintf(s.Out, "  uptime:   %s\n", target.Uptime().Round(1e9))
 
+	// The address the player reached is the one probed: on a public address that
+	// is the WAN side, on a LAN address the LAN side.
 	// services actually reachable from where the player stands right now
 	fmt.Fprintf(s.Out, "\nreachable services from your position:\n")
 	any := false
@@ -612,7 +673,7 @@ func cmdRecon(s *Shell, args []string) int {
 		if svc.State != "running" {
 			continue
 		}
-		_, _, msg := core.Dial(s.Dev, target.FirstLANIP(), svc.Port)
+		_, _, msg := core.Dial(s.Dev, ip, svc.Port)
 		if msg == "connected" {
 			any = true
 			fmt.Fprintf(s.Out, "  %-8s %d/tcp  %-12s %s\n", svc.Name, svc.Port, svc.State, svc.Banner)
@@ -622,20 +683,72 @@ func cmdRecon(s *Shell, args []string) int {
 		fmt.Fprintln(s.Out, "  (nothing reachable — check local firewall/scope rules)")
 	}
 
-	fmt.Fprintf(s.Out, "\nknown vulnerabilities matching this host:\n")
-	anyV := false
-	for _, v := range core.Vulns() {
-		var svc *core.Service
-		if v.Port == 21 {
-			svc = target.Svc("vsftpd")
-		} else if v.Port == 22 {
-			if svc = target.Svc("dropbear"); svc == nil {
-				svc = target.Svc("sshd")
+	// A home router's port-forwards are owner-opened holes: recon has to name
+	// the machine each one lands on, because that machine — not the router — is
+	// what the player can actually attack. The list comes from the router's
+	// own configuration and its UPnP leases, so a mapping a program opened an
+	// hour ago shows up here the way it shows up in the router's log.
+	var behind []*core.Device
+	for _, f := range target.FW().AllRedirects() {
+		if !f.Enabled {
+			continue
+		}
+		landing := f.WPort
+		label := fmt.Sprintf("%d/tcp", f.WPort)
+		if f.DMZ {
+			landing = 1 // the DMZ answers any port; probe one to find out
+			label = "all ports (DMZ)"
+		}
+		svc, inner, msg := core.Dial(s.Dev, ip, landing)
+		if svc == nil || msg != "connected" {
+			fmt.Fprintf(s.Out, "  %s -> %s (unreachable now: %s)\n", label, f.DstIP, msg)
+			continue
+		}
+		behind = append(behind, inner)
+		how := "forwarded to"
+		if f.UPnP {
+			how = "opened by UPnP ->"
+		}
+		fmt.Fprintf(s.Out, "  %s -> %s %s (%s): %s running\n",
+			label, how, inner.Hostname, inner.FirstLANIP(), svc.Name)
+	}
+	// and the router's own management, if its config publishes it
+	if target.Profile == "router" {
+		for _, port := range []int{22, 23, 80, 443} {
+			if target.PermitsWAN(port) {
+				fmt.Fprintf(s.Out, "  %d/tcp -> the router's own management is exposed to the internet\n", port)
 			}
 		}
-		if v.Detect(target, svc) {
+	}
+
+	// vulnerabilities, checked against the host that really answers the port
+	check := []*core.Device{target}
+	check = append(check, behind...)
+	fmt.Fprintf(s.Out, "\nknown vulnerabilities matching this host:\n")
+	anyV := false
+	svcFor := func(d *core.Device, v core.Vuln) *core.Service {
+		switch v.Port {
+		case 21:
+			return d.Svc("vsftpd")
+		case 22:
+			if svc := d.Svc("dropbear"); svc != nil {
+				return svc
+			}
+			return d.Svc("sshd")
+		}
+		return nil
+	}
+	for _, d := range check {
+		for _, v := range core.Vulns() {
+			if !v.Detect(d, svcFor(d, v)) {
+				continue
+			}
 			anyV = true
-			fmt.Fprintf(s.Out, "  [%s] %s\n      %s\n      hint: %s\n", v.ID, v.Name, v.Desc, v.Help)
+			where := d.Hostname
+			if d.ID == target.ID {
+				where = "here"
+			}
+			fmt.Fprintf(s.Out, "  [%s] %s (%s)\n      %s\n      hint: %s\n", v.ID, v.Name, where, v.Desc, v.Help)
 		}
 	}
 	if !anyV {
@@ -794,31 +907,86 @@ func cmdVps(s *Shell, args []string) int {
 	switch sub {
 	case "", "list":
 		fmt.Fprintf(s.Out, "novapanel — plans\n")
+		fmt.Fprintf(s.Out, "  %-12s %-6s %-7s %-13s %s\n", "PLAN", "vCPU", "RAM", "IP", "PRICE")
 		for _, p := range s.W.Prov.Plans {
-			fmt.Fprintf(s.Out, "  %-10s %d vCPU  %5d MiB  %6d MiB  %-9s  %s/mo\n",
-				p.Name, p.Cores, p.RAM, p.Disk, p.Region, fmtMoney(p.Monthly))
+			ip := "public IPv4"
+			switch p.IPMode {
+			case "shared":
+				ip = "shared (CGNAT)"
+			case "v6only":
+				ip = "IPv6 only"
+			}
+			if p.V6 {
+				ip += " + v6"
+			}
+			fmt.Fprintf(s.Out, "  %-12s %-6d %-7s %-13s %s/mo  (%s)\n",
+				p.Name, p.Cores, fmt.Sprintf("%d MiB", p.RAM), ip, fmtMoney(p.Monthly), p.Region)
 		}
-		fmt.Fprintln(s.Out, "\nusage: vps create <plan> [hostname]")
+		fmt.Fprintln(s.Out, "\nimages: debian alpine ubuntu fedora arch")
+		var regions []string
+		for _, r := range s.W.NodeRegions() {
+			regions = append(regions, r.Name)
+		}
+		fmt.Fprintf(s.Out, "regions: %s\n", strings.Join(regions, ", "))
+		fmt.Fprintln(s.Out, "note: a shared-address plan has no inbound IPv4 — host on IPv6 or buy a public plan")
+		fmt.Fprintln(s.Out, "usage: vps create <plan> [hostname] [image] [--region R]")
+		fmt.Fprintln(s.Out, "manage a node: vps show|start|stop|reboot|reinstall|console|resize|disk|snapshot|snapshots|restore|rdns <hostname>")
 		return 0
 	case "create", "buy", "new":
-		if len(args) < 2 {
-			s.errf("usage: vps create <plan> [hostname]")
+		region := ""
+		rest := []string{}
+		for i := 1; i < len(args); i++ {
+			if (args[i] == "--region" || args[i] == "-r") && i+1 < len(args) {
+				region = args[i+1]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--region=") {
+				region = strings.TrimPrefix(args[i], "--region=")
+				continue
+			}
+			rest = append(rest, args[i])
+		}
+		if len(rest) < 1 {
+			s.errf("usage: vps create <plan> [hostname] [image] [--region NAME]")
 			return 1
 		}
 		hostname := ""
-		if len(args) > 2 {
-			hostname = args[2]
+		if len(rest) > 1 {
+			hostname = rest[1]
 		}
-		d, creds, err := s.W.ProvisionVPS(s.User.Name, args[1], hostname)
+		image := "debian"
+		if len(rest) > 2 {
+			image = rest[2]
+		}
+		d, creds, err := s.W.ProvisionVPSInRegion(s.User.Name, rest[0], hostname, image, region)
 		if err != nil {
 			s.errf("%v", err)
 			return 1
 		}
 		fmt.Fprintf(s.Out, "provisioning %s...\n", d.Hostname)
-		fmt.Fprintf(s.Out, "public ip: %s\n", d.FirstWANIP())
+		fmt.Fprintf(s.Out, "image:     %s %s\n", d.OS.Distro, d.OS.Ver)
+		if rec := s.W.NodeOf(d); rec != nil {
+			country := "??"
+			if r, err := s.W.RegionByName(rec.Region); err == nil {
+				country = r.Country
+			}
+			fmt.Fprintf(s.Out, "region:    %s (%s, %s, AS%d)\n", rec.Region, rec.Datacenter, country, regionASN(s, rec.Region))
+		}
+		if d.NATed {
+			fmt.Fprintf(s.Out, "ipv4:      %s (shared — carrier-grade NAT, no inbound)\n", core.WANIPOf(d))
+		} else if d.FirstWANIP() != "" {
+			fmt.Fprintf(s.Out, "public ip: %s\n", d.FirstWANIP())
+		} else {
+			fmt.Fprintf(s.Out, "ipv4:      none (IPv6-only plan)\n")
+		}
+		if v6 := d.FirstWANv6(); v6 != "" {
+			fmt.Fprintf(s.Out, "public ip6: %s\n", v6)
+		}
 		fmt.Fprintf(s.Out, "dns:       %s.neohome.example\n", d.Hostname)
 		fmt.Fprintf(s.Out, "%s\n", creds)
 		fmt.Fprintf(s.Out, "\nssh in: ssh deploy@%s\n", d.Hostname)
+		fmt.Fprintf(s.Out, "packages: %s\n", provisionPkgHint(d))
 		fmt.Fprintln(s.Out, "the node is now addressable by everything else in the world.")
 		return 0
 	case "list-mine":
@@ -827,16 +995,371 @@ func cmdVps(s *Shell, args []string) int {
 			d := s.W.Devices[id]
 			if d.Profile == "vps" && d.Owner == s.User.Name {
 				found = true
-				fmt.Fprintf(s.Out, "%-16s %-16s %d vCPU %d MiB\n", d.Hostname, d.FirstWANIP(), d.HW.Cores, d.HW.RAMMB)
+				addr := d.FirstWANIP()
+				switch {
+				case d.NATed:
+					addr = core.WANIPOf(d) + " (shared)"
+				case addr == "":
+					addr = d.FirstWANv6()
+					if addr != "" {
+						addr += " (v6)"
+					}
+				}
+				fmt.Fprintf(s.Out, "%-16s %-22s %-14s %d vCPU %d MiB\n",
+					d.Hostname, addr, d.OS.Distro+" "+d.OS.Ver, d.HW.Cores, d.HW.RAMMB)
+				if vips := d.VirtualIPs(); len(vips) > 0 {
+					fmt.Fprintf(s.Out, "%-16s virtual: %s\n", "", strings.Join(vips, ", "))
+				}
 			}
 		}
 		if !found {
 			fmt.Fprintln(s.Out, "you have no VPS")
 		}
 		return 0
+	case "ip", "address", "floating":
+		// §13's "virtual IP": a reserved address the provider lends to one of
+		// the customer's nodes. Real providers call these floating/reserved
+		// addresses, and the whole point is that they can move between nodes
+		// while the name in DNS keeps resolving to them.
+		if len(args) < 3 {
+			s.errf("usage: vps ip add <hostname> [address] | vps ip show <hostname> | vps ip del <hostname> <address>")
+			return 1
+		}
+		verb, host := args[1], args[2]
+		var dev *core.Device
+		for _, id := range s.W.Order {
+			if d := s.W.Devices[id]; d.Hostname == host && d.Profile == "vps" && d.Owner == s.User.Name {
+				dev = d
+			}
+		}
+		if dev == nil {
+			s.errf("vps: no node %q on your account", host)
+			return 1
+		}
+		switch verb {
+		case "add", "attach", "reserve":
+			ip := ""
+			if len(args) > 3 {
+				ip = args[3]
+			}
+			if ip == "" {
+				// out of the provider's own block: a reserved address is the
+				// operator's to lend, which is what `whois` will say about it
+				ip = s.W.AllocPublicFor("vps")
+			}
+			if err := s.W.AttachVirtual(dev, ip); err != nil {
+				s.errf("vps: %v", err)
+				return 1
+			}
+			fmt.Fprintf(s.Out, "reserved %s -> %s\n", ip, dev.Hostname)
+			fmt.Fprintf(s.Out, "point a DNS record at it and the name survives moving the service to another node\n")
+			return 0
+		case "show", "list":
+			vips := dev.VirtualIPs()
+			if len(vips) == 0 {
+				fmt.Fprintf(s.Out, "%s holds no reserved addresses (its own address is %s)\n", dev.Hostname, core.WANIPOf(dev))
+				return 0
+			}
+			for _, v := range vips {
+				fmt.Fprintf(s.Out, "%-16s reserved for %s\n", v, dev.Hostname)
+			}
+			return 0
+		case "del", "detach", "release":
+			if len(args) < 4 {
+				s.errf("usage: vps ip del <hostname> <address>")
+				return 1
+			}
+			if err := s.W.DetachVirtual(dev, args[3]); err != nil {
+				s.errf("vps: %v", err)
+				return 1
+			}
+			fmt.Fprintf(s.Out, "released %s from %s\n", args[3], dev.Hostname)
+			return 0
+		}
+		s.errf("usage: vps ip add <hostname> [address] | vps ip show <hostname> | vps ip del <hostname> <address>")
+		return 1
+	case "regions", "region":
+		fmt.Fprintf(s.Out, "novapanel — regions\n")
+		fmt.Fprintf(s.Out, "  %-14s %-11s %-8s %-9s %s\n", "REGION", "DATACENTER", "COUNTRY", "NETWORK", "BLOCK")
+		for _, r := range s.W.NodeRegions() {
+			fmt.Fprintf(s.Out, "  %-14s %-11s %-8s %-9s %s0/24\n",
+				r.Name, r.Datacenter, r.Country, fmt.Sprintf("AS%d", r.ASN), r.Block)
+		}
+		return 0
+	case "show", "info", "status":
+		if len(args) < 2 {
+			s.errf("usage: vps show <hostname>")
+			return 1
+		}
+		d, rec, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		dc := rec.Datacenter
+		if r, err := s.W.RegionByName(rec.Region); err == nil {
+			dc = fmt.Sprintf("%s (%s, %s, AS%d)", r.Datacenter, r.Name, r.Country, r.ASN)
+		}
+		fmt.Fprintf(s.Out, "%s\n", d.Hostname)
+		fmt.Fprintf(s.Out, "  plan:      %s (%d vCPU, %d MiB RAM, %d MiB disk)\n", rec.Plan, d.HW.Cores, d.HW.RAMMB, d.HW.DiskMB)
+		fmt.Fprintf(s.Out, "  image:     %s %s\n", d.OS.Distro, d.OS.Ver)
+		fmt.Fprintf(s.Out, "  region:    %s\n", dc)
+		fmt.Fprintf(s.Out, "  state:     %s\n", core.VPSState(d))
+		fmt.Fprintf(s.Out, "  ipv4:      %s\n", orNone(core.WANIPOf(d)))
+		fmt.Fprintf(s.Out, "  ipv6:      %s\n", orNone(d.FirstWANv6()))
+		if vips := d.VirtualIPs(); len(vips) > 0 {
+			fmt.Fprintf(s.Out, "  reserved:  %s\n", strings.Join(vips, ", "))
+		}
+		fmt.Fprintf(s.Out, "  rDNS:      %s\n", orNone(rec.RDNS))
+		fmt.Fprintf(s.Out, "  price:     %s/mo\n", fmtMoney(rec.Monthly))
+		fmt.Fprintf(s.Out, "  rebuilds:  %d\n", rec.Rebuilds)
+		if len(rec.Snapshots) > 0 {
+			var snaps []string
+			for _, sn := range rec.Snapshots {
+				snaps = append(snaps, sn.Name)
+			}
+			fmt.Fprintf(s.Out, "  snapshots: %s\n", strings.Join(snaps, ", "))
+		}
+		fmt.Fprintf(s.Out, "  console:   vps console %s\n", d.Hostname)
+		return 0
+	case "start", "boot", "poweron":
+		return vpsOne(s, args, func(host string) error {
+			d, err := s.W.VPSStart(s.User.Name, host)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(s.Out, "%s powered on (%d services running)\n", d.Hostname, runningServiceCount(d))
+			return nil
+		})
+	case "stop", "poweroff", "shutdown":
+		return vpsOne(s, args, func(host string) error {
+			d, err := s.W.VPSStop(s.User.Name, host)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(s.Out, "%s powered off — nothing answers at %s now\n", d.Hostname, firstAddr(d))
+			return nil
+		})
+	case "reboot", "restart":
+		return vpsOne(s, args, func(host string) error {
+			d, err := s.W.VPSReboot(s.User.Name, host)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(s.Out, "%s rebooted (uptime %s)\n", d.Hostname, d.Uptime().Round(time.Second))
+			return nil
+		})
+	case "reinstall", "rebuild":
+		if len(args) < 2 {
+			s.errf("usage: vps reinstall <hostname> [image]")
+			return 1
+		}
+		image := "debian"
+		if len(args) > 2 {
+			image = args[2]
+		}
+		_, creds, err := s.W.ReinstallVPS(s.User.Name, args[1], image)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "%s reinstalled — the old filesystem is gone\n", args[1])
+		fmt.Fprintf(s.Out, "%s\n", creds)
+		fmt.Fprintf(s.Out, "start it with: vps start %s\n", args[1])
+		return 0
+	case "console":
+		if len(args) < 2 {
+			s.errf("usage: vps console <hostname>")
+			return 1
+		}
+		d, _, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		if !d.NetUp {
+			s.errf("%s is powered off (start it first)", d.Hostname)
+			return 1
+		}
+		u := d.FindUser("deploy")
+		if u == nil {
+			u = d.FindUser("root")
+		}
+		if u == nil {
+			s.errf("no user to log in as on %s", d.Hostname)
+			return 1
+		}
+		return enterConsole(s, d, u, d.Hostname)
+	case "resize", "grow":
+		if len(args) < 2 {
+			s.errf("usage: vps resize <hostname> [--cpu N] [--mem MB] [--disk MB]")
+			return 1
+		}
+		d, rec, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		cores, mem, disk := float64(d.HW.Cores), d.HW.RAMMB, d.HW.DiskMB
+		for i := 2; i < len(args); i++ {
+			num := func() (int, bool) {
+				if i+1 < len(args) {
+					if n, err := strconv.Atoi(args[i+1]); err == nil {
+						i++
+						return n, true
+					}
+				}
+				return 0, false
+			}
+			switch {
+			case strings.HasPrefix(args[i], "--cpu"):
+				if n, ok := num(); ok {
+					cores = float64(n)
+				}
+			case strings.HasPrefix(args[i], "--mem"):
+				if n, ok := num(); ok {
+					mem = n
+				}
+			case strings.HasPrefix(args[i], "--disk"):
+				if n, ok := num(); ok {
+					disk = n
+				}
+			}
+		}
+		price, delta, err := s.W.VPSResize(s.User.Name, args[1], cores, mem, disk)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		_ = rec
+		fmt.Fprintf(s.Out, "%s resized: %g vCPU, %d MiB RAM, %d MiB disk — now %s/mo\n",
+			d.Hostname, cores, mem, disk, fmtMoney(price))
+		if delta > 0 {
+			fmt.Fprintf(s.Out, "charged %s for the upgrade\n", fmtMoney(delta))
+		} else if delta < 0 {
+			fmt.Fprintf(s.Out, "a downgrade is not refunded (%s/mo from now on)\n", fmtMoney(price))
+		}
+		return 0
+	case "disk":
+		if len(args) < 3 {
+			s.errf("usage: vps disk <hostname> <GiB>")
+			return 1
+		}
+		gib, err := strconv.Atoi(args[2])
+		if err != nil {
+			s.errf("vps: disk size must be a number of GiB")
+			return 1
+		}
+		monthly, err := s.W.VPSAddDisk(s.User.Name, args[1], gib)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "+%d GiB attached to %s — %s/mo now\n", gib, args[1], fmtMoney(monthly))
+		return 0
+	case "snapshot", "snap":
+		if len(args) < 2 {
+			s.errf("usage: vps snapshot <hostname> [name]")
+			return 1
+		}
+		name := ""
+		if len(args) > 2 {
+			name = args[2]
+		}
+		snap, err := s.W.VPSnapshot(s.User.Name, args[1], name)
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "snapshot %s taken from %s (%s)\n", snap.Name, args[1], snap.At.Format("2006-01-02 15:04"))
+		return 0
+	case "snapshots", "snaps":
+		if len(args) < 2 {
+			s.errf("usage: vps snapshots <hostname>")
+			return 1
+		}
+		_, rec, err := s.W.NodeFor(s.User.Name, args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		if len(rec.Snapshots) == 0 {
+			fmt.Fprintf(s.Out, "%s has no snapshots\n", args[1])
+			return 0
+		}
+		for _, sn := range rec.Snapshots {
+			fmt.Fprintf(s.Out, "%-16s %s\n", sn.Name, sn.At.Format("2006-01-02 15:04"))
+		}
+		return 0
+	case "restore", "rollback":
+		if len(args) < 3 {
+			s.errf("usage: vps restore <hostname> <snapshot>")
+			return 1
+		}
+		if err := s.W.VPSRestore(s.User.Name, args[1], args[2]); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "%s restored from %s (start it to boot the restored system)\n", args[1], args[2])
+		return 0
+	case "rdns", "ptr":
+		if len(args) < 2 {
+			s.errf("usage: vps rdns <hostname> [name]")
+			return 1
+		}
+		ptr := ""
+		if len(args) > 2 {
+			ptr = args[2]
+		}
+		if err := s.W.VPSSetRDNS(s.User.Name, args[1], ptr); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		d, rec, _ := s.W.NodeFor(s.User.Name, args[1])
+		fmt.Fprintf(s.Out, "%s reverse DNS: %s\n", d.Hostname, rec.RDNS)
+		fmt.Fprintf(s.Out, "check it with: dig -x %s\n", core.WANIPOf(d))
+		return 0
 	}
-	s.errf("usage: vps [list|create PLAN [hostname]|list-mine]")
+	s.errf("usage: vps [list|regions|create PLAN [hostname] [image] [--region R]|list-mine|show|start|stop|reboot|reinstall|console|resize|disk|snapshot|snapshots|restore|rdns|ip add|show|del]")
 	return 1
+}
+
+// vpsOne runs a one-hostname panel verb.
+func vpsOne(s *Shell, args []string, fn func(host string) error) int {
+	if len(args) < 2 {
+		s.errf("usage: vps %s <hostname>", args[0])
+		return 1
+	}
+	if err := fn(args[1]); err != nil {
+		s.errf("vps: %v", err)
+		return 1
+	}
+	return 0
+}
+
+// regionASN is the AS behind a region name, for the receipt.
+func regionASN(s *Shell, name string) int {
+	if r, err := s.W.RegionByName(name); err == nil {
+		return r.ASN
+	}
+	return 0
+}
+
+func firstAddr(d *core.Device) string {
+	if a := core.WANIPOf(d); a != "" {
+		return a
+	}
+	if a := d.FirstWANv6(); a != "" {
+		return a
+	}
+	return d.FirstLANIP()
+}
+
+func orNone(v string) string {
+	if v == "" {
+		return "(none)"
+	}
+	return v
 }
 
 // ---- help ----
@@ -850,7 +1373,7 @@ Work on the machine:      ls cd cat cp mv rm mkdir touch echo find grep head tai
 Processes:                ps top htop kill pkill nice
 Network:                  ip ifconfig route ss ping traceroute dig nslookup curl wget openssl
 Services & packages:      systemctl service apt apk pacman dnf
-Remote:                   ssh scp sftp telnet        Sessions: tmux screen
+Remote:                   ssh scp sftp ftp telnet     Sessions: tmux screen
 System info:              fastfetch uname hostname uptime whoami id env free lscpu lsblk dmesg
 
 The world layer:
@@ -870,7 +1393,10 @@ The world layer:
   mount -t nfs host:/path /mnt/x                    NFS/SMB really resolve to a device
   mount -t cifs //host/share /mnt/x [-o user=U]     SMB: real smb.conf shares, guest or authenticated
   smbclient -L host                                 what the server really shares
-  vps [list|create PLAN [hostname]]                 buy a real node; it joins the internet
+  ftp [-A] [user@]host[:port]                        real FTP session (ls/get/put); -A is anonymous
+  vps [list|regions|create|show|start|stop|reboot]  rent a real node: choose a region and an
+  vps [reinstall|console|resize|disk]               OS, then power it, rebuild it, resize it,
+  vps [snapshot|snapshots|restore|rdns|ip]          snapshot it or roll it back
 
   recon <host>      what is actually reachable + what is actually vulnerable
   scan <host|net>   port scan (logged on the target — it is not free)
@@ -897,3 +1423,13 @@ func tailLines(s string, n int) string {
 }
 
 var _ = strconv.Atoi
+
+// provisionPkgHint tells the buyer which command actually manages packages on
+// the image they just booted.
+func provisionPkgHint(d *core.Device) string {
+	mg := core.ManagerFor(d)
+	if mg == "" {
+		return "none"
+	}
+	return mg
+}

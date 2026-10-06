@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# Locate the checkout from this script's own path, and use the Go toolchain that
+# exists — the author's workspace layout, or one already on PATH.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+if [ -d /workspace/go/bin ]; then
+  export PATH=/workspace/go/bin:$PATH GOPATH=/workspace/gopath GOCACHE=/workspace/gocache
+elif [ -x "$HOME/.local/tools/go/bin/go" ]; then
+  export PATH="$HOME/.local/tools/go/bin:$PATH" GOPATH="$HOME/.local/gopath"
+fi
+
 # telnet_verify.sh — the legacy service is a real login, not a free shell.
 #
 # telnet used to hand out a root shell with no authentication, which made every
@@ -7,8 +17,6 @@
 #
 # sshdrive args: a command to run, or "@text" to type text at a prompt.
 set -u
-export PATH=/workspace/go/bin:$PATH GOPATH=/workspace/gopath GOCACHE=/workspace/gocache
-cd /workspace/neohome
 bash tools/killsrv.sh >/dev/null 2>&1
 rm -f world.gob
 go build -o neohome ./cmd/neohome || { echo "BUILD FAILED"; exit 1; }

@@ -214,7 +214,7 @@ func TestHTTPSFetchFailsClosed(t *testing.T) {
 	pc := w.Devices["pc-alex"]
 	sh := func(line string) string { return run(t, w, pc, "alex", line) }
 
-	out := sh("curl -s https://mirror.neohome.example/debian/Release")
+	out := sh("curl -s https://mirror.neohome.example/")
 	if !strings.Contains(out, "mirror.neohome.example index") {
 		t.Fatalf("https fetch against the seeded mirror did not serve the page:\n%s", out)
 	}
@@ -233,7 +233,7 @@ func TestHTTPSFetchFailsClosed(t *testing.T) {
 	if !pc.FS.Remove("/etc/ssl/certs/neohome-root-ca.pem") {
 		t.Fatal("the seeded trust store file could not be removed")
 	}
-	out = sh("curl -s https://mirror.neohome.example/debian/Release")
+	out = sh("curl -s https://mirror.neohome.example/")
 	if !strings.Contains(out, "(60)") || !strings.Contains(out, "unable to get local issuer certificate") {
 		t.Fatalf("untrusted CA must fail closed with a certificate error:\n%s", out)
 	}
@@ -244,7 +244,7 @@ func TestHTTPSFetchFailsClosed(t *testing.T) {
 	}
 	// restoring trust restores the page — the file is the trust
 	pc.FS.Write("/etc/ssl/certs/neohome-root-ca.pem", core.PEMCert(w.TLS.CAs["neohome-root-ca"]), 0644, "root", "root")
-	out = sh("curl -s https://mirror.neohome.example/debian/Release")
+	out = sh("curl -s https://mirror.neohome.example/")
 	if !strings.Contains(out, "mirror.neohome.example index") {
 		t.Fatalf("https did not recover after restoring the trust store:\n%s", out)
 	}
@@ -261,7 +261,7 @@ func TestHTTPSRespectsServiceStateAndClock(t *testing.T) {
 	if _, err := w.Devices["mirror"].StopService("nginx"); err != nil {
 		t.Fatalf("stopping nginx failed: %v", err)
 	}
-	out := sh("curl -s https://mirror.neohome.example/debian/Release")
+	out := sh("curl -s https://mirror.neohome.example/")
 	if !strings.Contains(out, "Connection refused") {
 		t.Fatalf("https must refuse when the unit is stopped:\n%s", out)
 	}
@@ -279,12 +279,12 @@ func TestHTTPSRespectsServiceStateAndClock(t *testing.T) {
 	if leaf == nil {
 		t.Fatal("the mirror leaf certificate was not issued at seed time")
 	}
-	out = sh("curl -s https://mirror.neohome.example/debian/Release")
+	out = sh("curl -s https://mirror.neohome.example/")
 	if !strings.Contains(out, "mirror.neohome.example index") {
 		t.Fatalf("https broke after a plain service restart:\n%s", out)
 	}
 	w.Sim = leaf.NotAfter.Add(24 * time.Hour)
-	out = sh("curl -s https://mirror.neohome.example/debian/Release")
+	out = sh("curl -s https://mirror.neohome.example/")
 	if !strings.Contains(out, "certificate has expired") {
 		t.Fatalf("an expired certificate must fail the handshake:\n%s", out)
 	}

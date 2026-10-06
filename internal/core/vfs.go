@@ -36,10 +36,18 @@ func NewVFS() *VFS {
 
 func (v *VFS) MkdirAll(p string, mode uint32, owner, group string) {
 	p = path.Clean(p)
-	for cur := p; cur != "/" && cur != ""; cur = path.Dir(cur) {
+	if p == "" || p == "." {
+		p = "/"
+	}
+	for cur := p; cur != "/"; {
 		if _, ok := v.Nodes[cur]; !ok {
 			v.Nodes[cur] = &INode{Path: cur, IsDir: true, Mode: fs.FileMode(mode), Owner: owner, Group: group, MTime: time.Now()}
 		}
+		parent := path.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
 	}
 	if _, ok := v.Nodes["/"]; !ok {
 		v.Nodes["/"] = &INode{Path: "/", IsDir: true, Mode: 0755, Owner: "root", Group: "root"}

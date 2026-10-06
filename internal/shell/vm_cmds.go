@@ -117,6 +117,7 @@ func vmCreate(s *Shell, args []string) int {
 	cpu := 1.0
 	mem := 1024
 	disk := 8192
+	ipMode := "public"
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		val := func() (int, bool) {
@@ -142,12 +143,23 @@ func vmCreate(s *Shell, args []string) int {
 			if n, ok := val(); ok {
 				disk = n
 			}
+		case strings.HasPrefix(a, "--ip"):
+			if i+1 < len(args) {
+				switch m := args[i+1]; m {
+				case "public", "shared", "v6only":
+					ipMode = m
+					i++
+				default:
+					s.errf("vm create: unknown ip mode %q (public, shared, v6only)", m)
+					return 1
+				}
+			}
 		case !strings.HasPrefix(a, "-") && name == "":
 			name = a
 		}
 	}
 	if name == "" {
-		s.errf("usage: vm create NAME [--cpu N] [--mem MB] [--disk MB]")
+		s.errf("usage: vm create NAME [--cpu N] [--mem MB] [--disk MB] [--ip public|shared|v6only]")
 		return 1
 	}
 	host := hypervisorFor(s)
@@ -158,7 +170,7 @@ func vmCreate(s *Shell, args []string) int {
 	// Cost is real money out of the household budget, like a VPS purchase.
 	// It is scaled to be comparable with novapanel's plans: a small guest must
 	// be affordable early, and a large one must actually cost something.
-	cost := vmCost(cpu, mem, disk)
+	cost := vmCost(cpu, mem, disk, ipMode)
 	if s.W.Bank != nil {
 		if acc := s.W.Bank.Accts[s.User.Name]; acc != nil {
 			if acc.Balance < cost {
@@ -168,7 +180,7 @@ func vmCreate(s *Shell, args []string) int {
 			}
 		}
 	}
-	v, err := s.W.CreateVM(host.ID, name, cpu, mem, disk)
+	v, err := s.W.CreateVM(host.ID, name, cpu, mem, disk, ipMode)
 	if err != nil {
 		s.errf("%v", err)
 		return 1
@@ -185,7 +197,7 @@ func vmCreate(s *Shell, args []string) int {
 	fmt.Fprintf(s.Out, "Domain %s created\n", name)
 	fmt.Fprintf(s.Out, "  host:    %s (%d cores, %d MiB)\n", host.Hostname, host.HW.Cores, host.HW.RAMMB)
 	fmt.Fprintf(s.Out, "  alloc:   %g vCPU, %d MiB RAM, %d MiB disk (swap %d MiB)\n", v.VCores, v.VRAMMB, v.VDiskM, v.SwapMaxMB)
-	fmt.Fprintf(s.Out, "  address: %s (lan)  %s (public)\n", d.FirstLANIP(), d.FirstWANIP())
+	fmt.Fprintf(s.Out, "  address: %s (lan)  %s\n", d.FirstLANIP(), wanSummary(d, ipMode))
 	fmt.Fprintf(s.Out, "  cost:    $%.2f charged to the household\n", float64(cost)/100)
 	fmt.Fprintf(s.Out, "\nssh in with: ssh %s@%s\n", name, d.FirstLANIP())
 	fmt.Fprintf(s.Out, "watch it with: vm top\n")
@@ -195,21 +207,41 @@ func vmCreate(s *Shell, args []string) int {
 // vmCost prices a guest in cents per month. The rates are fitted to novapanel's
 // published plans so the two products cannot drift apart:
 //
-//	novapanel nano-1   1 core, 512 MiB,  10 GiB  -> $6.00
-//	novapanel small-2  2 core, 2 GiB,   40 GiB  -> $18.00
-//	novapanel medium-4 4 core, 4 GiB,   80 GiB  -> $35.00
+//	novapanel nano-shared 1 core,  512 MiB,  10 GiB, shared  -> $3.00
+//	novapanel nano-1      1 core,  512 MiB,  10 GiB, public  -> $6.00
+//	novapanel v6-sandbox  1 core,    1 GiB,  20 GiB, v6 only -> $4.40
+//	novapanel small-2     2 core,    2 GiB,  40 GiB, public  -> $18.00
+//	novapanel medium-4    4 core,    4 GiB,  80 GiB, public  -> $35.00
 //
-// The formula reproduces all three to within 40 cents. Memory dominates, as it
-// does on a real host; provisioned disk is charged lightly because it is thin.
-func vmCost(cpu float64, mem, diskMB int) int64 {
+// Memory dominates, as it does on a real host; provisioned disk is charged
+// lightly because it is thin. A node with no dedicated public IPv4 is billed
+// half of that, because on a small plan most of the price *is* the address —
+// which is exactly why the shared and v6-only plans are the cheap ones.
+func vmCost(cpu float64, mem, diskMB int, ipMode string) int64 {
 	const (
 		coreCents = 400 // $4.00 per vCPU
 		ramCents  = 80  // $0.80 per GiB
 		diskCents = 20  // $0.20 per provisioned GiB
 	)
-	return int64(cpu)*coreCents +
+	base := int64(cpu)*coreCents +
 		int64(mem/1024)*ramCents +
 		int64(diskMB/1024)*diskCents
+	if ipMode == "shared" || ipMode == "v6only" {
+		base /= 2
+	}
+	return base
+}
+
+// wanSummary says what the guest's WAN side really is, in the product's own
+// words, so the receipt and the interface cannot disagree.
+func wanSummary(d *core.Device, ipMode string) string {
+	switch ipMode {
+	case "shared":
+		return d.SharedWANOf() + " (shared, outbound only)"
+	case "v6only":
+		return d.FirstWANv6() + " (v6 only, no IPv4)"
+	}
+	return d.FirstWANIP() + " (public)"
 }
 
 func vmOne(s *Shell, args []string, fn func(name string) error) int {
@@ -293,7 +325,14 @@ func vmConsole(s *Shell, args []string) int {
 		s.errf("no user to log in as on %s", d.Hostname)
 		return 1
 	}
-	fmt.Fprintf(s.Out, "Connected to %s (console). Type `exit` to return.\r\n", v.Name)
+	return enterConsole(s, d, u, v.Name)
+}
+
+// enterConsole drops the player into a machine's own shell. A VPS console (§12)
+// and a hypervisor guest console are the same thing, because in both cases the
+// machine is a real Device: the console is not a simulation of one.
+func enterConsole(s *Shell, d *core.Device, u *core.User, label string) int {
+	fmt.Fprintf(s.Out, "Connected to %s (console). Type `exit` to return.\r\n", label)
 	inner := NewShell(s.W, d, u, s.Out, d.FirstLANIP(), s.TTY)
 	inner.CWD = u.Home
 	for {
@@ -302,7 +341,7 @@ func vmConsole(s *Shell, args []string) int {
 			continue
 		}
 		if line == "exit" || line == "\x04" {
-			fmt.Fprintf(s.Out, "\r\nDisconnected from %s\r\n", v.Name)
+			fmt.Fprintf(s.Out, "\r\nDisconnected from %s\r\n", label)
 			return 0
 		}
 		inner.ExecLine(line)

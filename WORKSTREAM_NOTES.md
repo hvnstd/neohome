@@ -4,7 +4,7 @@ One section per workstream, oldest first. Each section owns its files; check
 ownership there before touching cross-cutting files (`world.go` pointers,
 `engine.go` tick calls, `world_init.go` seeds, `resolver.go` backcompat).
 
-## Index (status 2026-10-05, tip `ea8eb1d`)
+## Index (status 2026-10-06, tip WS-1.9)
 
 | Workstream | Commit | What it added | Where |
 |---|---|---|---|
@@ -21,10 +21,24 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | usb (WS-1.3) | `160b0a7` | the air gap as a tool | §"USB workstream" |
 | live-verify sweep | `ea8eb1d` | home dirs for every account; 13 scripts green | §"Verification status" |
 | LAN plan (hardcode removal) | this commit | one owner for household addresses; `AllocLANStatic` replaces the MCP const; `ValidateLAN` panics at boot on duplicates/pool-collisions; the router's dhcp-range renders from the constants | `internal/core/addr.go`, `tests/lan_test.go` |
+| FTP + reachability (WS-1.4) | this commit | real FTP sessions over the wire; the seeded drop box is reachable, attackable and defended; a port-forward is now a hole that really forwards | §"FTP workstream (WS-1.4)" |
+| coupling patch (WS-1.5) | this commit | `irc` goes through the real ircd service and the resolver; the assistant node is reachable by key, as §24 intends, and `ssh host command` exists | §"Coupling patch (WS-1.5)" |
+| package ecosystem (WS-1.6) | this commit | five real package managers on five distributions, repositories as signed files served over HTTP by real hosts, a mirror that syncs on the world's own schedule, dependency-aware install and honest removal, and the third-party supply-chain decision | §"Package ecosystem (WS-1.6)" |
+| household network (WS-1.7) | `c130af8` | exposure *is* configuration: `uci` stages then commits, `iptables` on a host, real NAT and filtering in the packet path, UPnP with leases, a DMZ, and the router's own management surface | §"Household network (WS-1.7)" |
+| IP system (WS-1.8) | this commit | §13 in full: public/private/CGNAT/ULA/link-local/dynamic/shared/virtual addresses, IPv6 for every device, v6 publication by rule, per-AS `/48`s, and the attribution layer that never names a person | §"IP system (WS-1.8)" |
+| VPS lifecycle (WS-1.9) | this commit | §12's control plane: regions that are real networks, power, reboot, reinstall, resize, disks, snapshots, console, rDNS — every one an operation on the machine itself | §"VPS lifecycle (WS-1.9)" |
+| 家庭设备与物理层 (WS-1.10) | this commit | §15: the switch as real ports and real PoE, the laptop's lid and battery, the printer's own queue, the backup that needs the NAS | §"家庭设备与物理层 (WS-1.10)" |
+| 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
+| 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 
-Verification status at tip: full `go test ./...` green, `go vet` clean,
-`bash tools/all_verify.sh` — all 13 scripts exit ok, suspicious counts zero
+Verification status at tip: full `go test ./...` green (~182 tests, 29 files),
+`go vet` clean, `gofmt -l` empty across the tree (the pre-existing debt in
+`git.go`, `iot.go`, `tls.go`, `sftp_cmds.go` and `world_cmds.go` was paid off
+with WS-1.7),
+`bash tools/all_verify.sh` — all 14 scripts exit ok, suspicious counts zero
 except `live_verify`'s single scripted-fault dnsmasq log (expected).
+`tools/ftp_verify.sh` is the one script that finds its own checkout and Go
+toolchain, so it also runs from a clone outside `/workspace`.
 
 Design debt, deliberately not built (each has a rationale in its section):
 player-side CA issuance (`openssl req`), IMAPS :993, BBS private mail, git
@@ -563,3 +577,1033 @@ Ownership: `internal/core/usb.go`, `internal/shell/usb_cmds.go`,
   late-game asset; the stick is its bridge and comes first.
 * Hubs, multiple sticks per host, write-protect switches: one port, one
   stick covers every story the world currently tells.
+
+---
+
+# FTP workstream (WS-1.4) — the last of §19, and the box it needed to be real
+
+Ownership: `internal/core/ftp.go`, `internal/shell/ftp_cmds.go`,
+`tests/ftp_test.go`, `tools/ftp_verify.sh`, plus seed edits in `devseed.go`
+(the neighbour's configuration and the leaked export), `world_init.go` (the
+`ftp` account), `pkgs.go` (what `apt install vsftpd` really writes), `vuln.go`
+(the two FTP vulns' preconditions and the file they read), `world_cmds.go`
+(`applyEffect`'s FTP branches, `recon`, `scan`, `exploit`), `net.go`
+(port-forward reachability), `world.go` (`User.CheckPassword`), `bbs.go` (one
+hacker-board thread), and the `help` text.
+
+## Why this workstream existed
+
+Spec §19 lists FTP among the systems that must really work ("FTP / SFTP：真传
+文件"), and the world already *claimed* to have it in three places that did not
+add up: the seeded neighbour runs `vsftpd` behind a port-forward to the
+internet, the BBS and the vuln help told players to use `ftp -A host`, and no
+`ftp` command existed at all. The two vulns then applied their effects by
+writing into the target's VFS and reading the account records directly — an
+"exploit" that never touched a service, a port or a permission. Three separate
+lies, one workstream.
+
+## What exists now
+
+* `internal/core/ftp.go` owns the protocol: `FTPConfOf` parses the server's
+  real `/etc/vsftpd.conf` on demand (never cached anywhere, so editing the file
+  changes the next command), `FTPDaemon` finds the unit, `FTPLogin`
+  authenticates against the real account records or the anonymous policy, and
+  `FTPSession` performs LIST/CWD/RETR/STOR/MKD/DELE/SIZE as the *session
+  account* on the *server's* filesystem. Anonymous sessions are chrooted to
+  `anon_root` (or the `ftp` account's home), local sessions see `/` unless
+  `local_root` says otherwise, and every refusal is logged on the target with
+  its reason ("anon_upload_enable=NO") so the player has something to find.
+  `Closed()` answers 421 once the daemon stops, so a session cannot outlive its
+  service.
+* `internal/shell/ftp_cmds.go` is the client: `ftp [-A] [user@]host[:port]`
+  then `ls/dir`, `cd`, `pwd`, `get`, `put`, `mkdir`, `delete`, `size`, `user`,
+  `open`, `close`, `lcd`, `bye`. It prints the real dialogue (220/331/230,
+  150/226 around each transfer, 5xx on refusal) because that dialogue is the
+  state of the connection.
+* The seeded arc is now true end to end: repair the DNS fault → `whois` your
+  own WAN address for the ISP's range → `scan` it and find `21/tcp open
+  vsftpd` → `recon` (which follows the forward and names the machine behind it)
+  → `ftp -A` → read `/home/devops/deploy/notes.md` → `get
+  /home/devops/backup/accounts-2024.csv` → `user mara hunter2` → read her
+  files. `exploit` performs the same steps through the same primitives, so the
+  shortcut and the manual path can never disagree.
+
+## Reachability bugs found here (all fixed, all with tests)
+
+1. `Dial` applied the router's `matchFwd` and then judged the **pre-DNAT**
+   machine: a dark PC behind a powered router still accepted connections, and
+   a home PC's default-deny WAN policy filtered every forwarded port — so no
+   port-forward in the world could ever work. The connection is now judged on
+   the machine that really answers (power, firewall, scope), and a forward is a
+   hole the owner opened.
+2. `scan` dialled `FirstLANIP()` even when the matched address was a WAN
+   address, so scanning a public range reported nothing; it now dials the
+   address that matched.
+3. `recon`/`exploit` never followed a forward: `exploit <router-ip> …` looked
+   for the vuln on the router. `core.ForwardTarget` (plus the recon/exploit
+   changes) puts the attack on the host that answers, and recon lists
+   `21/tcp -> forwarded to darkden (10.88.1.11)`.
+4. `ssh`, `sftp`/`scp` and `telnet` compared passwords with a bare
+   `pass != u.Pass`, so an account with no stored password (a service account,
+   or root on the neighbour's PC) authenticated when the player pressed enter.
+   All credential checks now go through `User.CheckPassword`, the one rule the
+   IMAP/SMB/git paths already had.
+5. `Dial` logged every accepted connection as "via ssh-session". One honest
+   line per connection now.
+
+## Verified
+
+* `tests/ftp_test.go`: seeding (config, account, drop, export), config-driven
+  behaviour (anonymous off / upload off / mode bits / overwritten 0600 files),
+  a full anonymous session over the port-forward with a byte-identical
+  download and the server's own log lines, an upload that lands owned by `ftp`
+  and raises an alert-level world event, auth against real accounts with
+  fail2ban-style heat and leak-free refusals, the gates (unresolvable name,
+  stopped daemon, closed forward, dark host, mid-session 421), the player's own
+  packaged daemon (secure default → configured drop → confined anonymous
+  root), the exploit chain over the wire (including failure once the forward is
+  closed) and a save/load round trip.
+* Live: `bash tools/ftp_verify.sh` — 11 steps, exit 0, no suspicious lines: the
+  scripted DNS failure, the player-style repair, the whois→scan→recon chain,
+  the anonymous read, the credential export verified by a real login, mara's
+  account used through the daemon, the evidence trail, and the finale where
+  heat 13 makes her close the port-forward and the same address then times out.
+
+## Not implemented on purpose
+
+* `listen_port`: a unit's port is owned by the service record that `ss`, `scan`,
+  firewall rules and port-forwards all agree on. Honouring a second number
+  would give one fact two owners, so the directive is parsed nowhere and the
+  unit's port wins; noted here rather than half-implemented.
+* ASCII/binary `TYPE` translation: nothing in the world observes the wire, so
+  both modes are byte-exact on disk and a mode toggle would be decoration.
+* FTPS (TLS on the data channel), passive port ranges (the control connection's
+  gate is the model), `mget`/`mput` wildcards, resumable transfers, and
+  `chroot_local_user`: no storyline needs them yet.
+* The BBS thread added to the `hacker` board is one hint about the *method*
+  (an ISP's customer range), not a walkthrough; it carries no IP, because those
+  numbers have an owner.
+
+---
+
+# Coupling patch (WS-1.5) — three places where a service was decoration
+
+Ownership: `internal/shell/irc_cmds.go` (new: the IRC client), `remote.go`
+(ssh/telnet session handling), `internal/core/agents.go` (assistant key trust +
+its access seed), `tests/irc_test.go` (new), one seed line in `world_init.go`.
+
+Found while auditing the spec against the code, not by a failing test — which
+is why each one gets a test now.
+
+## 1. IRC was the one communication system with no service behind it
+
+§19 lists IRC beside BBS, mail and FTP, and the other three really do go
+through their daemons (the BBS client dials `bbsd`, mail needs `smtpd`, FTP
+needs `vsftpd`). The `irc` client read `World.Chat` directly: the channel
+worked with `ircd` stopped, with the box unpowered, and during the scripted DNS
+fault. The data was real; the system was not.
+
+`internal/shell/irc_cmds.go` now owns the client, and every use of it resolves
+`irc.neohome.example`, dials 6667 and lets `core.Dial` decide — the same gate
+the BBS uses. Consequences are the intended ones: during the DNS fault the
+channel reports the resolution failure (and comes back when the resolver is
+repaired), and stopping `ircd` refuses the connection until it is started
+again. The message store, the NPC replies and their grounding in world state
+are unchanged.
+
+## 2. SSH into the assistant node was impossible, and its absence hid a panic
+
+§24 says the player can SSH into the assistant's environment. The seed was
+half-there: `/home/assistant/.ssh/authorized_keys` trusts the owner's key, but
+the node had no `/etc/ssh/sshd_config`, so the client took the password path —
+and the password (`assist-pass`) is not the player's to know. The key path in
+`remote.go` only triggers when the target's config says
+`PasswordAuthentication no`, so it never ran.
+
+`SeedAssistantAccess` writes exactly the directive the world enforces, and
+`AssistantKeyTrusted` was tightened from "any device of any player who has an
+assistant" to "the session's device belongs to the owner of *this* assistant":
+the old rule made the assistant node's key a skeleton key for every session in
+the world, including a stranger's box. The test asserts the boundary as well as
+the owner's access.
+
+## 3. `ssh host command` did not exist, and the interactive path panicked without a terminal
+
+`tests/wan_test.go` already called `ssh deploy@192.0.2.1 hostname` — the extra
+argument was silently ignored and the test only passed because that address
+never got as far as a nested shell. On a session with no input stream,
+`cmdSsh` called `RunLoop(nil)` and panicked (`bufio.NewReader(nil)`), which is
+what turned up when the assistant test first ran headless.
+
+`openRemoteSession` now implements both real shapes: with a command it runs it
+on the target and returns its status (so scripts, cron and tests can use remote
+machines honestly), and without one it hands the terminal over — sharing the
+session's buffered reader instead of wrapping it in a second `bufio.Reader`,
+which would have starved on bytes the outer reader had already buffered. The
+same helper drives telnet, which had the identical nil-reader crash.
+
+## Verified
+
+* `tests/irc_test.go`: the DNS fault really blocks the channel and the repair
+  restores it; stopping `ircd` refuses honestly and starting it recovers;
+  saying something mutates the log and draws a state-grounded NPC answer;
+  the owner reaches the assistant node's workspace by key (non-interactive
+  command form *and* interactive session), a command's remote exit status is
+  returned, and a session from a machine that does not own the assistant is
+  refused with `Permission denied (publickey)`.
+* Full gate after the patch: `go vet ./...` clean, `go test ./...` green.
+
+## Still open (recorded, not fixed here)
+
+The audit that found these also found the larger blocks. WS-1.6 closed the
+§9–§11 block (see the section below); what remains is: player-side
+firewall/port-forward/DMZ controls (§14), IPv6/CGNAT/dynamic-WAN (§13), VPS
+lifecycle beyond create+ssh (§12), and the §33 defence tools beyond the
+fail2ban counter. Phase 2 (multiplayer, §31/§34/§35) has not been started and
+needs a household-boundary decision first.
+
+---
+
+# Package ecosystem (WS-1.6) — §9 软件包系统, §10 repository/mirror, §11 软件安全
+
+Ownership: `internal/core/distro.go`, `internal/core/pkgfiles.go`,
+`internal/core/pkgnet.go`, `internal/core/pkgapply.go`,
+`internal/core/pkgs.go`, `internal/shell/pkg_cmds.go`, `tests/pkgs_test.go`.
+Touched, with their owners' sections updated here: `internal/core/engine.go`
+(install bookkeeping + `MirrorTick` in `Tick`), `internal/core/world.go`
+(`Device.InstalledFrom`), `internal/core/net.go` (a device that runs its own
+resolver asks itself), `internal/core/vfs.go` (`MkdirAll` cannot spin on a
+relative path), `internal/core/world_init.go` + `devseed.go` + `npc.go` +
+`vm.go` + `addr.go` (archive/cdn hosts, per-distro images), `internal/shell/
+net.go` (http is served from the host's real files) and `internal/shell/
+world_cmds.go` (`vps create PLAN [hostname] [image]`).
+
+## The model
+
+A package is not a Go struct that appears on a device. It is:
+
+    catalogue (Go)  →  files on the archive host  →  files on the mirror host
+                    →  fetched + verified by the client  →  state on the device
+
+* **Files, not memory.** Each repository renders real index files, real
+  payload files and a real signed release file onto the host that publishes
+  it (`RenderTree`/`WriteTree`). `curl`, `grep` and `nano` on the mirror see
+  exactly what the package managers read.
+* **Five families, five layouts.** Debian (`dists/<suite>/InRelease`,
+  `binary-amd64/Packages`, pool `.vpkg`), Alpine (`APKINDEX` + `.apk`),
+  Arch (`<repo>/os/x86_64/<repo>.db`, `.pkg.tar.zst`), Fedora (`repodata`,
+  `.rpm`), OpenWrt (`packages/<arch>/Packages`, `.ipk`). Each family has its
+  own sources file, keyring, list cache and command semantics; the family
+  fixes the index layout, so a wrong path is a file that is not there.
+* **The client really fetches.** `FetchHTTP` resolves the mirror's name
+  through the device's own resolver chain, dials port 80 through the real
+  firewall and NAT rules, and reads the file the serving host has on disk. A
+  stopped nginx, a powered-off mirror or a broken resolver all fail the
+  install, with the reason.
+* **Verification is byte-level.** The release file names its signing key; the
+  device must have that key in its keyring or the update is refused with
+  `NO_PUBKEY` and a hint naming the keyring directory. Every index is checked
+  against the hash the release file publishes for it, and every payload
+  against the hash its index entry publishes. A half-finished sync, a deleted
+  index or an edited index is therefore *detectable*, not asserted.
+* **Mirror state is derived from the served bytes.** `World.RepoIntegrity`
+  runs the client's verification on the mirror host. `CORRUPTED` means the
+  release file does not describe the files next to it; `BEHIND` means the
+  last successful sync is older than the threshold (and, if the crontab's
+  `mirror-sync <tree>` line is commented out, the status says so);
+  `PARTIAL` means upstream no longer carries a component. A sync that dies
+  after writing bytes that still match its release file is not called
+  corruption.
+
+## What exists
+
+* **Managers**: `apt`, `apk`, `pacman`, `dnf`, `opkg` — one command per
+  family, gated on the device's distribution. The wrong manager on a box is
+  `command not found`; a non-root user gets that manager's real lock refusal.
+  `update` fetches and verifies, `install` reads the cached lists, `remove`
+  refuses to break a dependency, `search`/`list`/`list --installed` read the
+  served index and the device's own database.
+* **Dependency engine**: `PlanInstall` (topological, dependency-first,
+  reported failure), `RemoveCheck` (reverse dependencies, real refusal),
+  `RemovePkg` (stops and deregisters services, removes the files the package
+  owns, clears the record, keeps files another package still provides).
+* **Provenance**: `Device.InstalledFrom[name]` records the repository a
+  package came from, chosen from the sources that device actually has, so
+  `apt list --installed` and `dnf list installed` can show `origin=debian`
+  or `@fedora` instead of guessing from the catalogue.
+* **Mirror lifecycle**: the world's `archive` host publishes every tree; the
+  `mirror` host copies indexes *and* the pool it points at, verifies the
+  release against the bytes it just wrote, and is driven by the world's own
+  cron (`*/15 * * * * mirror-sync <tree>`, seeded by `seedMirrorSchedule`).
+  The debian line is commented out after a disk incident, which is the whole
+  cause of the seeded BEHIND state; `mirror-sync <tree>` (a shell builtin,
+  root only) runs one sync by hand and `mirror-sync` alone prints the table.
+* **Third-party source (§11)**: `sashimi` is a real tree on the `cdn` host
+  signed with a key that is in no keyring. Its key is published with the tree
+  (`keys/<fingerprint>.asc`), so trusting it is a real act with real material
+  behind it; until then every update naming it fails. Its `nettop` package
+  ships a background `updater` — the world logs it, `ps` shows it, and the
+  event log records that a third-party package started a background service.
+* **Provisioning**: `vps create PLAN [hostname] [image]` and
+  `ProvisionVPSWithOS` give the buyer debian|ubuntu|alpine|arch|fedora with
+  that distribution's sources file, keyring and manager, a locked root and a
+  sudo account; VM guests get the same real package management.
+
+## Verified
+
+`tests/pkgs_test.go` (all with a fresh world, all asserting world state):
+
+* every distribution has exactly one manager and its own sources file, and
+  the others are `command not found`;
+* install before update refuses (`no package lists are cached`), a non-root
+  user is refused by the lock, `apt update` fetches the mirror's metadata,
+  `apt install htop` lands the payload's file, records the package and its
+  origin, `apt list --installed` reads it back, removal removes the files and
+  the record, and re-installing works;
+* nginx pulls libc, creates its files, user and running service; removing
+  libc is refused while nginx needs it and succeeds after nginx is removed;
+* the seeded debian tree is `BEHIND` *with the disabled cron line named*, the
+  client warns on every update, a stale tree still installs, and
+  `mirror-sync debian` makes the warning go away;
+* deleting a served index makes the tree `CORRUPTED` (by file, not by flag),
+  the client refuses to install from it, and a real sync repairs it;
+* a third-party source is refused with `NO_PUBKEY` until its published key is
+  trusted, and then installs a package that starts a background process and
+  says so in the event log;
+* stopping the mirror's web server breaks updates and starting it fixes them;
+* a VPS bought as alpine/arch/fedora really has that manager, that sources
+  file, a root account, the archive key, and installs over `sudo`;
+* publishing a new package upstream, then killing the sync between its index
+  and its release file, leaves damage both ends can prove (`hash sum
+  mismatch`), and the repair sync makes the new package installable;
+* the mirror keeps itself current from its own crontab, and the tree whose
+  line is commented out is the one that stays behind.
+
+Full gate with this workstream: `go vet ./...` clean, `go test ./...` green
+(27 test files, ~172 tests). `tests/world_test.go` and `tests/ftp_test.go`
+now reference `w.Repos["debian"]` (the old `main`/`contrib` repos are gone),
+and `tests/tls_test.go` fetches the mirror's front page, which is now a real
+index of the trees it serves instead of a hardcoded string.
+
+## Not implemented on purpose
+
+* **Player-hosted caches/mirrors** (§10 wants them): the pieces are there —
+  files, sync, verification — but a player-run cache would need a "serve this
+  tree from my box" command and a client that accepts a second source. Not
+  faked; recorded here.
+* **Package version anomalies as events** (§11 包版本异常): a repository can
+  publish an old version and a client will install it, but nothing yet
+  compares versions or alerts on a rollback. `PublishPackage` is the hook a
+  future "upstream regressed" incident would use.
+* **Source packages (`deb-src`), multi-arch, and `apt`'s deb822 drop-ins**
+  are parsed where the format is trivial and ignored where it is not.
+* **Removal does not garbage-collect the pool**: a mirror keeps files an
+  index no longer references, as real mirrors do.
+
+---
+
+# Household network (WS-1.7) — §14 家庭网络, and the §28 attack surface it feeds
+
+Ownership: `internal/core/uci.go` (UCI parse/render/stage),
+`internal/core/firewall.go` (the packet path's view of exposure),
+`internal/shell/fw_cmds.go` (`uci`, `iptables`, `upnpc`),
+`tests/firewall_test.go`. Touched, with their owners' sections updated here:
+`internal/core/net.go` (`Dial`'s forwarding block, `PermitsWAN`, DMZ, the
+bypass of the target's LAN scope), `internal/core/world.go` (`Device.Firewall`
+and `Device.PortFwd` deleted, with `FWRule`/`FwdRule`),
+`internal/core/devseed.go` + `world_init.go` (shipped configs, mara's
+forward), `internal/core/iot.go` + `internal/shell/iot_cmds.go` (`camctl`,
+`World.CameraCloud`), `internal/shell/vscript.go` (`reload` verb) and
+`internal/shell/world_cmds.go` (recon).
+
+## The model
+
+Exposure is not a flag on a device. It is a configuration file, read fresh on
+every packet:
+
+* **Router** = `/etc/config/firewall` (OpenWrt UCI: `config defaults`,
+  `config redirect`, `config rule`) + `/etc/config/upnpd` + the daemon's live
+  lease file `/var/run/miniupnpd.leases`.
+* **Host** = `/etc/iptables/rules.v4` (Fedora/RHEL: `/etc/sysconfig/iptables`),
+  iptables-save format.
+* `Device.FW()` returns `FirewallState{Redirects, Rules, UPnPLeases, WANInput,
+  ForwardPolicy, HostInput, LogDrops, Errors}` and re-reads those files every
+  call, so there is no cache to invalidate and no way for the log and the
+  packet path to disagree. `AllRedirects()` adds the UPnP mappings when the
+  daemon is enabled. `PermitsWAN(port)` is the one question the packet path
+  asks; `RedirectFor(port)` is the NAT decision, where `WPort == 0` is a DMZ
+  matching every port.
+* **Fail closed.** A file that does not parse yields *no* rules — never the
+  last-known-good set. `FirewallState.Errors` carries the reason, recon and
+  `/etc/init.d/firewall reload` print it, and `uci` refuses to edit a file it
+  cannot parse, the way real uci does, so a broken config cannot be quietly
+  rewritten from a lossy parse.
+* **Two verbs, one meaning.** `uci set/add/delete` stage; only `uci commit`
+  writes the file. Before the commit, the packet path is untouched — which is
+  the whole reason the tool has two verbs, and what makes "half-applied
+  firewall" a real failure mode.
+
+## What exists
+
+* **`uci`** (root only): `show`, `get`, `set`, `add`, `add_list`, `delete`,
+  `commit`, `changes`, `revert`. `uci add firewall redirect cam-rtsp` makes an
+  anonymous section and prints its ref (`@redirect[0]`); `uci set
+  firewall.cam-rtsp=redirect` creates a named one. `uci changes` lists the
+  pending commands per config; `uci commit <config>` applies exactly those and
+  clears them; `uci revert` throws them away.
+* **`iptables`** (root only, INPUT chain): `-S`, `-L`/`-n`/`-v`, `-A`, `-I`,
+  `-D`, `-F`, `-P`, with `-p tcp|udp`, `-i <iface>`, `--dport`, `-j
+  ACCEPT|DROP|REJECT`, and an optional trailing `# comment`. It reads and
+  rewrites the same file `iptables-save` would, so `cat`, `iptables -L` and
+  the packet path can never disagree (both the `:INPUT DROP [0:0]` policy
+  line and `-P INPUT DROP` are understood).
+* **Real NAT and filtering in `Dial`**: a connection arriving on a router's WAN
+  port consults `PermitsWAN`; a permitted port that has a redirect is DNATed to
+  the LAN target and the connection *continues* there (no shortcut: the target's
+  own service, scope and rules decide the outcome); a DMZ is a redirect with no
+  destination port. A forward deliberately bypasses the target's LAN-only
+  scope — that is what publishing a port means — and every translated or
+  dropped packet is logged (`DNAT gateway:554 -> 10.77.1.40:554 (redirect
+  cam-rtsp, from 203.0.113.3)`, `DROP wan 554/tcp ... (no rule permits it)`)
+  when `log_drops` is on.
+* **UPnP** (§14's one hole nobody typed): `upnpc -l/-a/-d` is the client half
+  and only finds a gateway *upstream* of itself, so it works from a LAN host
+  (and from the camera) but not on the router itself. `World.UPnPMap` writes a
+  real lease file, logs on the router, and posts an event; `upnpd.enabled=0`
+  stops honouring the leases without deleting them (so re-enabling restores
+  the mapping), and `upnpc -d 554 tcp` from a LAN host deletes one, naming the
+  host that did it.
+* **`camctl`** (the vendor CLI on the camera): `status`, `cloud on|off`.
+  Turning cloud viewing on is a real UPnP request through the router; it fails
+  closed (`cloud viewing unavailable: ...`) when UPnP is off, and a failed
+  request writes no config. `status` reports configuration and reachability
+  *separately* — "cloud viewing: on" plus "no mapping on the gateway" is how a
+  camera looks when somebody quietly un-mapped it, and that gap is the point.
+* **`/etc/init.d/firewall reload`** is a check verb, not decoration: it reports
+  what is in force right now, the redirects by name, the default policies, the
+  parse errors if any, and writes `/var/run/firewall.applied`.
+* **recon** prints the router's `ExposureSummary()`: every redirect with its
+  target (UPnP mappings labelled as such), the DMZ as "all ports", the WAN
+  input policy, and a warning when the router's own management interface is
+  exposed.
+
+## Defaults and the shipped household
+
+`router` seeds `wan_input REJECT`, `forward REJECT`, `log_drops 1`, UPnP
+enabled, and zero redirects; `pc`, `nas` and the assistant seed DROP plus the
+LAN accepts they need (ssh everywhere, SMB on the NAS); a VPS and the
+infrastructure hosts seed ACCEPT plus ssh, because a public host that answers
+is what "public host" means. Unruled WAN input is dropped for
+`pc|nas|router` and allowed for `core/vps/infra/peer/server`.
+
+## The tests
+
+`tests/firewall_test.go`, ten tests, each with a happy path, a permission or
+policy boundary and a recovery:
+
+* the shipped household filters 22/23/80/443/554/445/2049 from the internet,
+  logs the drops, still serves the LAN, and has an empty exposure summary;
+* `uci set` changes nothing until `commit`, `revert` discards, and a committed
+  `enabled=0` closes the hole;
+* a port-forward really translates (the camera's stream case, and the NAS's web
+  console), logs the DNAT, recon follows it to the machine behind, and closing
+  it restores the default;
+* a DMZ carries *every* port to one host — one that answers, one that refuses —
+  and removing the section restores the router;
+* `src wan ... ACCEPT` exposes the router's own sshd; flipping
+  `wan_input=ACCEPT` exposes its telnetd too and makes `ExposureSummary` warn,
+  and flipping it back closes it;
+* a VPS: a non-root user is refused by `iptables`, `-P INPUT DROP` closes
+  everything but the published ssh, `-A`/`-D` publish and unpublish, and the
+  file, `iptables -L` and the packet path agree;
+* UPnP: the camera asks, the lease and the logs and the event appear, the
+  internet reaches the stream, `upnpd enabled=0` stops honouring it without
+  deleting the lease, a request while disabled fails without changing the
+  camera's config, re-enabling works, and a LAN host removing the mapping
+  closes it and is named in the log;
+* the camera's console requires a real gateway and starts off;
+* **no simulation step ever opens a port** — 200 ticks with the mirror
+  syncing, NPC routines, cron and IoT, and the router is still closed;
+* a malformed config fails closed, `reload` says why, `uci` refuses to edit it,
+  and a hand-repaired file restores service.
+
+## Not implemented on purpose
+
+* **IPv6 firewalling**: `ip -6 addr` still shows no inet6 on this network, and
+  the firewall model is IPv4 (`v4`-path files). §13 is where addresses grow,
+  and ip6tables follows the same shape if it is ever needed.
+* **conntrack states** (`-m state`), `ipset`, `fw3`, and per-rule packet
+  counters: the ruleset is real but simple, and the renderer writes the file
+  the tools read rather than pretending to be netfilter.
+* **A web UI for the router**: managing it means `ssh` + `uci`, which is the
+  honest interface for the images this world ships.
+* **Wireless client isolation and VLANs**: the guest network exists as an
+  interface, but §14's per-network policy is not modelled yet.
+
+# IP system (WS-1.8) — §13 地址系统, and the addressing §12 needed to exist
+
+## The model
+
+One vocabulary, in `internal/core/addrs.go`: `ClassifyAddr` returns an `AddrInfo`
+whose `Kind` is `loopback | link-local | private | shared | public-v4 |
+public-v6 | ula | unassigned | unknown`, and every other part of the world asks
+it rather than re-deriving "is this public". §13's list maps onto it directly:
+
+* **public IPv4** — one /24 per autonomous system, allocated per prefix so a
+  prefix has exactly one holder (that is what makes `whois` attribution truth
+  rather than a guess);
+* **public IPv6** — one /48 per AS, `2001:db8:<asn hex>::/48`, with subscriber
+  /64s handed out from index 16 up and read back from `WAN.V6Issued`, so
+  renumbering or a reload cannot hand the same /64 to two households;
+* **RFC1918** — the household's own `10.77.1.0/24` and the LAN plans;
+* **CGNAT / shared address space** — `100.64.0.0/10` from `allocSharedV4`; the
+  address sits on the interface as `Iface.SharedIP`, never enters `IPMap`, and
+  no inbound packet can reach it;
+* **loopback / link-local / ULA** — `::1`, `fe80::`, `fd00:<lan>:<n>::/64` per
+  LAN; a link-local address is present on every v6 interface and is explicitly
+  *not* connectivity (fastfetch says "link-local only");
+* **dynamic** — a DHCP lease is a file (`/var/run/udhcpc.<if>.lease`) and the
+  address is marked `dynamic valid_lft` by `ip addr`; `RenumberWAN` moves a
+  node's WAN address, its `IPMap` entry and its A record together, and refuses
+  an address somebody else holds;
+* **shared IP** — a plan whose nodes sit behind the provider's NAT: outbound
+  works, inbound says "No route to host (carrier-grade NAT…)";
+* **virtual IP** — a secondary public IPv4 lent by the provider
+  (`AttachVirtual`/`DetachVirtual`/`VirtualIPs`), on the interface as a second
+  `inet … secondary`, registered in `IPMap` so the packet path lands on the
+  right device, movable between nodes, refused onto somebody else's address or
+  a private one, and never removable when it *is* the node's own address;
+* **NAT mapping** — the §14 translator stays the only thing that opens an
+  inbound path, and it is re-read per packet.
+
+## IPv6 is not decoration
+
+Every device has a real v6 stack: a global address, a ULA and a link-local one.
+`ip -6 addr`, `ifconfig`-family output, `ping6`, `dig -t AAAA`, `ss -6` and
+`ip -6 route` all read it. Publication follows §13's rule that IPv6 does not
+translate: a LAN host is reachable on v6 only when a rule on the router in front
+*names its address* (`Rule.DestIP` in `/etc/config/firewall`, no NAT) **and** the
+host's own `ip6tables` INPUT accepts the port. Either one missing and the
+connection times out, which is exactly the two-sided configuration a real
+household has to get right.
+
+## Attribution and §12's rDNS
+
+`whois`/`rdap`/`bgp` answer from the AS that announces the prefix: provider, ASN,
+region, range, abuse contact, rDNS status — never a person. `Attribution.Kind`
+and `Note` carry the qualifier when the answer is not a plain owner (carrier
+grade NAT says so in words). A node's `RDNS` name is published in the reverse
+zone, so `dig -x` returns the operator's chosen name and a private or CGNAT
+address has no PTR at all.
+
+## The packet-path bug this workstream exposed
+
+`routerFor` now skips the device itself — a router is not its own upstream — and
+that change silently removed the router from three call sites that *must* judge a
+packet addressed to the household's edge: `Dial`, `Reach` and `ForwardTarget`.
+The symptom was a router that stopped logging WAN drops (so §14's "filtered
+packets are logged" stopped being true) and a DMZ that stopped being followed.
+All three now fall back to `r = dst` when the destination is a router and no
+upstream router exists, and the 14 firewall/FTP tests that depended on it are
+green again.
+
+## Verified
+
+`tests/addrs_test.go` (9 tests) plus `tests/vps_test.go`'s region and rDNS cases:
+the shipped world's addresses classify as they should; every device has a real v6
+stack; a household host is unreachable on v6 until both the router rule and the
+host ruleset allow it; AAAA records are published and bounded; a shared plan is
+outbound-only while its egress shows the operator's NAT address; a v6-only plan
+has no IPv4 at all; a dynamic address renews without moving and moves only when
+the operator renumbers it; a reserved address is movable; `dig -x` finds the
+operator's PTR and never a person.
+
+## Not implemented on purpose
+
+* **NAT64 / DNS64**: a v6-only node really cannot reach IPv4, and saying so is
+  more honest than a translator nobody asked for.
+* **SLAAC/RA in the packet path**: addresses are assigned by the world's own
+  allocator; router advertisements are not modelled as a protocol.
+* **IPv6 prefix delegation to the household's own router by DHCPv6-PD**: the
+  delegated /64 is read back from the provider, which is the same fact without
+  the wire protocol.
+
+# VPS lifecycle (WS-1.9) — §12 计算机 as a machine you own
+
+## The model
+
+A rented node *is* a Device, so every panel verb is an operation on the machine
+the rest of the world talks to. `VPSStop` really powers it off (`setPowered`),
+which stops its services, clears its processes and makes `Reach`/`Dial` report
+"host is down"; `VPSStart` brings back exactly the services it was running;
+`VPSReboot` keeps the disk and resets uptime. Nothing here prints a status the
+machine does not have.
+
+**Regions are networks.** NovaPanel sells three datacenters, each its own AS
+(`asNova` eu-central, `asNovaUS` us-east, `asNovaAP` ap-northeast) with its own
+/24 and /48 — so a `--region` choice moves the address, the `whois` attribution
+and the real latency a `traceroute`/`ping` reports. An unknown region is refused
+before any money moves.
+
+**The panel keeps records.** `Provider.Nodes` holds each node's plan, image,
+region, datacenter, rDNS, monthly price, rebuild count and snapshots; `vps show`
+prints them and `LoadWorld` backfills old saves.
+
+## What exists
+
+* `vps regions` — the published datacenters, their AS and their block.
+* `vps create PLAN [hostname] [image] [--region R]` — buys in a region.
+* `vps show <host>` — plan, image, region, state, addresses, reserved addresses,
+  rDNS, price, rebuilds, snapshots.
+* `vps start|stop|reboot <host>` — real power, real uptime, real reachability.
+* `vps reinstall <host> <image>` — refused while running; wipes the disk, lays
+  down the new distribution's own `/etc/os-release`, repositories, package
+  manager and shell, **keeps** the address and the name, and issues new
+  credentials (the rebuild count seeds the password, so the old one really stops
+  working).
+* `vps resize <host> [--cpu N] [--mem MB] [--disk MB]` and `vps disk <host> GiB`
+  — refused while running, disk can only grow, RAM cannot shrink below what is
+  in use, upgrades are billed (downgrades are not refunded), block storage is
+  billed monthly, and the household's wallet and the panel's monthly price both
+  move.
+* `vps snapshot|snapshots|restore` — a snapshot is a real copy of the disk
+  (files, accounts, packages); restoring is refused while running, brings back
+  deleted files and removes later ones, and leaves the machine stopped so it can
+  boot the restored system.
+* `vps console <host>` — the machine's own shell (the same code path as
+  `vm console`), refused on a powered-off node.
+* `vps rdns <host> [name]` — publishes the reverse name; `dig -x` shows it.
+* `vm create … --ip public|shared|v6only` — a hypervisor guest now gets the same
+  addressing choice its plan implies (`CreateVM(..., ipMode)`), priced by the
+  same rule via `core.NodePriceCents`.
+
+`NodePriceCents` now lives in core (the shell's `vmCost` delegates), which is why
+the panel and `vm create` cannot drift apart.
+
+## The tests
+
+`tests/vps_test.go`, seven tests, each with a happy path, a boundary and a
+recovery: power off/on/reboot with real reachability and uptime; another account
+refused every verb; reinstall refused while running and afterwards a different
+system on the same address with dead old credentials; resize/disk refused while
+running, billed when stopped, disk shrink and unaffordable storage refused;
+snapshot/restore rollback with an unknown snapshot refused; regions giving
+different blocks, different owners and measurably different latency; rDNS
+published, changeable, refused for a malformed name and for another account;
+console landing on the node's own filesystem and exiting.
+
+## Not implemented on purpose
+
+* **Bandwidth/transfer billing and datacenter migrations**: the panel bills for
+  what this world can really measure; moving a node between regions would be a
+  new address plus a new host, and pretending otherwise would be worse than not
+  offering it.
+* **Snapshot scheduling**: snapshots are the customer's action here, not a cron
+  the player cannot see.
+* **Live resize**: a real provider can sometimes hot-grow a disk; this world
+  requires a power-off, which is the conservative and checkable rule.
+
+# 家庭设备与物理层 (WS-1.10) — §15 家庭设备
+
+## The model
+
+§15 asks for the household's own machines and the failures between them. The
+answer is a **physical layer made of state**: `link.go` gives every device an
+uplink (`Device.Uplink`/`UplinkPort`) and every managed switch a real port table
+(`SwitchState.Ports`, 8 ports, a PoE budget, per-port admin/PoE/speed). The
+switch in the hall is a device with its own `dropbear`, its own UPS and its own
+config file, not a hub-shaped constant.
+
+Four things follow from that, and each one is a failure a player can chase:
+
+* **A dead wire is a diagnosis.** `World.linkUpVia` is the only wire question;
+  `Dial`/`Reach` prepend its reason, so the printer behind a downed port answers
+  "Connection timed out (link down: port 6 (printer) on sw-hall is down)" instead
+  of a generic unreachable.
+* **A switch whose uplink died is an island, not a blackout.** Traffic that stays
+  inside the island passes `crossUplink=false`, so two devices on the same switch
+  still reach each other with the router dark — which is exactly why the cameras
+  keep streaming through an outage while nothing reaches the internet.
+* **PoE is electricity with a budget.** Power is spent in port order: a port that
+  does not fit under `BudgetW` is refused, the ports already up keep theirs, and
+  turning a camera's PoE off really kills it (its port then shows link *down*,
+  because a PHY without power has no link). `DarkenPoE` runs on a plug pull and
+  when a UPS runs flat.
+* **The config is a file.** `/etc/config/switch` is rendered from the port table
+  and re-read on every `linkUp`/`switchctl` (`RenderSwitchConf` /
+  `LoadSwitchConfig`), exactly like the firewall — a hand edit takes effect.
+
+Power is a first-class cause rather than a special case. `Powered()` walks
+PoE → battery/lid → mains, so a camera fed by the switch, a laptop on its battery
+and a NAS behind the breaker all answer honestly, and
+`Device.UnavailableReason()` is the one place that puts it into words — shared by
+the shell's "Connection to host lost (no power — the household supply is off)",
+the switch's port table and the SSH entry's out-of-band fallback. Physical acts
+got verbs (`power cut|boot|plug|unplug|lid HOST`) because a breaker, a socket and
+a lid are things done with hands: performable from another machine, but not by a
+machine that is dark or asleep itself.
+
+## What exists
+
+* `sw-alex` (TP-Link TL-SG108PE): 8 ports, 60 W PoE budget, UPS, dropbear:22;
+  port 1 = uplink to the gateway, 3 = laptop, 5 = camera (PoE, 8.2 W), 6 =
+  printer, 2/4/7/8 free.
+* `laptop-alex`: battery + lid + charger state, users `alex`/`guest`, its own
+  `dropbear` so the machine is actually reachable.
+* `prn-alex`: a real spooler — `/var/spool/cups/queue`, `tray.log`, `cupsd:631`,
+  paper and toner that run out, 60 lines to a sheet.
+* `switchctl|swconfig show|status`, `port N up|down`, `poe N on|off`,
+  `budget [W]`, `attach N HOST [poe]`.
+* `lp|lpr`, `lpstat`, `cancel`, `lpadmin status|paper|toner|pause|resume` — the
+  client half dials the printer's own port before spooling.
+* `laptopctl status|lid open|closed|charge on|off`, `power plug|unplug|lid HOST`,
+  `backup run|status`, `links` (the household's own view of what has a wire).
+* `cam records` on the camera, whose clips land on the NAS: with the NAS down the
+  camera says "recordings dropped: storage target unreachable" and stops.
+
+## The chain from the spec
+
+Camera → PoE switch → router → NAS is live in the seed, so each link's failure
+has its own signature: PoE off (camera dark, switch fine), port down (device
+powered but off the network), switch UPS (the house goes dark, the cameras keep
+running, then the UPS runs flat and everything PoE does too), NAS unplugged
+(backups and recordings stop, shares unreachable), and the main breaker (the PC
+dies mid-session — the SSH entry then lands the player on the BMC, which is on
+its own battery and cellular backhaul, and `bmc power boot` restores the house).
+
+## The tests
+
+`tests/house_test.go`, seven tests, each with a happy path, a boundary and a
+recovery: cabling and port-file parity with the running state, an uplink cut
+refusing to take the island down, `switchctl` diagnostics; port-down → printer
+offline but still powered (syslog + recovery) and PoE-off → camera dark
+(recovery); PoE budget bounds (refuse below the current draw, shrink when a
+camera goes off, refuse a new port that does not fit, PoE on a self-powered
+device is an error); a power cut where the switch's UPS keeps the cameras up
+while the NAS dies, battery drain → everything PoE dark → `bmc power boot`;
+printer spool/tray/out-of-paper hold/paper load/cancel permission/dead-port
+submission; laptop battery → flat → charger recovery → lid suspend/wake → the
+desktop says it has no lid; and the NAS as a dependency of `backup run`, of its
+shares and of the camera's recordings, with recovery.
+
+`tools/house_verify.sh` is the live counterpart: a real SSH session walking the
+whole sequence over `:2222`, ending with the switch's own config file read back
+from the switch itself.
+
+## Not implemented on purpose
+
+* **802.1Q/VLANs and STP**: the port model carries admin/PoE/speed/labels, which
+  is what the household's failures need; a spanning-tree simulation would be a
+  second, unobservable network stack.
+* **Switch firmware updates and SNMP**: an unobservable daemon is scenery —
+  `switchctl` reads the same state `linkUp` uses instead.
+* **Printers with their own queue UI over IPP**: `cupsd:631` answers and the
+  queue is real; implementing IPP's wire protocol would not change one byte of
+  state a player can see.
+
+# 系统状态 / 资源管理 (WS-1.11) — §17 资源不是装饰
+
+## The model
+
+§17 lists CPU, RAM, swap, disk, disk I/O, network bandwidth and process count and
+says every one of them must really affect the system. The answer is a small
+kernel-side accounting layer (`internal/core/resources.go`) on top of state that
+was already real — memory in use and disk in use are *derived* from the processes
+and the filesystem, never stored twice:
+
+* **CPU is shared, not claimed.** Each process has a `WantCPU` and a measured
+  `CPU`; `CPUShare()` is the fraction of the request a machine can honour. A
+  machine with four workers on one core really gives each of them a quarter, and
+  `htop` shows both numbers so the gap is visible. Everything that should slow
+  down consults that one share: the printer's spooler earns credit per tick
+  (a sheet costs two ticks of an idle CPU), the assistant's job progress
+  advances by it, and bulk work (`WorkRate`) multiplies by it.
+* **Load averages are the machine's own.** `uptime`, `top` and `htop` print the
+  exponentially weighted averages of `CPUDemand()/CPUCapacity()`, so a busy
+  machine says so and decays honestly when the work stops.
+* **RAM → swap → OOM.** Over RAM pages into swap (half the RAM, the rule `free`
+  has always printed); swap full with the machine still over RAM kills the
+  biggest resident process for real — services marked failed, the victim gone
+  from `ps`, the kernel's own "Out of memory: Killed process" line in the log.
+  With nothing but daemons left, the services are what fails. The same chain a
+  guest VM already had now applies to the machine itself.
+* **A full disk is an error, not a warning.** `DiskLimitMB()` is a guest's
+  virtual disk or a host's own disk, and every player-visible write goes through
+  `WriteGuest`, which returns `no space left on device` when the bytes do not
+  fit. Logs are the second casualty: a full `/` really loses syslog lines,
+  `df` reports the count, and the reckoning ("N message(s) dropped") is written
+  once there is room. Installs check room first and refuse in each manager's
+  voice.
+* **Disk I/O and the link are throughput.** `DiskMBps` (per profile, overridable)
+  and `HW.NetMbps` give `WorkRate()`: a gigabit-plus-500 MB/s machine completes
+  one unit of bulk work per tick, a slow one takes proportionally longer. The
+  mirror sync is the visible consumer — a sync that took three ticks on a fast
+  mirror takes more on a slow or busy one, and the tree's state is unchanged by
+  the waiting.
+* **The process table is finite.** `ProcLimit()` (RAM/8, floor 24) refuses forks
+  with `Resource temporarily unavailable`, the count of refusals is kept, and
+  `vmstat` reports it.
+
+## What exists
+
+* `stress` — real background load: `--cpu N`, `--vm N --vm-bytes SIZE`, `--timeout T`
+  (`pkill stress` ends it early). The workers are real entries in the process
+  table with real memory and real demand.
+* `dd` — writes real bytes into the filesystem (`if=/dev/zero`, a source file,
+  `bs=`, `count=`, `status=none`), reports the records that landed, and fails
+  with the filesystem's error when the disk fills. A single file is capped at
+  64 MiB — a stated model limit, not a fake errno — so a disk fills the honest
+  way, with several files.
+* `htop`, `top` — memory, swap, tasks, load average and per-process CPU vs what
+  it asked for, with a line when the machine is over RAM or the disk is full.
+* `free` — real memory and real swap in use; `df` — the real limit, the warning
+  when writes are failing and the dropped-log count; `uptime` — the measured
+  load average; `vmstat` — one sample per command (the world clock moves on
+  ticks, so there is nothing to sleep for) with the per-tick disk and network
+  rates the transfer paths feed.
+
+## The tests
+
+`tests/resources_test.go`, six tests, each with a happy path, a boundary and a
+recovery: four workers on one core sharing a quarter each with a spooler that
+stops finishing sheets, the load average climbing and decaying, and the fork
+limit refusing the load past the table's size; a 300 MiB hog paging, a second
+hog taking the machine past swap and the kernel killing the biggest resident
+while the printer's own daemon survives and the swap drains; 16 MiB of flash
+filling from `dd`, the write after it failing with the filesystem's error, the
+log losing lines and counting them, and the file being removed to bring
+everything back; `apt` refusing to unpack onto a full disk in its own voice and
+taking the same package once there is room; every monitoring command printing
+the same numbers the consequences use; and the same 64 MiB write taking twice as
+long on a mirror whose disk is two fifths as fast.
+
+`tools/resource_verify.sh` is the live counterpart over `:2222`: a load on the
+laptop, the same write measured before and after, an OOM kill on the switch, and
+a disk filled, logged, recovered.
+
+# 防守和安全软件 (WS-1.12) — §33 防守和安全软件
+
+Ownership: `internal/core/security.go` (flows, failures, bans, jails, IDS rules,
+`SecurityTick`), `internal/core/secaudit.go` (auditd, aide, clamav, monit,
+central logs, quarantine), `internal/core/attacker.go` (the world's own
+scanner), `internal/core/backup.go` (restic-shaped backup),
+`internal/core/hids.go` (rkhunter-shaped host monitoring),
+`internal/shell/sec_cmds.go` + `internal/shell/backup_cmds.go` (the tools'
+commands), `tests/security_test.go`, `tools/security_verify.sh`. Touched, with
+their owners' sections updated here: `internal/core/world.go`
+(`Service.MonitDown`, `Device.Security` and its gob shadows),
+`internal/core/engine.go` (`ScannerTick()` then `SecurityTick()` in `Tick`),
+`internal/core/net.go` (the ban gate in `Dial`, and `NoteFlow` on every
+attempt), `internal/core/ftp.go` + `internal/shell/{remote,sftp_cmds}.go` (a
+rejection is recorded by the target), `internal/core/vmdisk.go` (a real write
+is what an audit rule sees), `internal/core/firewall.go` (`FirewallPosture`),
+`internal/core/cron.go` (`/etc/cron.d` support, so a package's own schedule
+runs), `internal/core/pkgs.go` (`putSecurityTools` for debian/alpine/fedora,
+and the malware database on the mirror), `internal/core/world_init.go` (the
+household's own facts: the NAS keeps the central log, the router forwards to
+it, the laptop carries the sample malware), `internal/shell/log_cmds.go`
+(`logger`) and `internal/shell/{fs,shell}.go` (printf really formats, the
+quote rules are the real ones — see below).
+
+## The model
+
+§33 asks for defence tools that really affect the world. This world offers them
+three facts, and every tool below is one of them:
+
+* **flows** — the packet path's own record of who tried to reach a machine.
+  There is no packet capture here, so the flows *are* the sensor: every `Dial`,
+  whatever its verdict, leaves a line on the destination (`Device.NoteFlow`, a
+  ring of 400). A port scan is therefore a *shape in that table* — N distinct
+  ports from one source inside a window — a brute force is a count of
+  refusals, and 异常流量 is the third shape: N connection attempts from one
+  source, whatever ports they are.
+* **fails** — rejected authentication, recorded by the **target**, never by the
+  client. A jail counts what the machine it defends actually saw, so an
+  attacker cannot talk their way out of the record by not being logged.
+* **changes** — file hashes (aide), kernel audit records (auditd), service
+  states (monit), the lines a machine writes (central logs), the bytes of a
+  file (clamav), the repository's own manifests (restic) and the machine's
+  facts about itself (rkhunter).
+
+Three rules follow, and they are what separates this from decoration:
+
+1. **A tool is installed software.** Its commands exist only once its package
+   is installed (`pkgBinaries` + `pkgCommandMissing` in `shell.go`): on a fresh
+   machine `fail2ban-client status` prints `command not found`, and `secstat`
+   names every missing tool and the config file it would have read.
+2. **The configuration file is the configuration.** Jails, IDS rules, the
+   integrity watch set, monit's checks, the audit rules, the backup repository,
+   the host monitor's watch list and the router's log destination are re-parsed
+   on every call — an operator who edits a file changes behaviour on the next
+   command, and nothing is cached.
+3. **A tool acts only while its service runs.** A stopped IDS alerts nobody, a
+   stopped jail bans nobody, a stopped watchdog restarts nothing, a stopped
+   auditd records nothing, a stopped collector receives nothing, a stopped host
+   monitor compares nothing — and a ban is enforced in `Dial` *before* every
+   other gate (port range, power, link, firewall, service), so a banned source
+   really cannot reach the machine.
+
+## What exists
+
+* **`fail2ban`** — `/etc/fail2ban/jail.conf` (shipped: `bantime 10m`,
+  `findtime 10m`, `maxretry 3`, an enabled `sshd` jail) is parsed on every call;
+  `fail2ban-client status|status <jail>|set <jail> banip|unbanip|reload` acts on
+  the real ban table. A ban expires on the world clock, and expiry *forgets the
+  offender's failures* the way a real jail does, so the same three failures
+  cannot re-ban forever.
+* **`suricata`** — `/etc/suricata/rules` with `portscan ports= window=`,
+  `authfail fails= window=`, `flood conns= window=` and `exploit` rules, each
+  `action=ban,alert`, `alert`, a `level=` and a `bantime=`; `suricata -T` prints
+  exactly what was parsed and refuses a rule file it cannot read. Alerts land in
+  the machine's own alert ring (`secstat alerts`), bans in the same ban table
+  fail2ban uses.
+* **`aide`** — `/etc/aide/aide.conf` (`watch =` directories, `interval =`,
+  `freshfiles =`), a real baseline database of per-path hashes, `aide --init`,
+  `aide --check` (prints `modified`, `added`, `removed`) and `aide --status`.
+  The baseline is immutable; each path alerts **once** per change, and a stopped
+  monitor watches nothing.
+* **`clamav`** — `freshclam` fetches `/clamav/main.db` from the mirror over the
+  same HTTP path as the package metadata, `clamscan -r` finds the signatures
+  that really are in the file, `--move=DIR` moves the bytes to quarantine and
+  removes the original, and `secstat quarantine` lists what was taken. A machine
+  that never ran `freshclam` refuses to scan (`virus database missing`), and one
+  whose database is over a week old says `stale`.
+* **`monit`** — `/etc/monit/monitrc` `check service <name> maxdown=N
+  interval=T action=restart`: the service is really started again after N failed
+  checks, a check for a service that does not exist reports `not-present`
+  instead of inventing success, and the restarted service is *running*.
+* **`auditd`** — every `/etc/audit/rules.d/*.rules` line is parsed with real
+  `auditctl` syntax (`-w path -p wa -k key`, `-a always,exit -F arch=b64 -S
+  execve -k exec`, `-F path=`/`exe=`/`syscall=`), `auditctl -l` prints the loaded
+  set, and `ausearch -k key|-w path|-n N` reads the records. A record exists only
+  if the daemon runs **and** a loaded rule matches.
+* **central logs** — a machine configured to forward (rsyslog `*.* @host:514`,
+  OpenWrt's `log_ip`/`log_port` from `/etc/config/system`) sends each line over
+  the same packet path as everything else, so a collector that is down, banned
+  or unwired really loses lines; the sender says `could not forward to <host>`
+  when it notices. `secstat remote [host]` reads the collector's own record.
+* **`restic`** (Backup) — the repository is real files on the machine that
+  holds it: `config`, `keys/`, `data/<xx>/<blob>`, `snapshots/<id>`, `index/`.
+  Every blob is content-addressed and written only when it is not already there,
+  so the second backup of an unchanged tree costs nothing; every snapshot is a
+  manifest naming the files, their modes and their blobs. `/etc/restic/env`
+  names the repository (`RESTIC_REPOSITORY`, `RESTIC_PASSWORD_FILE`) and the
+  shipped default is **off the machine it protects** (`root@nas:/srv/restic`),
+  resolved through the same packet path as everything else. `restic
+  init|backup|snapshots|check|restore|forget|stats|cat` — `check` re-hashes
+  every referenced blob and `restore` re-hashes every blob it reads, so a
+  tampered repository is a named error in both, never a hope and never the
+  wrong bytes quietly written back into the live tree; `restore` refuses to
+  clobber a live file without `--overwrite`, and
+  `forget --prune` really drops the blobs no remaining snapshot references. A
+  package's schedule lives in `/etc/cron.d/restic`, and `/etc/cron.d` is read by
+  the game's cron with the user on each line, exactly as Vixie cron reads it.
+* **`rkhunter`** (HIDS) — `/etc/rkhunter.conf` says what the host watches
+  (`CHECK_SERVICES`, `CHECK_ACCOUNTS`, `CHECK_BINARIES`, `BINARY_WATCH`,
+  `SUSPICIOUS_DIRS`, `INTERVAL`), `/var/lib/rkhunter/baseline` is the picture
+  `--propupd` took, and `--check` compares the machine with it: an unknown
+  listening port, an account that did not exist, a binary whose bytes differ, a
+  new executable in a watched directory, an executable in a world-writable
+  directory. The baseline is a deliberate act — nothing is reported before one
+  is taken — and the running service raises each finding as an alert once per
+  window.
+* **`secstat`** — the posture report (`status`, `alerts [n]`, `flows [n]`,
+  `bans`, `audit`, `firewall`, `hids`, `backup`, `remote [host]`,
+  `quarantine`) reads the same state the tools act on, which is how a player
+  checks the world instead of trusting a sentence. The firewall's two lines come
+  from `Device.FirewallPosture()` — the same `FW()` every packet consults.
+* **The world's own attacker** — a real device (`scan-host`) with a real public
+  address and a default route that sweeps the public addresses of the world
+  every 97 ticks, 24 ports per target, and then tries a short credential list
+  against whatever ssh endpoint really answered (through a port-forward, if that
+  is where the port landed). It stops when it is banned. Nobody scripts it.
+
+## The shell had to be honest first
+
+§33's story is edited in configuration files, so the shell had to grow up:
+`printf` now really formats (escapes, `%s`/`%d`/`%x`/`%c`/`%b`, flags and width,
+and the format repeating until the arguments run out) instead of printing its
+own format string, `echo -e` interprets escapes while plain `echo` does not, and
+`tokenize` follows the real quote rules — inside single quotes every character
+is data (a backslash included), inside double quotes only `$`, `` ` ``, `"`, `\`
+and a newline lose theirs, and outside quotes a backslash escapes what follows.
+Without that, `printf 'watch = /etc\ninterval = 1m\n' > /etc/...` wrote a single
+mangled line. `tests/world_test.go`'s `TestPrintfAndQuotingAreReal` pins it, and
+the tools here are installed and configured through exactly that surface.
+
+## The tests
+
+`tests/security_test.go`, sixteen tests, each with a happy path, a boundary and
+a recovery: the jail bans the source of three failures and the ban really blocks
+`Dial` (and is lifted, and expires); an edited jail file changes behaviour; an
+IDS portscan rule alerts and bans from a real sweep; an integrity check notices
+a real change to a watched path and nothing at all while stopped; an antivirus
+refuses to run without a database, flags a stale one, finds the sample malware
+and quarantines real bytes; monit restarts a stopped service on the second
+failed check and reports a check it cannot satisfy; auditd records a write to a
+watched path and nothing to an unwatched one; central logs arrive at the
+collector and a stopped collector loses them; each tool's commands are absent
+until its package is installed; the scanner's tick is deterministic and bounded;
+`secstat` agrees with the state behind it; a backup keeps yesterday's file after
+today's deletion, restores it, notices a tampered blob and frees space on
+`forget --prune`; a flood rule catches a flood and leaves one connection alone;
+and the host monitor reports a new account and an executable in `/tmp`, then
+goes quiet after a new baseline.
+
+## Verified
+
+`go vet ./...` clean, `gofmt -l` empty, the whole suite green.
+`tools/security_verify.sh` is the live chain over the real SSH entry, and it
+walks the story in twelve steps: a fresh household's posture (`secstat` naming
+the missing tools), the scripted DNS fault repaired on the router, suricata
+installed on the NAS where a real `nmap` from the PC becomes
+`9 distinct ports from home-pc (2001:db8:fbfe:10::b) in 2m` and the same nine
+attempts sit in the flow table, fail2ban closing the door on the PC's address
+while the laptop's session to the same machine still opens (the ban is per
+source address, and the operator lifts it by reading the jail's own report from
+a session that is not banned), aide's baseline and a real edit to `/etc/hosts`,
+clamav updating from the mirror and moving the sample file to
+`/var/quarantine/home_alex_Downloads_invoice-2026-04.pdf.quarantined`, monit
+bringing a stopped `sshd` back on the second failed check, auditd showing the
+watched write to `/etc/passwd` and nothing for `/etc/hosts`, rkhunter taking a
+baseline and then naming an executable planted in `/tmp`, the router's
+forwarding stopping and starting while the refused attempts stay in the NAS's
+flows, restic initializing, snapshotting twice across a deletion and restoring
+the file — then catching a tampered blob on the next `check` (`blob 8071b8632f6a
+is corrupt: hashes to 6ff5fdb4ba68`), the restore of the deleted file refusing
+those bytes by name so the file stays gone — and finally the
+world's own scanner appearing in the gateway's own record (`24 filtered` from
+`2001:db8:fc08:10::1`, on its own schedule).
+
+## Not implemented on purpose
+
+* **Packet capture / real IDS signatures**: the flow table is the sensor. A
+  world without packets would have to fake the capture, and a fake capture is a
+  log line pretending to be evidence.
+* **A full `fail2ban` filter language** (`failregex`, `ignoreip`, actions): the
+  jail file carries the values that decide behaviour (`maxretry`, `findtime`,
+  `bantime`, `enabled`). A regex engine would decide nothing else.
+* **antivirus heuristics and signature updates over the Internet**: the database
+  is a real file fetched from the household's own mirror; pattern matching is
+  literal, and the sample is a test string on purpose.
+* **deduplication across snapshots (restic's real chunker)**: one blob per file,
+  refcounted by the snapshots that name it, up to a stated 1 MiB per file. A
+  rolling-hash chunker would change no state a player can observe and would make
+  a repository unreadable by hand.
+* **remote/central alerting (e-mail, webhooks, SIEM)**: the collector's log and
+  the machine's own alert ring are the household's record; §34's investigators
+  read them.
+* **quarantine restore**: files are moved, listed and readable; a restore verb
+  would need a policy about who may un-quarantine what, which is §35's business.
+
+## Not implemented on purpose
+
+* **Schedulers, priorities and cgroups**: `nice` exists as the value it always
+  was, and the fair share is one number per machine — a per-process scheduler
+  would be a second, unobservable CPU model.
+* **Per-user RLIMIT_NPROC and ulimits**: the table limit is the machine's, which
+  is what a small device really hits first.
+* **Block-device I/O queues and latency curves**: throughput is a rate per tick.
+  Modelling queue depth would change no state a player can see.
+* **Disk quotas and cgroup memory limits**: one machine, one disk, one RAM
+  limit — the failures people actually meet.

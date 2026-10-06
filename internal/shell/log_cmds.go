@@ -15,7 +15,7 @@ func init() {
 		name string
 		fn   Cmd
 	}{
-		{"logread", cmdLogread}, {"journalctl", cmdJournalctl},
+		{"logread", cmdLogread}, {"journalctl", cmdJournalctl}, {"logger", cmdLogger},
 	} {
 		builtinTable[e.name] = e.fn
 	}
@@ -27,6 +27,50 @@ func cmdLogread(s *Shell, args []string) int {
 
 func cmdJournalctl(s *Shell, args []string) int {
 	return printLogs(s, args, "journalctl")
+}
+
+// logger is the userland side of syslog: a program (or an operator) writes one
+// line into the system log. It matters in the game because a line written here
+// travels the same paths as any other — into /var/log/syslog, and onward to the
+// collector when this machine forwards. `logger -t firewall "wan input dropped
+// on port 23"` is how a router's own rules would report themselves.
+func cmdLogger(s *Shell, args []string) int {
+	tag := strings.Join([]string{s.User.Name}, "")
+	prio := "user.notice"
+	var msg []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-t" || a == "--tag":
+			if i+1 < len(args) {
+				tag = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "-t"):
+			tag = strings.TrimPrefix(a, "-t")
+		case a == "-p" || a == "--priority":
+			if i+1 < len(args) {
+				prio = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "-p"):
+			prio = strings.TrimPrefix(a, "-p")
+		case strings.HasPrefix(a, "-"):
+			// -s (also to stderr), -i (pid), --id=: output-only choices
+		default:
+			msg = append(msg, a)
+		}
+	}
+	level := prio
+	if i := strings.LastIndex(prio, "."); i >= 0 {
+		level = prio[i+1:]
+	}
+	if len(msg) == 0 {
+		// real logger reads stdin; an empty message is still a real event
+		msg = []string{"-"}
+	}
+	s.Dev.Logf(level, tag, "%s", strings.Join(msg, " "))
+	return 0
 }
 
 func printLogs(s *Shell, args []string, tool string) int {

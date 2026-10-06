@@ -89,7 +89,7 @@ func (w *World) SMBAuth(d *Device, sh *SMBShare, user, pass string) error {
 		return nil
 	}
 	u := d.FindUser(user)
-	if u == nil || u.Pass == "" || pass != u.Pass {
+	if !u.CheckPassword(pass) {
 		return fmt.Errorf("authentication failed")
 	}
 	if len(sh.ValidUsers) > 0 {
