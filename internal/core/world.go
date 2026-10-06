@@ -150,6 +150,21 @@ type Device struct {
 	Sessions map[string]*TermSession
 	Active   []Login
 	Fail2Ban map[string]int // source ip -> failed count
+
+	// ---- §15 家庭设备: the wire, the battery and the spooler ----
+	//
+	// Switch is the port configuration of a managed switch; Uplink and
+	// UplinkPort say which port a device is plugged into. PoEPowered marks a
+	// device that takes its power over the ethernet cable, so its power state
+	// is its switch's business rather than the wall socket's.
+	Switch      *SwitchState
+	Uplink      string
+	UplinkPort  int
+	PoEPowered  bool
+	PoeUp       bool // whether the PoE port is delivering power right now
+	Battery     *LaptopBattery
+	Printer     *PrinterState
+	BackupIndex int // the last backup run, for the NAS's own records
 }
 
 type Mount struct {
@@ -525,6 +540,14 @@ func (d *Device) GobEncode() ([]byte, error) {
 		MainsDropped                 bool
 		UPS                          *UPSInfo
 		BootSet                      []string
+		Switch                       *SwitchState
+		Uplink                       string
+		UplinkPort                   int
+		PoEPowered                   bool
+		PoeUp                        bool
+		Battery                      *LaptopBattery
+		Printer                      *PrinterState
+		BackupIndex                  int
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -543,7 +566,10 @@ func (d *Device) GobEncode() ([]byte, error) {
 		OS: d.OS, HW: d.HW, FS: d.FS, Users: d.Users, Procs: d.Procs, Services: d.Services,
 		Ifaces: d.Ifaces, Boot: d.Boot, PowerOK: d.PowerOK, MeterKWh: d.MeterKWh, BillDue: d.BillDue,
 		NetUp: d.NetUp, MainsDropped: d.MainsDropped, UPS: d.UPS, BootSet: d.BootSet,
-		Dmesg: d.Dmesg, DHCPL: d.DHCPL, Notes: d.Notes,
+		Switch: d.Switch, Uplink: d.Uplink, UplinkPort: d.UplinkPort,
+		PoEPowered: d.PoEPowered, PoeUp: d.PoeUp, Battery: d.Battery, Printer: d.Printer,
+		BackupIndex: d.BackupIndex,
+		Dmesg:       d.Dmesg, DHCPL: d.DHCPL, Notes: d.Notes,
 		Purposes: d.Purposes, Installed: d.Installed, InstalledFrom: d.InstalledFrom,
 		Mounts: d.Mounts, Sessions: d.Sessions,
 		Active: d.Active, Fail2Ban: d.Fail2Ban,
@@ -571,6 +597,14 @@ func (d *Device) GobDecode(b []byte) error {
 		MainsDropped                 bool
 		UPS                          *UPSInfo
 		BootSet                      []string
+		Switch                       *SwitchState
+		Uplink                       string
+		UplinkPort                   int
+		PoEPowered                   bool
+		PoeUp                        bool
+		Battery                      *LaptopBattery
+		Printer                      *PrinterState
+		BackupIndex                  int
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -595,6 +629,9 @@ func (d *Device) GobDecode(b []byte) error {
 	d.InstalledFrom = shadow.InstalledFrom
 	d.Active, d.Fail2Ban = shadow.Active, shadow.Fail2Ban
 	d.NetUp, d.MainsDropped, d.UPS, d.BootSet = shadow.NetUp, shadow.MainsDropped, shadow.UPS, shadow.BootSet
+	d.Switch, d.Uplink, d.UplinkPort = shadow.Switch, shadow.Uplink, shadow.UplinkPort
+	d.PoEPowered, d.PoeUp = shadow.PoEPowered, shadow.PoeUp
+	d.Battery, d.Printer, d.BackupIndex = shadow.Battery, shadow.Printer, shadow.BackupIndex
 	return nil
 }
 

@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
+# Locate the checkout from this script's own path, and use the Go toolchain that
+# exists — the author's workspace layout, or one already on PATH.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+if [ -d /workspace/go/bin ]; then
+  export PATH=/workspace/go/bin:$PATH GOPATH=/workspace/gopath GOCACHE=/workspace/gocache
+elif [ -x "$HOME/.local/tools/go/bin/go" ]; then
+  export PATH="$HOME/.local/tools/go/bin:$PATH" GOPATH="$HOME/.local/gopath"
+fi
+
 # tls_verify.sh — proves https is real over a live SSH session: the mirror and
 # bank really serve on 443, the handshake is verified against the household
 # root CA found in the client's trust store, removing that anchor fails the
 # handshake closed, and openssl shows the same chain a real client would.
 set -u
-cd /workspace/neohome
-export PATH=/workspace/go/bin:$PATH GOPATH=/workspace/gopath GOCACHE=/workspace/gocache
 
 rm -f /tmp/tls_world.gob
 go build -o /tmp/neohome-tls ./cmd/neohome || exit 1

@@ -87,6 +87,89 @@ func cmdPower(s *Shell, args []string) int {
 		}
 		return 0
 
+	case "plug", "unplug":
+		// Cables belong to the household, and the person who owns the house
+		// can walk over and move one. This is the same class of action as
+		// opening the breaker, which is why it does not need to be run on the
+		// machine it affects.
+		if len(args) < 2 {
+			s.errf("usage: power plug|unplug HOST")
+			return 1
+		}
+		var target *core.Device
+		for _, id := range s.W.Order {
+			if d := s.W.Devices[id]; d.Hostname == args[1] {
+				target = d
+			}
+		}
+		if target == nil {
+			s.errf("power: no device called %s", args[1])
+			return 1
+		}
+		if target.Owner != s.Dev.Owner && s.User.UID != 0 {
+			s.errf("power: %s is not this household's to unplug", target.Hostname)
+			return 1
+		}
+		if sub == "plug" {
+			if !target.MainsDropped {
+				fmt.Fprintf(s.Out, "%s is already plugged in\n", target.Hostname)
+				return 0
+			}
+			target.PlugRestore()
+			s.W.LinkTick()
+			fmt.Fprintf(s.Out, "%s plugged in — its services are coming back\n", target.Hostname)
+			return 0
+		}
+		if target.IsDataCenter() {
+			s.errf("power: %s is in a datacenter; unplugging it here is not a thing", target.Hostname)
+			return 1
+		}
+		if target.MainsDropped {
+			fmt.Fprintf(s.Out, "%s is already unplugged\n", target.Hostname)
+			return 0
+		}
+		target.PlugPull()
+		fmt.Fprintf(s.Out, "%s unplugged — %s\n", target.Hostname, pluggedNote(target))
+		return 0
+
+	case "lid":
+		// Opening a suspended laptop is something a person does with their
+		// hands, so it belongs with the other physical acts — you cannot type
+		// on a machine that is asleep.
+		if len(args) < 3 {
+			s.errf("usage: power lid open|closed HOST")
+			return 1
+		}
+		open := args[1] == "open" || args[1] == "up"
+		var target *core.Device
+		for _, id := range s.W.Order {
+			if d := s.W.Devices[id]; d.Hostname == args[2] {
+				target = d
+			}
+		}
+		if target == nil {
+			s.errf("power: no device called %s", args[2])
+			return 1
+		}
+		if target.Battery == nil {
+			s.errf("power: %s has no lid", target.Hostname)
+			return 1
+		}
+		if target.Owner != s.Dev.Owner && s.User.UID != 0 {
+			s.errf("power: %s is not this household's", target.Hostname)
+			return 1
+		}
+		if err := target.SetLid(open); err != nil {
+			s.errf("power: %v", err)
+			return 1
+		}
+		if open {
+			fmt.Fprintf(s.Out, "%s's lid opened — it is waking up\n", target.Hostname)
+		} else {
+			fmt.Fprintf(s.Out, "%s's lid closed — suspended\n", target.Hostname)
+		}
+		return 0
+
 	case "draw":
 		for _, line := range s.W.PowerReport() {
 			fmt.Fprintln(s.Out, line)
@@ -95,7 +178,7 @@ func cmdPower(s *Shell, args []string) int {
 		return 0
 
 	default:
-		fmt.Fprintln(s.Out, "usage: power status | cut | boot | draw")
+		fmt.Fprintln(s.Out, "usage: power status | cut | boot | draw | plug HOST | unplug HOST | lid open|closed HOST")
 		return 1
 	}
 }
@@ -132,6 +215,17 @@ func cmdBMC(s *Shell, args []string) int {
 		fmt.Fprintln(s.Out, "usage: bmc [status|power]")
 		return 1
 	}
+}
+
+// pluggedNote says what an unplugged device is still running on, if anything.
+func pluggedNote(d *core.Device) string {
+	switch {
+	case d.UPS != nil && d.UPS.ChargePct > 0:
+		return fmt.Sprintf("riding it out on its battery (%d%%)", d.UPS.ChargePct)
+	case d.Battery != nil && d.Battery.Pct > 0:
+		return fmt.Sprintf("running on battery (%d%%)", d.Battery.Pct)
+	}
+	return "it is off"
 }
 
 func upsPct(d *core.Device) int {

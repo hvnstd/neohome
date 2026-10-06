@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # all_verify.sh — run every end-to-end verification and report honestly.
 set -u
-cd /workspace/neohome
+cd "$(dirname "$0")/.."
 fail=0
-for t in live_verify ssh_verify wan_verify live_full vm_verify power_verify dhcp_verify key_verify persistence_verify history_verify tmux_verify perm_verify tls_verify ftp_verify; do
+for t in live_verify ssh_verify wan_verify live_full vm_verify power_verify dhcp_verify key_verify persistence_verify history_verify tmux_verify perm_verify tls_verify ftp_verify house_verify; do
   bash tools/killsrv.sh >/dev/null 2>&1
   out=/tmp/verify_$t.out
   if bash tools/$t.sh >"$out" 2>&1; then

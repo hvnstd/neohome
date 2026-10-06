@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
+# Locate the checkout from this script's own path, and use the Go toolchain that
+# exists — the author's workspace layout, or one already on PATH.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+if [ -d /workspace/go/bin ]; then
+  export PATH=/workspace/go/bin:$PATH GOPATH=/workspace/gopath GOCACHE=/workspace/gocache
+elif [ -x "$HOME/.local/tools/go/bin/go" ]; then
+  export PATH="$HOME/.local/tools/go/bin:$PATH" GOPATH="$HOME/.local/gopath"
+fi
+
 # persistence_verify.sh — proves the world really is saved and reloaded, and that
 # the server keeps the same host identity across restarts.
 set -u
-cd /workspace/neohome
-export PATH=/workspace/go/bin:$PATH GOPATH=/workspace/gopath GOCACHE=/workspace/gocache
 
 W=/tmp/persist_world.gob
 rm -f "$W"

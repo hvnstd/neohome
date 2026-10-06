@@ -70,6 +70,11 @@ func (d *Device) Powered() bool {
 		return d.NetUp
 	}
 	if d.MainsDropped {
+		// a laptop with charge in it is still a running machine — that is the
+		// entire point of a laptop
+		if d.Battery != nil && d.Battery.LidOpen && d.Battery.Pct > 0 {
+			return true
+		}
 		return false
 	}
 	// Out-of-band management keeps its own battery and a cellular backhaul, so
@@ -77,12 +82,53 @@ func (d *Device) Powered() bool {
 	if d.IsOutOfBand() {
 		return d.UPS != nil && d.UPS.ChargePct > 0
 	}
+	// §15: a device powered over ethernet has no plug of its own. Its power is
+	// the switch's business, which is why cutting a PoE port reboots a camera
+	// and a switch on a UPS keeps the cameras alive through an outage.
+	if d.PoEPowered && d.W != nil {
+		return d.W.poePowered(d)
+	}
+	// §15: a laptop is the one household device whose availability is its own
+	// business. A shut lid is a suspended machine and an empty battery is not
+	// power, whatever the wall socket is doing.
+	if d.Battery != nil && (!d.Battery.LidOpen || (d.Battery.Pct <= 0 && !d.Battery.Charging)) {
+		return false
+	}
 	// A UPS only helps while it has charge left. An exhausted battery is not
 	// power, and pretending otherwise would make the machine immortal.
 	if !d.W.HouseholdPower() && (d.UPS == nil || d.UPS.ChargePct == 0) {
 		return false
 	}
 	return true
+}
+
+// UnavailableReason says why a machine is not answering, in the words its owner
+// would use: "suspended (lid closed)" is a different problem from "no power",
+// and the difference is the whole reason this is a function.
+func (d *Device) UnavailableReason() string {
+	switch {
+	case d.NetUp:
+		return "up"
+	case d.PoEPowered:
+		if sw, port := d.W.SwitchOf(d); sw != nil && port != nil {
+			if !port.PoE {
+				return "no power — PoE is off on " + sw.Hostname + " port " + itoa(port.Num)
+			}
+			if !sw.Powered() {
+				return "no power — " + sw.Hostname + " is down"
+			}
+		}
+		return "no power over ethernet"
+	case d.Battery != nil && !d.Battery.LidOpen:
+		return "suspended (lid closed)"
+	case d.Battery != nil && d.Battery.Pct <= 0 && !d.Battery.Charging:
+		return "battery empty"
+	case d.MainsDropped:
+		return "no power — unplugged"
+	case !d.W.HouseholdPower():
+		return "no power — the household supply is off"
+	}
+	return "no power"
 }
 
 // OnBattery reports whether a device is running off its UPS.
@@ -187,6 +233,12 @@ func (w *World) darkenHousehold() {
 		if d.IsDataCenter() || d.IsOutOfBand() || d.MainsDropped || !d.NetUp {
 			continue
 		}
+		// a PoE device is fed by its switch, and that switch is judged on its
+		// own line in this same loop — so it is not dark just because the
+		// mains is: `LinkTick` takes it down if the switch really goes dark
+		if d.PoEPowered {
+			continue
+		}
 		if d.UPS != nil && d.UPS.ChargePct > 0 {
 			continue // riding it out on battery
 		}
@@ -226,7 +278,18 @@ func (d *Device) PlugPull() {
 	}
 	d.MainsDropped = true
 	d.W.AddEvent(d.ID, "warn", "power", "%s was unplugged", d.Hostname)
+	if d.Battery != nil {
+		// a laptop does not stop when the cable is pulled: it switches to its
+		// battery and keeps going until that runs out
+		d.Battery.Charging = false
+		if d.Battery.Pct > 0 && d.Battery.LidOpen {
+			d.Logf("info", "kernel", "AC adapter disconnected — running on battery (%d%%)", d.Battery.Pct)
+			return
+		}
+	}
 	d.setPowered(false, "AC adapter removed")
+	// a switch that lost its own power takes its PoE ports with it
+	d.W.DarkenPoE(d)
 }
 
 // PlugRestore plugs a device back in and boots it.
@@ -236,6 +299,13 @@ func (d *Device) PlugRestore() {
 	}
 	d.MainsDropped = false
 	d.W.AddEvent(d.ID, "info", "power", "%s was plugged back in", d.Hostname)
+	if d.Battery != nil {
+		d.Battery.Charging = true
+		if !d.Battery.LidOpen {
+			d.Logf("info", "kernel", "AC adapter connected (lid closed — still suspended)")
+			return
+		}
+	}
 	d.setPowered(true, "")
 }
 
@@ -286,7 +356,12 @@ func (w *World) PowerTick() {
 				d.UPS.LastState = "depleted"
 				w.AddEvent(d.ID, "err", "power", "%s exhausted its battery and went down", d.Hostname)
 				d.setPowered(false, "UPS battery depleted")
+				w.DarkenPoE(d)
 			}
+			continue
+		}
+		if d.PoEPowered {
+			// fed by a switch, which this same tick has already judged
 			continue
 		}
 		if d.NetUp {

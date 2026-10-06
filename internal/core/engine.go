@@ -243,6 +243,9 @@ func (w *World) Tick() {
 	w.IoTTick()
 	w.SMSTick()
 	w.MirrorTick()
+	w.LinkTick()
+	w.BatteryTick()
+	w.PrintTick()
 }
 
 func (w *World) AssistantSkillCount() int { return w.assistSkills }

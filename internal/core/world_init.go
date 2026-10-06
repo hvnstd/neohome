@@ -193,6 +193,74 @@ func NewWorld() *World {
 	seedFS(lokd, "iot")
 	cam.Services["rtsp"] = &Service{Name: "rtsp", Desc: "camera stream and recordings", Port: 554, Proto: "tcp",
 		Scope: "lan", State: "running", Handler: "rtsp", Banner: "RTSP/1.0 200 OK", Conf: "/etc/rtsp.conf"}
+	cam.PoEPowered = true // it has no plug of its own: the switch feeds it
+	cam.PoeUp = true
+
+	// ---- §15 家庭设备: the switch, the laptop and the printer --------------
+	//
+	// The spec's own example is a chain — Camera → PoE Switch → Router → NAS —
+	// and then says what each failure means. So the switch is a real device
+	// with real ports: a port that is down carries no traffic, and a PoE port
+	// that is down carries no power, which is how a frozen camera gets
+	// rebooted without walking outside. Its small UPS is why a power cut does
+	// not blind the house immediately.
+	sw := w.addDevice("sw-alex", "sw-hall", "switch", "alex", OSInfo{"NeoWRT", "24.10", "5.15.160", "mips", "ash"},
+		Hardware{"TP-Link TL-SG108PE", 1, 500, 128, 16, 1000, false, false}, lanIP(2))
+	sw.Switch = NewSwitchPorts(sw, 8, 60)
+	sw.UPS = &UPSInfo{ChargePct: 100, LastState: "online"}
+	sw.Notes = "managed PoE switch"
+	mkUsers(sw, map[string]*User{
+		"root":  {Name: "root", UID: 0, Pass: "alex123", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},
+		"admin": {Name: "admin", UID: 1000, Pass: "alex123", Groups: []string{"admin"}, Home: "/home/admin", Shell: "/bin/ash"},
+	})
+	seedFS(sw, "switch")
+	sw.Services["dropbear"] = &Service{Name: "dropbear", Desc: "Dropbear ssh", Port: 22, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-dropbear"}
+
+	// the household's own computer: a battery, a lid, and no guarantee of being
+	// awake — which is exactly why the household also has a NAS and an
+	// assistant node
+	lap := w.addDevice("laptop-alex", "laptop", "laptop", "alex", OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
+		Hardware{"ThinkBook 14", 4, 2200, 8192, 262144, 1000, true, true}, lanIP(12))
+	lap.Battery = &LaptopBattery{Pct: 100, Charging: true, LidOpen: true}
+	mkUsers(lap, map[string]*User{
+		"alex":  {Name: "alex", UID: 1000, Pass: "alex123", Groups: []string{"alex", "sudo"}, Home: "/home/alex", Shell: "/bin/bash"},
+		"guest": {Name: "guest", UID: 1001, Pass: "guest", Groups: []string{"guest"}, Home: "/home/guest", Shell: "/bin/bash"},
+	})
+	seedFS(lap, "laptop")
+	// a household laptop that can be reached from the PC at all — otherwise the
+	// lid and the battery are only observable by sitting in front of it
+	lap.Services["dropbear"] = &Service{Name: "dropbear", Desc: "Dropbear ssh", Port: 22, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-dropbear"}
+
+	// a printer that really spools: jobs queue on its own disk, paper and toner
+	// run out, and the queue survives a power cycle
+	prn := w.addDevice("prn-alex", "printer", "printer", "alex", OSInfo{"NeoPrint", "2.4", "4.19.0", "arm", "ash"},
+		Hardware{"HP LaserJet-ish", 1, 300, 256, 1024, 100, false, false}, lanIP(45))
+	prn.Printer = &PrinterState{Paper: 120, Toner: 80}
+	prn.Notes = "network printer"
+	mkUsers(prn, map[string]*User{
+		"root": {Name: "root", UID: 0, Pass: "admin", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},
+	})
+	seedFS(prn, "printer")
+	prn.Services["cupsd"] = &Service{Name: "cupsd", Desc: "CUPS print spooler", Port: 631, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "cups", Banner: "CUPS/2.4", Conf: "/etc/cups/cupsd.conf"}
+
+	// ---- the cabling --------------------------------------------------------
+	// Port 1 is the uplink to the router: the switch's ports are down and its
+	// PoE is off until something is plugged in, exactly as the hardware ships.
+	sw.Switch.Ports[0].Label = "uplink"
+	sw.Switch.Ports[0].Peer = router.ID
+	sw.Switch.Ports[0].Uplink = true
+	sw.Switch.Ports[0].Speed = 1000
+	sw.CableUp(3, lap, "laptop", false)
+	sw.CableUp(5, cam, "cam-front", true)
+	sw.CableUp(6, prn, "printer", false)
+	// the port file is the configuration: it is rendered once everything is
+	// plugged in, and re-rendered whenever a port changes
+	sw.FS.Write("/etc/config/switch", RenderSwitchConf(sw), 0644, "root", "root")
+	// the NAS stays on the router directly: §15's chain is camera → switch →
+	// router → NAS, and the NAS is what the camera's recordings land on
 	lokd.Services["lockd"] = &Service{Name: "lockd", Desc: "front door lock", Port: 8899, Proto: "tcp",
 		Scope: "lan", State: "running", Handler: "lockd", Banner: "NeoLock/2.1", Conf: "/etc/lockd.conf"}
 

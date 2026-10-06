@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,35 +47,98 @@ func TestLANPlanHasSingleSource(t *testing.T) {
 	}
 }
 
+// lowestFreeStatic is the allocator's own rule, computed here from the world so
+// the expectation follows the seeds instead of a comment.
+func lowestFreeStatic(t *testing.T, w *core.World, skip ...string) string {
+	t.Helper()
+	skipSet := map[string]bool{}
+	for _, id := range skip {
+		skipSet[id] = true
+	}
+	used := map[int]bool{}
+	for _, id := range w.Order {
+		if skipSet[id] {
+			continue // the device being checked does not occupy an address yet
+		}
+		if d := w.Devices[id]; d != nil {
+			for _, i := range d.Ifaces {
+				if o := octetOf(i.IP); o > 0 {
+					used[o] = true
+				}
+			}
+		}
+	}
+	for ip, id := range w.IPMap {
+		if skipSet[id] {
+			continue
+		}
+		if o := octetOf(ip); o > 0 {
+			used[o] = true
+		}
+	}
+	for o := 2; o <= 254; o++ {
+		if o >= core.LANDHCPFirst && o <= core.LANDHCPLast {
+			continue
+		}
+		if !used[o] {
+			return core.LANSubnet + strconv.Itoa(o)
+		}
+	}
+	t.Fatal("the household LAN has no free static address")
+	return ""
+}
+
+// octetOf returns the last octet of a household address, or -1.
+func octetOf(ip string) int {
+	if !strings.HasPrefix(ip, core.LANSubnet) {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(ip, core.LANSubnet))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 // The MCP device does not carry a magic address: it asks the allocator,
 // which cannot hand out an address that is taken or inside the DHCP band.
 func TestMCPAddressIsAllocatedNotHardcoded(t *testing.T) {
 	w := core.NewWorld()
+	// The allocator hands out the lowest free static. Which one that is must be
+	// derived from the world, not hardcoded: §15 added devices (the switch, the
+	// laptop, the printer), and a test that pins an address would break every
+	// time the household grows.
+	want := lowestFreeStatic(t, w)
 	d, _, err := w.EnsureMCPPlayer()
 	if err != nil {
 		t.Fatalf("provisioning failed: %v", err)
 	}
 	ip := d.Ifaces[0].IP
-	// the allocator's answer is the lowest free static: the plan takes
-	// .1 (gateway), .11, .20, .21, .22, .30, .40, .43, .250 — so .2 is free
-	if ip != core.LANSubnet+"2" {
-		t.Fatalf("the MCP device did not get the allocator's lowest free static: %s", ip)
+	if ip != want {
+		t.Fatalf("the MCP device did not get the allocator's lowest free static: %s (expected %s)", ip, want)
+	}
+	if o := octetOf(ip); o >= core.LANDHCPFirst && o <= core.LANDHCPLast {
+		t.Fatalf("the MCP device was numbered inside the DHCP band: %s", ip)
 	}
 	// idempotent: a second call returns the same device
 	d2, _, err := w.EnsureMCPPlayer()
 	if err != nil || d2 != d {
 		t.Fatalf("second provisioning changed the world: %v %p vs %p", err, d2, d)
 	}
-	// if something else claims .2, the next allocation moves along — it
-	// never collides and never enters the DHCP band
+	// if something else claims the next free address, the allocation moves
+	// along — it never collides and never enters the DHCP band
 	pc := w.Devices["pc-alex"]
-	pc.Ifaces = append(pc.Ifaces, &core.Iface{Name: "eth9", IP: core.LANSubnet + "2", Zone: "lan", Up: true, Mode: "static"})
+	taken := core.LANSubnet + strconv.Itoa(octetOf(want)+1)
+	pc.Ifaces = append(pc.Ifaces, &core.Iface{Name: "eth9", IP: taken, Zone: "lan", Up: true, Mode: "static"})
 	next, err := w.AllocLANStatic()
 	if err != nil {
-		t.Fatalf("allocator failed with .2 taken: %v", err)
+		t.Fatalf("allocator failed with %s taken: %v", taken, err)
 	}
-	if next != core.LANSubnet+"3" {
-		t.Fatalf("with .2 taken the allocator must hand .3, got %s", next)
+	if next == want || next == taken {
+		t.Fatalf("with %s taken the allocator handed a used address: %s", taken, next)
+	}
+	if o := octetOf(next); o >= core.LANDHCPFirst && o <= core.LANDHCPLast {
+		t.Fatalf("the allocator handed out an address inside the DHCP band: %s", next)
 	}
 }
 

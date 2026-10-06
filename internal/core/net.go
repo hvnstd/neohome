@@ -413,6 +413,15 @@ func Reach(src *Device, dstIP string) (string, bool) {
 	if !src.Powered() {
 		return "Network is unreachable (no power)", false
 	}
+	// §15: and a machine with no *cable* has no link either. The switch in
+	// between is a real device with real ports, so pulling one takes the
+	// devices behind it offline while leaving their state intact. Traffic that
+	// stays inside the switch's island does not need the uplink — only traffic
+	// that has to cross the router does.
+	toLAN := src.onLink(dstIP)
+	if up, why := src.W.linkUpVia(src, !toLAN); !up {
+		return "Network is unreachable (link down: " + why + ")", false
+	}
 	dstID, ok := src.W.IPMap[dstIP]
 	if !ok {
 		return "No route to host", false
@@ -420,6 +429,9 @@ func Reach(src *Device, dstIP string) (string, bool) {
 	dst := src.W.Devices[dstID]
 	if !dst.Powered() {
 		return "Destination Host Unreachable (host is down)", false
+	}
+	if up, why := src.W.linkUpVia(dst, !toLAN); !up {
+		return "Destination Host Unreachable (link down: " + why + ")", false
 	}
 
 	sameLAN := src.onLink(dstIP)
@@ -528,6 +540,16 @@ func Dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 
 	// is dst on src's own LAN?
 	sameLAN := src.onLink(dstIP)
+
+	// §15: the physical path is checked before anything above it. A device
+	// behind a switch port that is down is not "filtered" or "down" — the
+	// cable is down, and that is a different diagnosis with a different fix.
+	if up, why := src.W.linkUpVia(src, !sameLAN); !up {
+		return nil, nil, "Network is unreachable (link down: " + why + ")"
+	}
+	if up, why := src.W.linkUpVia(dst, !sameLAN); !up {
+		return nil, dst, "Connection timed out (link down: " + why + ")"
+	}
 
 	if !sameLAN {
 		// §13's v6-only plan: a node with no IPv4 address cannot reach an IPv4

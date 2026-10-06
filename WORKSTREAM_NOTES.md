@@ -1199,3 +1199,101 @@ console landing on the node's own filesystem and exiting.
   the player cannot see.
 * **Live resize**: a real provider can sometimes hot-grow a disk; this world
   requires a power-off, which is the conservative and checkable rule.
+
+# 家庭设备与物理层 (WS-1.10) — §15 家庭设备
+
+## The model
+
+§15 asks for the household's own machines and the failures between them. The
+answer is a **physical layer made of state**: `link.go` gives every device an
+uplink (`Device.Uplink`/`UplinkPort`) and every managed switch a real port table
+(`SwitchState.Ports`, 8 ports, a PoE budget, per-port admin/PoE/speed). The
+switch in the hall is a device with its own `dropbear`, its own UPS and its own
+config file, not a hub-shaped constant.
+
+Four things follow from that, and each one is a failure a player can chase:
+
+* **A dead wire is a diagnosis.** `World.linkUpVia` is the only wire question;
+  `Dial`/`Reach` prepend its reason, so the printer behind a downed port answers
+  "Connection timed out (link down: port 6 (printer) on sw-hall is down)" instead
+  of a generic unreachable.
+* **A switch whose uplink died is an island, not a blackout.** Traffic that stays
+  inside the island passes `crossUplink=false`, so two devices on the same switch
+  still reach each other with the router dark — which is exactly why the cameras
+  keep streaming through an outage while nothing reaches the internet.
+* **PoE is electricity with a budget.** Power is spent in port order: a port that
+  does not fit under `BudgetW` is refused, the ports already up keep theirs, and
+  turning a camera's PoE off really kills it (its port then shows link *down*,
+  because a PHY without power has no link). `DarkenPoE` runs on a plug pull and
+  when a UPS runs flat.
+* **The config is a file.** `/etc/config/switch` is rendered from the port table
+  and re-read on every `linkUp`/`switchctl` (`RenderSwitchConf` /
+  `LoadSwitchConfig`), exactly like the firewall — a hand edit takes effect.
+
+Power is a first-class cause rather than a special case. `Powered()` walks
+PoE → battery/lid → mains, so a camera fed by the switch, a laptop on its battery
+and a NAS behind the breaker all answer honestly, and
+`Device.UnavailableReason()` is the one place that puts it into words — shared by
+the shell's "Connection to host lost (no power — the household supply is off)",
+the switch's port table and the SSH entry's out-of-band fallback. Physical acts
+got verbs (`power cut|boot|plug|unplug|lid HOST`) because a breaker, a socket and
+a lid are things done with hands: performable from another machine, but not by a
+machine that is dark or asleep itself.
+
+## What exists
+
+* `sw-alex` (TP-Link TL-SG108PE): 8 ports, 60 W PoE budget, UPS, dropbear:22;
+  port 1 = uplink to the gateway, 3 = laptop, 5 = camera (PoE, 8.2 W), 6 =
+  printer, 2/4/7/8 free.
+* `laptop-alex`: battery + lid + charger state, users `alex`/`guest`, its own
+  `dropbear` so the machine is actually reachable.
+* `prn-alex`: a real spooler — `/var/spool/cups/queue`, `tray.log`, `cupsd:631`,
+  paper and toner that run out, 60 lines to a sheet.
+* `switchctl|swconfig show|status`, `port N up|down`, `poe N on|off`,
+  `budget [W]`, `attach N HOST [poe]`.
+* `lp|lpr`, `lpstat`, `cancel`, `lpadmin status|paper|toner|pause|resume` — the
+  client half dials the printer's own port before spooling.
+* `laptopctl status|lid open|closed|charge on|off`, `power plug|unplug|lid HOST`,
+  `backup run|status`, `links` (the household's own view of what has a wire).
+* `cam records` on the camera, whose clips land on the NAS: with the NAS down the
+  camera says "recordings dropped: storage target unreachable" and stops.
+
+## The chain from the spec
+
+Camera → PoE switch → router → NAS is live in the seed, so each link's failure
+has its own signature: PoE off (camera dark, switch fine), port down (device
+powered but off the network), switch UPS (the house goes dark, the cameras keep
+running, then the UPS runs flat and everything PoE does too), NAS unplugged
+(backups and recordings stop, shares unreachable), and the main breaker (the PC
+dies mid-session — the SSH entry then lands the player on the BMC, which is on
+its own battery and cellular backhaul, and `bmc power boot` restores the house).
+
+## The tests
+
+`tests/house_test.go`, seven tests, each with a happy path, a boundary and a
+recovery: cabling and port-file parity with the running state, an uplink cut
+refusing to take the island down, `switchctl` diagnostics; port-down → printer
+offline but still powered (syslog + recovery) and PoE-off → camera dark
+(recovery); PoE budget bounds (refuse below the current draw, shrink when a
+camera goes off, refuse a new port that does not fit, PoE on a self-powered
+device is an error); a power cut where the switch's UPS keeps the cameras up
+while the NAS dies, battery drain → everything PoE dark → `bmc power boot`;
+printer spool/tray/out-of-paper hold/paper load/cancel permission/dead-port
+submission; laptop battery → flat → charger recovery → lid suspend/wake → the
+desktop says it has no lid; and the NAS as a dependency of `backup run`, of its
+shares and of the camera's recordings, with recovery.
+
+`tools/house_verify.sh` is the live counterpart: a real SSH session walking the
+whole sequence over `:2222`, ending with the switch's own config file read back
+from the switch itself.
+
+## Not implemented on purpose
+
+* **802.1Q/VLANs and STP**: the port model carries admin/PoE/speed/labels, which
+  is what the household's failures need; a spanning-tree simulation would be a
+  second, unobservable network stack.
+* **Switch firmware updates and SNMP**: an unobservable daemon is scenery —
+  `switchctl` reads the same state `linkUp` uses instead.
+* **Printers with their own queue UI over IPP**: `cupsd:631` answers and the
+  queue is real; implementing IPP's wire protocol would not change one byte of
+  state a player can see.

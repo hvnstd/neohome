@@ -132,7 +132,7 @@ func (s *Shell) RunLoop(r io.Reader) {
 		// The machine may have lost power since the last prompt, whether
 		// because the player cut it or because a UPS finally ran flat.
 		if s.Dev != nil && !s.Dev.Powered() {
-			fmt.Fprintln(s.Out, "\nConnection to host lost (no power).")
+			fmt.Fprintf(s.Out, "\nConnection to host lost (%s).\n", s.Dev.UnavailableReason())
 			return
 		}
 		fmt.Fprint(s.Out, s.PS1())
@@ -213,7 +213,7 @@ func (s *Shell) ExecLineStatus(line string) int {
 	// well as in the read loop so a single command can never run on a box that
 	// has already gone dark.
 	if s.Dev != nil && !s.Dev.Powered() {
-		fmt.Fprintln(s.Out, "\nConnection to host lost (no power).")
+		fmt.Fprintf(s.Out, "\nConnection to host lost (%s).\n", s.Dev.UnavailableReason())
 		s.exitFlag = true
 		return 1
 	}
