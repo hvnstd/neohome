@@ -130,6 +130,10 @@ func cmdHtop(s *Shell, args []string) int {
 	if d.DiskFull() {
 		fmt.Fprintf(s.Out, "! filesystem full (%d/%d MiB): writes are failing\n", d.FS.DiskUsedMB(), d.DiskLimitMB())
 	}
+	// §36: a dying disk gets its own line, because its fix is not `rm`
+	if h, why := d.DiskHealth(); h != "PASSED" {
+		fmt.Fprintf(s.Out, "! disk health %s: %s\n", h, why)
+	}
 	return 0
 }
 
@@ -237,6 +241,16 @@ func cmdDf(s *Shell, args []string) int {
 	if d.DiskFull() {
 		fmt.Fprintf(s.Out, "\nwarning: no space left on device — writes fail until something is removed\n")
 		fmt.Fprintf(s.Out, "  find what is big: du -a / | sort -n | tail   (or remove a file you made)\n")
+	}
+	// §36: wear is a different errno with a different fix — say which one it is.
+	// A latched FAILED disk is failing writes right now; a bare WARNING (or a
+	// FAILED inside its fsck grace) is the health, not the current verdict.
+	if d.DiskFailed() {
+		_, why := d.DiskHealth()
+		fmt.Fprintf(s.Out, "\nwarning: disk FAILED (%s) — writes fail with I/O errors\n", why)
+		fmt.Fprintf(s.Out, "  back up first, then fsck (it only buys time; see smartctl)\n")
+	} else if h, why := d.DiskHealth(); h != "PASSED" {
+		fmt.Fprintf(s.Out, "\ndisk health: %s (%s; see smartctl)\n", h, why)
 	}
 	if r := d.Resources(); r.LogDropped > 0 {
 		fmt.Fprintf(s.Out, "syslog dropped %d line(s) while the disk was full\n", r.LogDropped)

@@ -712,8 +712,9 @@ func (d *Device) Logf(level, src string, format string, a ...any) {
 	line := fmt.Sprintf("%s %s %s[%s]: %s\n", d.W.Sim.Format("Jan 2 15:04:05"), d.Hostname, src, level, msg)
 	// §17: a full filesystem really loses log lines. rsyslog cannot write into
 	// /var, drops the message, and says how many it lost once there is room
-	// again (see diskTick) — which is exactly what the real daemon does.
-	if d.DiskFull() {
+	// again (see diskTick) — which is exactly what the real daemon does. A
+	// FAILED disk loses them the same way: nothing can be written anywhere.
+	if d.DiskFull() || d.DiskFailed() {
 		d.Resources().LogDropped++
 	} else {
 		d.FS.Append("/var/log/syslog", []byte(line))

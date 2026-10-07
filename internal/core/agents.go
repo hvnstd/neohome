@@ -116,8 +116,7 @@ func (w *World) NPCPatrol() {
 		w.ChatPost("#local", "mara-bot", "someone has been poking my box... changing all my passwords tonight")
 		// she hardens: rotating the weak devops password — closing the vuln honestly
 		if u := npc.FindUser("devops"); u != nil && u.Pass == "Summer2024!" {
-			u.Pass = "X7k!pLq92mz"
-			npc.Logf("info", "passwd", "password changed for user devops")
+			_ = npc.ChangePassword("devops", "X7k!pLq92mz")
 			w.AddEvent(npc.ID, "info", "npc", "mara rotated credentials after repeated scans")
 		}
 	}

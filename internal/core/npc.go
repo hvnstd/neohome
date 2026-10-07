@@ -216,6 +216,7 @@ func (w *World) provisionVPS(owner, plan, hostname, distro, region string) (*Dev
 	id := "vps-" + hostname
 	d := w.addDevice(id, hostname, "vps", owner, os, hw, "")
 	d.Boot = w.Sim
+	d.Resources().PowerOnTicks = 0 // a fresh node has no lifetime yet (§36)
 	// §13: the plan decides what the node's networking really is. A public plan
 	// gets a routable IPv4; a shared plan gets an address inside the provider's
 	// carrier-grade NAT pool, which is on the interface, in use, and *not*

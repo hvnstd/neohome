@@ -56,8 +56,7 @@ func (w *World) NPCReactToHeat() {
 	w.AddEvent(npc.ID, "warn", "npc", "owner started a defensive investigation after accumulated evidence")
 	// real hardening: rotate the leaked credential, close the open port forward
 	if u := npc.FindUser("devops"); u != nil && u.Pass == "Summer2024!" {
-		u.Pass = "X7k!pLq92mz"
-		npc.Logf("info", "passwd", "password changed for user devops after incident")
+		_ = npc.ChangePassword("devops", "X7k!pLq92mz")
 	}
 	// Real hardening, in her router's real configuration: the forward that
 	// exposed her machine stops carrying packets, and the change is a file on

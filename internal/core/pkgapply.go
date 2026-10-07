@@ -125,6 +125,17 @@ func (w *World) InstallFromView(d *Device, steps []InstallStep) ([]InstalledPkg,
 		if d.Installed[step.Entry.Name] != nil {
 			continue
 		}
+		// §36: a FAILED disk fails the unpack before room is even asked about.
+		// The error is the disk's own EIO; the shell renders it in each
+		// manager's voice (mgrErr), the way the real tools report the same
+		// errno. Removing files does not help here — fsck buys time, a backup
+		// saves the data.
+		if d.DiskFailed() {
+			_, why := d.DiskHealth()
+			return done, pkgErr("IOERROR",
+				"cannot unpack %s: input/output error (disk FAILED: %s)",
+				step.Entry.Name, why)
+		}
 		// §17: the unpack needs room before it needs anything else. The error
 		// is the filesystem's own; the shell renders it in each manager's
 		// voice (mgrErr), the way the real tools report the same errno.

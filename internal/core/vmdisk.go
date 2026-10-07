@@ -8,6 +8,11 @@ import (
 // ErrNoSpace is what a real kernel returns when a write hits a full filesystem.
 var ErrNoSpace = errors.New("no space left on device")
 
+// ErrIO is what a real kernel returns when a write hits a failing disk. It is
+// a different errno from ENOSPC on purpose: the fix is not "remove a file" but
+// "back up what you can and run fsck" (see DiskHealth).
+var ErrIO = errors.New("input/output error")
+
 // DiskFull reports whether this device's own storage is exhausted. It is one
 // rule for every machine (§17): a guest's limit is its virtual disk, a host's is
 // its own disk — see DiskLimitMB. A guest sized too small runs out on its own
@@ -23,6 +28,9 @@ func (d *Device) DiskFull() bool {
 // consequence instead of a warning message: the data is not stored and the
 // command reports a real ENOSPC error.
 func (d *Device) WriteGuest(p string, data []byte, u *User) error {
+	if d.DiskFailed() {
+		return ErrIO
+	}
 	if d.DiskFull() {
 		return ErrNoSpace
 	}

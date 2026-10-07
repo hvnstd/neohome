@@ -20,6 +20,12 @@ func (w *World) addDevice(id, hostname, profile, owner string, os OSInfo, hw Har
 		d.Ifaces = []*Iface{{Name: "eth0", IP: lanIP, CIDR: cidr, MAC: macFor(id), Zone: "lan", Up: true, Mode: "static"}}
 		w.IPMap[lanIP] = id
 	}
+	// §36: the lifetime power-on counter starts where the boot time says the
+	// machine started, so smartctl agrees with uptime on a fresh world. A box
+	// provisioned later boots now and starts at zero.
+	if ticks := int(w.Sim.Sub(d.Boot) / (30 * time.Second)); ticks > 0 {
+		d.Resources().PowerOnTicks = ticks
+	}
 	w.Devices[id] = d
 	w.Order = append(w.Order, id)
 	return d
@@ -236,6 +242,26 @@ func seedHostFirewall(d *Device, v *VFS, policy string, accepts []Rule) {
 	// the other file — they are two real rulesets that can be edited apart,
 	// which is how a host ends up open on one family and closed on the other.
 	v.Write(d.iptablesPath6(), RenderIPTables(policy, accepts), 0644, "root", "root")
+}
+
+// ChangePassword sets an account's password and refreshes the credential
+// files, the way /etc/shadow really shadows the account table. It is the one
+// path for password changes: the shell's passwd builtin (setuid-like, so it
+// can write the shadow file when a non-root user changes their own password)
+// and the NPC hardening paths both end up here, so the file and the account
+// can never disagree about what the password is.
+func (d *Device) ChangePassword(name, pass string) error {
+	u := d.FindUser(name)
+	if u == nil {
+		return fmt.Errorf("user '%s' does not exist", name)
+	}
+	if pass == "" {
+		return fmt.Errorf("empty password not allowed")
+	}
+	u.Pass = pass
+	refreshPasswd(d)
+	d.Logf("info", "passwd", "password changed for user %s", name)
+	return nil
 }
 
 // refreshPasswd keeps /etc/passwd in sync with the user table.

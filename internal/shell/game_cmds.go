@@ -14,7 +14,7 @@ func init() {
 		name string
 		fn   Cmd
 	}{
-		{"su", cmdSu}, {"sudo", cmdSudo},
+		{"su", cmdSu}, {"sudo", cmdSudo}, {"passwd", cmdPasswd},
 		{"fastfetch", cmdFastfetch}, {"neofetch", cmdFastfetch},
 		{"who", cmdWho}, {"w", cmdWho}, {"clear", cmdClear}, {"history", cmdHistory},
 		{"exit", cmdExit}, {"logout", cmdExit},
@@ -111,6 +111,71 @@ func (s *Shell) hasSudo() bool {
 		}
 	}
 	return false
+}
+
+// passwd changes an account's password for real: the account record and
+// /etc/shadow move together (see core.ChangePassword), so the next login,
+// su, sudo, ssh, sftp or ftp attempt answers against the new one — and the
+// world's scanner guesses against it too. That is what makes the
+// weak-credential half of §36's conjunction a choice instead of test state:
+// publish a port, leave a default password, run no sensors, and the
+// intrusion chain is yours.
+//
+// Like the real tool it is setuid-like: a user changing their own password
+// does not need read access to /etc/shadow, because the call goes through
+// the core state update rather than a file write. Only root may name another
+// account, and only root skips the current-password check.
+func cmdPasswd(s *Shell, args []string) int {
+	if len(args) > 1 {
+		s.errf("usage: passwd [username]")
+		return 1
+	}
+	target := s.User.Name
+	if len(args) == 1 {
+		target = args[0]
+	}
+	u := s.Dev.FindUser(target)
+	if u == nil {
+		s.errf("passwd: user '%s' does not exist", target)
+		return 1
+	}
+	self := u.Name == s.User.Name
+	if !self && s.User.UID != 0 {
+		s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+			"passwd denied for "+u.Name+" (not root)", 3)
+		s.errf("passwd: You may not view or modify password information for %s.", u.Name)
+		return 1
+	}
+	if self && s.User.UID != 0 {
+		fmt.Fprintf(s.Out, "Current password: ")
+		if cur := s.ReadPasswordLine(""); !s.verifyPassword(s.User, cur) {
+			s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+				"failed passwd authentication", 3)
+			s.errf("passwd: Authentication failure")
+			return 1
+		}
+	}
+	fmt.Fprintf(s.Out, "New password: ")
+	nw := s.ReadPasswordLine("")
+	fmt.Fprintf(s.Out, "Retype new password: ")
+	if rt := s.ReadPasswordLine(""); rt != nw {
+		fmt.Fprintf(s.Out, "Sorry, passwords do not match.\n")
+		fmt.Fprintf(s.Out, "passwd: password unchanged\n")
+		return 1
+	}
+	if nw == "" {
+		fmt.Fprintf(s.Out, "No password supplied\n")
+		fmt.Fprintf(s.Out, "passwd: password unchanged\n")
+		return 1
+	}
+	if err := s.Dev.ChangePassword(u.Name, nw); err != nil {
+		s.errf("passwd: %v", err)
+		return 1
+	}
+	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+		"passwd: password changed for "+u.Name, 1)
+	fmt.Fprintf(s.Out, "passwd: password updated successfully\n")
+	return 0
 }
 
 func cmdFastfetch(s *Shell, args []string) int {

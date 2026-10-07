@@ -64,7 +64,82 @@ type Rsrc struct {
 	DiskReadMBps  float64
 	NetRxMBps     float64
 	NetTxMBps     float64
+
+	// ---- §36 磨损: the drivers behind "老硬盘 + 高负载 + 长期运行" ----
+	//
+	// All three are cumulative counters, never sampled values, so a disk that
+	// was old stays old across a reboot: Boot moves, these do not. Thresholds
+	// below are the only rule that reads them (see DiskHealth), and a test
+	// builds the conjunction by presetting them the way the intrusion tests
+	// preset a weak password — state is state, however it got there.
+	DiskWrittenB int64 // every byte WriteGuest really stored, for the disk's life
+	PowerOnTicks int   // ticks this machine has spent powered
+	HotTicks     int   // ticks spent powered while CPU demand exceeded capacity
+	// DiskFailAt is when the disk latched FAILED (zero while it answers
+	// writes); DiskWarnAt the same for the first WARNING. One-shot warnings
+	// stay one-shot the way DiskFullAt does. DiskGraceUntil is the tick until
+	// which a repaired disk may not re-latch: fsck buys time, not a new disk.
+	DiskFailAt     time.Time
+	DiskWarnAt     time.Time
+	DiskGraceUntil int
 }
+
+// §36's wear model, stated as limits rather than dressed up as errnos (see
+// maxFileMB in the shell): a disk's endurance is its own size times write
+// cycles, and the age/load limits are in ticks (120 ticks = 1 sim-hour).
+const (
+	DiskWriteCycles    = 300
+	DiskWearWarnFrac   = 0.6
+	DiskAgeWarnTicks   = 1440000 // 12,000 sim-hours
+	DiskAgeFailTicks   = 2880000 // 24,000 sim-hours
+	DiskHotWarnTicks   = 6000    // 50 sim-hours spent overloaded
+	DiskHotFailTicks   = 24000   // 200 sim-hours spent overloaded
+	DiskFailGraceTicks = 120     // fsck buys one sim-hour before a re-failure
+)
+
+// DiskEnduranceMB is the lifetime writes this disk is rated for: its own size
+// times the write cycles. A guest's limit is its virtual disk, like every
+// other disk rule here.
+func (d *Device) DiskEnduranceMB() int { return d.DiskLimitMB() * DiskWriteCycles }
+
+// DiskHealth derives the SMART state from the three wear drivers. Worst wins,
+// and the reason always names the driver and its numbers — a failing disk is
+// a diagnosis, never "I/O error" with no history behind it.
+func (d *Device) DiskHealth() (status, why string) {
+	r := d.Resources()
+	writtenMB := int(r.DiskWrittenB / 1048576)
+	endMB := d.DiskEnduranceMB()
+	fail := ""
+	switch {
+	case r.PowerOnTicks >= DiskAgeFailTicks:
+		fail = fmt.Sprintf("power-on %dh exceeds the %dh fail limit", r.PowerOnTicks/120, DiskAgeFailTicks/120)
+	case endMB > 0 && writtenMB >= endMB:
+		fail = fmt.Sprintf("lifetime writes %d MiB exhausted the %d MiB endurance (%d full-disk writes)", writtenMB, endMB, DiskWriteCycles)
+	case r.HotTicks >= DiskHotFailTicks:
+		fail = fmt.Sprintf("overloaded %dh exceeds the %dh fail limit", r.HotTicks/120, DiskHotFailTicks/120)
+	}
+	if fail != "" {
+		return "FAILED", fail
+	}
+	warn := ""
+	switch {
+	case r.PowerOnTicks >= DiskAgeWarnTicks:
+		warn = fmt.Sprintf("power-on %dh past the %dh warning limit", r.PowerOnTicks/120, DiskAgeWarnTicks/120)
+	case endMB > 0 && float64(writtenMB) >= float64(endMB)*DiskWearWarnFrac:
+		warn = fmt.Sprintf("lifetime writes %d MiB past %.0f%% of the %d MiB endurance", writtenMB, DiskWearWarnFrac*100, endMB)
+	case r.HotTicks >= DiskHotWarnTicks:
+		warn = fmt.Sprintf("overloaded %dh past the %dh warning limit", r.HotTicks/120, DiskHotWarnTicks/120)
+	}
+	if warn != "" {
+		return "WARNING", warn
+	}
+	return "PASSED", fmt.Sprintf("power-on %dh, %d MiB written of %d MiB endurance, overloaded %dh",
+		r.PowerOnTicks/120, writtenMB, endMB, r.HotTicks/120)
+}
+
+// DiskFailed reports whether the disk has latched FAILED: writes really stop
+// with EIO until someone runs fsck, the way a dying disk stops answering.
+func (d *Device) DiskFailed() bool { return d.Rsrc != nil && !d.Rsrc.DiskFailAt.IsZero() }
 
 // NoteDiskWrite is called by the paths that really move bytes onto a disk, so
 // `vmstat`'s io columns describe traffic that happened instead of a constant.
@@ -73,6 +148,10 @@ func (d *Device) NoteDiskWrite(bytes int) {
 		return
 	}
 	d.rsrc().DiskWriteMBps = round2(d.rsrc().DiskWriteMBps + float64(bytes)/1048576)
+	// §36: the same funnel feeds the lifetime counter behind DiskHealth. Every
+	// byte that landed counts toward the endurance, which is what makes "高负载
+	// → 磨损" a number instead of a story.
+	d.rsrc().DiskWrittenB += int64(bytes)
 }
 
 func (d *Device) NoteDiskRead(bytes int) {
@@ -348,6 +427,14 @@ func (d *Device) resourceTick() {
 	// ---- disk: the full latch and the dropped-log count
 	d.diskTick()
 
+	// ---- §36 wear: power-on and overload accumulate while the machine runs,
+	// and the health latch is evaluated from them last of all
+	r.PowerOnTicks++
+	if d.CPULoad() > 1 {
+		r.HotTicks++
+	}
+	d.diskWearTick()
+
 	r.WorkRate = d.WorkRate()
 }
 
@@ -502,15 +589,60 @@ func (d *Device) diskTick() {
 	}
 	r.DiskFullAt = time.Time{}
 	d.Logf("info", "kernel", "space reclaimed on %s (%d/%d MiB)", d.fsMount(), used, limit)
-	if r.LogDropped > 0 {
-		dropped := r.LogDropped
-		r.LogDropped = 0
-		if err := d.FS.Append("/var/log/syslog", []byte(fmt.Sprintf(
-			"%s %s rsyslogd[info]: %d message(s) dropped while %s was full\n",
-			d.W.Sim.Format("Jan 2 15:04:05"), d.Hostname, dropped, d.fsMount()))); err == nil {
-			r.LogDropped = 0
-		}
-	}
+	d.reckonDroppedLogs(d.fsMount() + " was full")
 }
 
 func (d *Device) fsMount() string { return "/" }
+
+// RepairDisk is what fsck does to a FAILED disk: it clears the error latch
+// and grants a grace period before the wear can latch again, because the wear
+// itself never heals. The health stays whatever the counters say — a repaired
+// old disk is still an old disk, and smartctl keeps saying so, which is why
+// the repair log tells the operator to back up now.
+func (d *Device) RepairDisk() {
+	r := d.Resources()
+	if r.DiskFailAt.IsZero() {
+		return
+	}
+	r.DiskFailAt = time.Time{}
+	r.DiskGraceUntil = d.W.TickCount + DiskFailGraceTicks
+	_, why := d.DiskHealth()
+	d.Logf("warn", "fsck", "repaired /: writes answer again, but the disk is still failing (%s) — back up now", why)
+	d.W.AddEvent(d.ID, "warn", "fsck", "%s: filesystem repaired, disk still failing (%s)", d.Hostname, why)
+	d.reckonDroppedLogs("the disk was failing writes")
+}
+
+// reckonDroppedLogs writes the "N message(s) dropped" reckoning once logging
+// is possible again — the shared tail of every recovery that restores writes.
+func (d *Device) reckonDroppedLogs(while string) {
+	r := d.rsrc()
+	if r.LogDropped == 0 {
+		return
+	}
+	dropped := r.LogDropped
+	r.LogDropped = 0
+	if err := d.FS.Append("/var/log/syslog", []byte(fmt.Sprintf(
+		"%s %s rsyslogd[info]: %d message(s) dropped while %s\n",
+		d.W.Sim.Format("Jan 2 15:04:05"), d.Hostname, dropped, while))); err != nil {
+		r.LogDropped = dropped
+	}
+}
+
+// diskWearTick latches the SMART WARNING once and the FAILED state until fsck
+// clears it. It runs inside ResourceTick so the numbers describe the world as
+// it now is, after every other system has moved.
+func (d *Device) diskWearTick() {
+	r := d.rsrc()
+	status, why := d.DiskHealth()
+	if status == "WARNING" && r.DiskWarnAt.IsZero() && r.DiskFailAt.IsZero() {
+		r.DiskWarnAt = d.W.Sim
+		d.Logf("warn", "kernel", "SMART warning on sda: %s — back up while reads still work (see smartctl)", why)
+		d.W.AddEvent(d.ID, "warn", "kernel", "%s: disk health WARNING (%s)", d.Hostname, why)
+		return
+	}
+	if status == "FAILED" && r.DiskFailAt.IsZero() && d.W.TickCount >= r.DiskGraceUntil {
+		r.DiskFailAt = d.W.Sim
+		d.Logf("err", "kernel", "I/O error on sda: %s — the filesystem is failing writes", why)
+		d.W.AddEvent(d.ID, "err", "kernel", "%s: disk FAILED (%s) — writes fail until fsck", d.Hostname, why)
+	}
+}

@@ -16,6 +16,8 @@ func init() {
 	builtinTable["stress"] = cmdStress
 	builtinTable["dd"] = cmdDd
 	builtinTable["vmstat"] = cmdVmstat
+	builtinTable["smartctl"] = cmdSmartctl
+	builtinTable["fsck"] = cmdFsck
 }
 
 // ---- stress ----------------------------------------------------------------
@@ -269,6 +271,9 @@ func cmdDd(s *Shell, args []string) int {
 			refused = true
 			written = 0
 		}
+	} else if s.Dev.DiskFailed() {
+		werr = core.ErrIO
+		refused = true
 	} else if s.Dev.DiskFull() {
 		refused = true
 	}
@@ -290,6 +295,12 @@ func cmdDd(s *Shell, args []string) int {
 			humanSecs(secs), humanBytes(int(s.Dev.DiskMBps()*1048576)))
 	}
 	if refused {
+		if werr == core.ErrIO {
+			_, why := s.Dev.DiskHealth()
+			s.errf("dd: error writing '%s': Input/output error (disk FAILED: %s; see smartctl, dmesg)",
+				out, why)
+			return 1
+		}
 		s.errf("dd: error writing '%s': No space left on device (%d MiB free, %d MiB asked for)",
 			out, s.Dev.DiskFreeMB(), len(payload)/1048576)
 		return 1
@@ -413,8 +424,157 @@ func cmdVmstat(s *Shell, args []string) int {
 	if d.DiskFull() {
 		fmt.Fprintf(s.Out, "warning: filesystem full (%d/%d MiB) — writes are failing\n", d.FS.DiskUsedMB(), d.DiskLimitMB())
 	}
+	if h, why := d.DiskHealth(); h != "PASSED" {
+		fmt.Fprintf(s.Out, "disk health: %s — %s\n", h, why)
+	}
 	if r.ForksRefused > 0 {
 		fmt.Fprintf(s.Out, "refused forks: %d (process limit %d)\n", r.ForksRefused, d.ProcLimit())
 	}
 	return 0
+}
+
+// ---- smartctl / fsck --------------------------------------------------------
+
+// smartctl reads this machine's own wear counters: power-on hours, lifetime
+// writes against the disk's endurance, and saturated hours. Every number is
+// the state DiskHealth decides from, so the report and the failure it
+// predicts can never disagree. WARNING is this world's early signal (real
+// admins watch the attributes; here it is surfaced); FAILED means writes have
+// latched off until fsck.
+func cmdSmartctl(s *Shell, args []string) int {
+	healthOnly := false
+	dev := ""
+	for _, a := range args {
+		switch a {
+		case "-H", "--health":
+			healthOnly = true
+		case "-a", "--all", "-i", "--info":
+			// the default view
+		case "-h", "--help":
+			fmt.Fprintln(s.Out, "usage: smartctl [-a|-H] /dev/sda")
+			return 0
+		default:
+			if strings.HasPrefix(a, "-") {
+				s.errf("smartctl: unknown option '%s'", a)
+				return 1
+			}
+			if dev != "" {
+				s.errf("smartctl: only one device at a time")
+				return 1
+			}
+			dev = a
+		}
+	}
+	if dev == "" {
+		s.errf("smartctl: no device given (try smartctl -a /dev/sda)")
+		return 1
+	}
+	// lsblk shows this machine's disk as sda: anything else is not here
+	if dev != "/dev/sda" && dev != "sda" {
+		s.errf("smartctl: cannot open %s: No such device (this machine's disk is /dev/sda)", dev)
+		return 1
+	}
+	d := s.Dev
+	r := d.Resources()
+	status, why := d.DiskHealth()
+	if healthOnly {
+		fmt.Fprintf(s.Out, "SMART overall-health self-assessment test result: %s\n", status)
+		if status != "PASSED" {
+			fmt.Fprintf(s.Out, "(%s)\n", why)
+		}
+		return 0
+	}
+	writtenMB := int(r.DiskWrittenB / 1048576)
+	endMB := d.DiskEnduranceMB()
+	fmt.Fprintf(s.Out, "smartctl 7.4: this machine's own wear counters (nothing is sampled)\n")
+	fmt.Fprintf(s.Out, "=== START OF INFORMATION SECTION ===\n")
+	fmt.Fprintf(s.Out, "Device Model:     %s\n", d.HW.Model)
+	fmt.Fprintf(s.Out, "Capacity:         %d MiB\n", d.DiskLimitMB())
+	fmt.Fprintf(s.Out, "=== START OF SMART DATA SECTION ===\n")
+	fmt.Fprintf(s.Out, "SMART overall-health self-assessment test result: %s\n", status)
+	fmt.Fprintf(s.Out, "ID# ATTRIBUTE_NAME          THRESH   VALUE    WHEN_FAILED\n")
+	fmt.Fprintf(s.Out, "  9 Power_On_Hours          %5dh   %5dh   %s\n",
+		core.DiskAgeWarnTicks/120, r.PowerOnTicks/120, failWord(status, r.PowerOnTicks >= core.DiskAgeWarnTicks))
+	fmt.Fprintf(s.Out, "241 Lifetime_Writes_MiB    %5dMiB %5dMiB %s   (endurance: %d full-disk writes)\n",
+		endMB, writtenMB, failWord(status, float64(writtenMB) >= float64(endMB)*core.DiskWearWarnFrac), core.DiskWriteCycles)
+	fmt.Fprintf(s.Out, "242 Overload_Hours          %5dh   %5dh   %s\n",
+		core.DiskHotWarnTicks/120, r.HotTicks/120, failWord(status, r.HotTicks >= core.DiskHotWarnTicks))
+	if status == "PASSED" {
+		fmt.Fprintf(s.Out, "  (%s)\n", why)
+	} else {
+		fmt.Fprintf(s.Out, "  failing now: %s\n", why)
+		if status == "WARNING" {
+			fmt.Fprintf(s.Out, "  back up while reads still work; watch dmesg for the I/O error line\n")
+		} else {
+			fmt.Fprintf(s.Out, "  writes fail with I/O errors until fsck; back up first, it only buys time\n")
+		}
+	}
+	return 0
+}
+
+func failWord(status string, tripped bool) string {
+	if !tripped {
+		return "-"
+	}
+	if status == "FAILED" {
+		return "FAILING_NOW"
+	}
+	return "in_warning"
+}
+
+// fsck repairs the filesystem on a FAILED disk: writes answer again, the
+// dropped-log reckoning is written, and the wear gets a grace period before
+// it can latch again. It does not heal the wear — DiskHealth still reports
+// what the counters say, so a repaired old disk fails again on schedule.
+// Only root may run it, the way the real tool requires privilege.
+func cmdFsck(s *Shell, args []string) int {
+	target := "/"
+	if len(args) > 1 {
+		s.errf("usage: fsck [/dev/sda1|/]")
+		return 1
+	}
+	if len(args) == 1 {
+		switch args[0] {
+		case "/", "/dev/sda1", "/dev/sda":
+			target = "/"
+		default:
+			s.errf("fsck: cannot check %s: only / (/dev/sda1) exists on this machine", args[0])
+			return 1
+		}
+	}
+	if s.User.UID != 0 {
+		s.errf("fsck: permission denied (must be root to repair %s)", target)
+		return 1
+	}
+	d := s.Dev
+	if !d.DiskFailed() {
+		status, why := d.DiskHealth()
+		files, dirs := countFiles(d)
+		fmt.Fprintf(s.Out, "fsck from util-linux 2.39.3\n")
+		fmt.Fprintf(s.Out, "%s: clean, %d/%d files, %d MiB used (disk health: %s)\n",
+			target, files, files+dirs, d.FS.DiskUsedMB(), status)
+		if status != "PASSED" {
+			fmt.Fprintf(s.Out, "fsck: warning: %s — back up while reads still work\n", why)
+		}
+		return 0
+	}
+	d.RepairDisk()
+	status, why := d.DiskHealth()
+	files, dirs := countFiles(d)
+	fmt.Fprintf(s.Out, "%s: recovering journal\n", target)
+	fmt.Fprintf(s.Out, "%s: FILE SYSTEM WAS MODIFIED\n", target)
+	fmt.Fprintf(s.Out, "%s: %d/%d files, %d MiB used — writes answer again\n", target, files, files+dirs, d.FS.DiskUsedMB())
+	fmt.Fprintf(s.Out, "fsck: the disk is still %s (%s) — back up now, it will fail again\n", status, why)
+	return 0
+}
+
+func countFiles(d *core.Device) (files, dirs int) {
+	for _, n := range d.FS.Nodes {
+		if n.IsDir {
+			dirs++
+		} else {
+			files++
+		}
+	}
+	return files, dirs
 }
