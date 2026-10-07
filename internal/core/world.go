@@ -53,6 +53,9 @@ type World struct {
 	// Black market (Phase 2): the bazaar's listings and sale records. Shape
 	// owned by market.go; created lazily so an older save stays loadable.
 	Bazaar *MarketState
+	// Orgs / clans (Phase 2): crews with rosters, treasuries and escrowed
+	// contracts. Shape owned by org.go; created lazily like everything else.
+	Clans map[string]*Org
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int
@@ -394,6 +397,12 @@ type Job struct {
 	Solutions []string
 	Expected  string
 	Evidence  string
+	// Org names the organisation that posted this as a contract ("" for a
+	// regular job). A contract pays from its escrowed hold, never minted.
+	Org string
+	// Cancelled marks a contract pulled off the board unpaid: it reads
+	// "cancelled", never "paid", in every listing.
+	Cancelled bool
 }
 
 // MissionStage is one ordered step of a staged job: what to do (Help), how

@@ -45,6 +45,26 @@ func (w *World) AcceptJob(who, id string) error {
 
 // VerifyJob consults real world state — never a flag the caller can fake.
 func (w *World) VerifyJob(j *Job) (bool, string) {
+	// Trophies are proof-of-intrusion bounties: the file must exist on the
+	// named device AND carry the worker's tag. Planting it takes real
+	// access; removing it un-completes the work, which is exactly what makes
+	// it a bounty instead of a prize.
+	if rest, ok := strings.CutPrefix(j.Verify, "trophy "); ok {
+		devID, path, _ := strings.Cut(strings.TrimSpace(rest), " ")
+		path = strings.TrimSpace(path)
+		d := w.Devices[strings.TrimSpace(devID)]
+		if d == nil {
+			return false, "no such device: " + devID
+		}
+		data, exists := d.FS.Read(path)
+		if !exists {
+			return false, path + " is not on " + d.Hostname
+		}
+		if !strings.Contains(string(data), j.Accepted) {
+			return false, path + " carries no tag for " + j.Accepted
+		}
+		return true, fmt.Sprintf("%s tagged %s on %s", j.Accepted, path, d.Hostname)
+	}
 	switch j.Verify {
 	case "dns-fix":
 		if w.FaultDNSActive() {
@@ -244,6 +264,28 @@ func (w *World) PayJob(who, id string) (int64, string, error) {
 	ok, why := w.VerifyJob(j)
 	if !ok {
 		return 0, why, fmt.Errorf("not done yet")
+	}
+	// Contracts pay from their escrowed hold, never minted: the money left
+	// the treasury when the contract was posted, and arrives here.
+	if j.Org != "" {
+		o := w.orgMap()[j.Org]
+		if o == nil {
+			return 0, "", fmt.Errorf("org %s is gone", j.Org)
+		}
+		hold, ok := o.Hold[j.ID]
+		if !ok || hold < j.Pay {
+			return 0, "", fmt.Errorf("contract %s has no hold to pay from", j.ID)
+		}
+		if err := w.Transfer(orgTreasury(j.Org), who, j.Pay, "org "+j.Org+" contract "+j.ID); err != nil {
+			return 0, "", err
+		}
+		// the counter moved at post time; the bank moves here.
+		delete(o.Hold, j.ID)
+		j.Done = true
+		w.AddEvent("world", "info", "org", "%s completed %s for %s: %d cents", who, j.ID, j.Org, j.Pay)
+		w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s). balance %d.%02d",
+			j.Pay/100, j.Pay%100, j.ID, w.Bank.Accts[who].Balance/100, w.Bank.Accts[who].Balance%100))
+		return j.Pay, why, nil
 	}
 	j.Done = true
 	acc := w.Bank.Accts[who]

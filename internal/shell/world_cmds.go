@@ -45,6 +45,9 @@ func cmdJob(s *Shell, args []string) int {
 			} else if j.Accepted != "" {
 				status = "taken by " + j.Accepted
 			}
+			if j.Cancelled {
+				status = "cancelled"
+			}
 			if !j.Done && len(j.Stages) > 0 {
 				status += fmt.Sprintf(" (stage %d/%d)", j.StageIdx+1, len(j.Stages))
 			}
@@ -200,8 +203,30 @@ func cmdBank(s *Shell, args []string) int {
 		}
 		fmt.Fprintf(s.Out, "settled utilities: %s\n", fmtMoney(paid))
 		return 0
+	case "transfer", "send":
+		// roommates settle debts and crews get funded: money between people
+		// moves here (the market moves it for trades).
+		if len(args) < 3 {
+			s.errf("usage: bank transfer TO $AMT")
+			return 1
+		}
+		amt, err := marketDollars(args[2])
+		if err != nil {
+			s.errf("bank: bad amount %q (whole dollars)", args[2])
+			return 1
+		}
+		if s.W.Bank.Accts[args[1]] == nil {
+			s.errf("bank: no account for %s", args[1])
+			return 1
+		}
+		if err := s.W.Transfer(s.User.Name, args[1], amt, "transfer to "+args[1]); err != nil {
+			s.errf("bank: %v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "transferred %s to %s\n", fmtMoney(amt), args[1])
+		return 0
 	}
-	s.errf("usage: bank [balance|history|pay]")
+	s.errf("usage: bank [balance|history|pay|transfer TO $AMT]")
 	return 1
 }
 
@@ -1423,7 +1448,9 @@ Accounts & disks:         passwd smartctl fsck
 
 The world layer:
   job [list|show ID|accept ID|pay ID|advance ID|delegate ID]   job board — pays only against real world state
-  bank [balance|history|pay]                        household wallet + assistant budget
+  bank [balance|history|pay|transfer TO $AMT]      household wallet + assistant budget + people
+  player [list|invite NAME TEMP-PASS]             citizens: vouched roommates with their own machines
+  org [list|info|create|invite|join|leave|kick|contribute|withdraw|post|cancel]   crews, treasuries, escrowed contracts
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   bbs [boards|read <board> [N]|post <board> <sub>]  bbs.neohome.example — the community board answers
   market [list|info|sell-cred|sell-file|buy]      bazaar.neohome.example — listings, atomic swaps, a fee, evidence

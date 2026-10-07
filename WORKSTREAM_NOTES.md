@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| P2 剩余:多人/组织/PvP | this commit | Citizens with vouched PCs and bank transfers, orgs with treasuries and escrowed trophy contracts, async PvP proven across two citizens | §"P2 剩余" |
 | 复杂任务框架 (Phase 2 + §44) | this commit | Staged missions: ordered Verify predicates with per-stage pay, Requires gates, assistant stage cycles through the same payStage, J-108/J-109 seeded | §"复杂任务框架" |
 | 黑市 (Phase 2) | this commit | Phase 2 opens with the only piece that chains existing systems: `bazaar.neohome.example` with verified credential listings, hash-pinned dead drops, atomic swaps, a 5% fee and `market` evidence | §"黑市 (Phase 2)" |
 | P1 补完 | this commit | Phase 1's three functional gaps: `vm snapshot/snapshots/restore` on hypervisor guests (plus the save-with-a-guest crash), phone battery wired into `Powered()` with cross-machine `phone charge` as the rescue, and cron skipping dark machines | §"P1 补完" |
@@ -2138,3 +2139,84 @@ was touched.
 * **Retrofitted chains**: J-106→J-107 stay prose-linked. Bolting `Requires`
   onto shipped jobs would change payouts players may already be mid-way
   through; new missions carry the new semantics.
+
+# P2 剩余:多人、组织、异步 PvP
+
+Phase 2's enterprise half (§34/§35) was already built; what remained was
+people: more than one human, crews with shared money, and fights between
+them. All three arrive here, and the third is deliberately emergent — every
+verb an async raid needs already existed, so what is pinned is that the
+loop works across two citizens with attribution both ways.
+
+## Citizens — roommates, not guests
+
+The transport was always multi-user; the entries were not (both hardcoded
+`FindUser("alex")`). `runPlayerSession` and the telnet login now land as
+the player's own account on their own machine, with the old fallback kept.
+
+`InvitePlayer` (`internal/core/players.go`) vouches a password-login
+citizen: an existing player pays a $20 setup fee, the newcomer gets a
+dedicated PC on the household LAN (allocated, never carried — a full pool
+refuses), their own account, home, bank account and resolver line, and
+lands broke with a temp password to change. Isolation is physical
+(separate devices) one layer down and Unix permissions on shared ones;
+`bank transfer` moves money between people (typo payees and overdrafts
+refused).
+
+## Orgs — a name, a roster and a real treasury
+
+`Org` (`internal/core/org.go`, `Clans` on `World`): founder-owned,
+invite-only (invites consumed on join), owner-only kick/withdraw/post/
+cancel, walk-away leave (the owner cannot abandon a crewed org). Money only
+enters through contributions; the treasury is a real bank account plus a
+counter that mirrors it.
+
+Contracts (`org post ORG TITLE $PAY VERIFY [HELP]`) escrow the full pay
+from the treasury up front — a broke crew cannot promise. `PayJob` pays
+contracts from the hold instead of minting (total money conserved, pinned
+by test); `org cancel` refunds unaccepted work and reads `cancelled`,
+never `paid`. `job show`/`list` already carry org contracts; the new
+`trophy <device> <path>` verifier is proof-of-intrusion: the file must
+exist AND carry the worker's tag. Planting takes real access, removing it
+un-completes the work. Members may be players or known NPC handles
+(roster fact, not agency).
+
+Seed: midnight (daemon42 + mira-9, $200 treasury) with an open $100 trophy
+contract on `/tmp/pwned` of darkden — reachable today over anonymous ftp,
+untagged as seeded, deletable by its owner.
+
+## PvP — the loop, not a system
+
+No PvP-specific code was needed beyond the trophy verifier: break in with
+stolen/bought/default credentials (the §36 conjunction, now a choice via
+`passwd`), plant a tag, and the evidence already names the attacker's
+citizen with the origin address for tracing. The test runs §43 in
+miniature across two provisioned VPSes with ticks between the acts.
+
+## The tests
+
+`tests/org_test.go` (four): full lifecycle with permission boundaries at
+every verb; conservation across post→pay from hold; cancel refunds and
+reads cancelled while taken work is protected; the seeded trophy
+end-to-end over real ftp (fail → plant → pay exact hold → treasury
+funded). `tests/multi_test.go` (four): invite validation/fees/duplicates/
+broke refusals plus resolver line; landing as self with separate devices
+and working `passwd`; transfer verbs with typo/overdraft refusals; the
+async loop both directions with named actors, origins and ticks between.
+
+## Verified
+
+`gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
+(292 pass, 0 fail). No new live-verify script: no entry or networking path
+was touched (entry landing is covered by unit tests; live entries degrade
+independently by design).
+
+## Not implemented on purpose
+
+* **Second households/subnets**: citizens share the household LAN like the
+  MCP players do. A second subnet is a LAN-plan change (addr.go owns those
+  numbers), not a citizenship change.
+* **VM-style guest ACLs**: `vm` verbs never checked owners and still do
+  not; crew membership gates money and contracts, not hypervisors.
+* **Reputation/scores**: attribution is permanent and readable; no number
+  is computed from it.

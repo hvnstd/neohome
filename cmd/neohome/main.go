@@ -116,7 +116,10 @@ func handle(conn net.Conn, w *core.World) {
 		fmt.Fprintln(conn, "no device")
 		return
 	}
-	u := pc.FindUser("alex")
+	u := pc.FindUser(login)
+	if u == nil {
+		u = pc.FindUser("alex")
+	}
 	if u == nil {
 		u = &core.User{Name: "alex", UID: 1000, Home: "/home/alex", Shell: "/bin/bash"}
 	}

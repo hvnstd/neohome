@@ -161,7 +161,12 @@ func runPlayerSession(w *core.World, who, ip string, out io.Writer, in io.Reader
 
 	fmt.Fprintf(out, "Welcome, %s. NeoHome over ssh.\r\n", who)
 	_ = bufio.NewReader(in)
-	u := pc.FindUser("alex")
+	// land as the player's own account on their own machine — the second
+	// citizen lands on their own PC, not alex's (see InvitePlayer)
+	u := pc.FindUser(who)
+	if u == nil {
+		u = pc.FindUser("alex")
+	}
 	if u == nil {
 		u = &core.User{Name: "alex", UID: 1000, Home: "/home/alex", Shell: "/bin/bash"}
 	}
