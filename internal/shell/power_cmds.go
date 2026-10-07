@@ -16,11 +16,18 @@ func init() {
 		name string
 		fn   Cmd
 	}{
-		{"power", cmdPower}, {"ups", cmdUPS}, {"bmc", cmdBMC},
+		{"power", cmdPower}, {"ups", cmdUPS}, {"bmc", cmdBMC}, {"console", cmdConsole},
 	} {
 		builtinTable[e.name] = e.fn
 	}
 }
+
+// console walks downstairs: a local root shell on an air-gapped machine,
+// from any same-household box. Only devices with no network interfaces at
+// all qualify — anything reachable over the wire is reached over the wire,
+// with its own authentication. Physical access is game over for access
+// control, so the session lands as root; the gate is WHOSE hands (same
+// Device.Owner, like unplugging) and whether it has power at all.
 
 func cmdPower(s *Shell, args []string) int {
 	sub := "status"
@@ -313,4 +320,50 @@ func cmdUPS(s *Shell, args []string) int {
 		fmt.Fprintln(s.Out, "usage: ups [install|remove|runtime]")
 		return 1
 	}
+}
+
+func cmdConsole(s *Shell, args []string) int {
+	if len(args) < 1 {
+		s.errf("usage: console HOST [COMMAND]")
+		return 1
+	}
+	var target *core.Device
+	for _, id := range s.W.Order {
+		if d := s.W.Devices[id]; d.Hostname == args[0] || d.ID == args[0] {
+			target = d
+		}
+	}
+	if target == nil {
+		s.errf("console: no device called %s", args[0])
+		return 1
+	}
+	// hands, not shell: only the household that owns the box may touch it
+	if target.Owner != s.Dev.Owner && s.User.UID != 0 {
+		s.errf("console: %s is not this household's to touch", target.Hostname)
+		return 1
+	}
+	// ...and only a box with no remote surface takes a crash cart: anything
+	// with an address is reached over the wire, with its own login
+	if len(target.Ifaces) > 0 {
+		s.errf("console: %s has network interfaces — use ssh, not the crash cart", target.Hostname)
+		return 1
+	}
+	if target.Profile == "usb" {
+		s.errf("console: %s is storage, not a computer", target.Hostname)
+		return 1
+	}
+	if !target.Powered() {
+		s.errf("console: %s is dark (%s) — power plug %s first", target.Hostname, target.UnavailableReason(), target.Hostname)
+		return 1
+	}
+	root := target.FindUser("root")
+	if root == nil {
+		s.errf("console: %s has no root account", target.Hostname)
+		return 1
+	}
+	target.Logf("notice", "console", "local root login by %s (physical access)", s.User.Name)
+	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(target), target.ID,
+		"physical console login", 1)
+	fmt.Fprintf(s.Out, "crash cart on %s — physical access, root shell\n", target.Hostname)
+	return s.openRemoteSession("console", target, root, args[1:])
 }

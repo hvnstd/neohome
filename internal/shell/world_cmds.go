@@ -1517,7 +1517,7 @@ Work on the machine:      ls cd cat cp mv rm mkdir touch echo find grep head tai
 Processes:                ps top htop kill pkill nice
 Network:                  ip ifconfig route ss ping traceroute dig nslookup curl wget openssl
 Services & packages:      systemctl service apt apk pacman dnf mysql brun
-Remote:                   ssh scp sftp ftp telnet     Sessions: tmux screen
+Remote:                   ssh scp sftp ftp telnet console  Sessions: tmux screen
 System info:              fastfetch uname hostname uptime whoami id env free lscpu lsblk dmesg
 Accounts & disks:         passwd useradd userdel usermod groupadd groups chpasswd people smartctl fsck
 

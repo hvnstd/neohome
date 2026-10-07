@@ -169,7 +169,7 @@ func cmdCp(s *Shell, args []string) int {
 		s.errf("%s: %s: %s", s.Dev.Hostname, args[1], err2)
 		return 1
 	}
-	if err := s.Dev.WriteGuest(dst, data, s.User); err != nil {
+	if err := writeResolved(s, vfs2, dst, data); err != nil {
 		s.errf("%s: %s: %v", s.Dev.Hostname, args[1], err)
 		return 1
 	}
@@ -206,7 +206,7 @@ func cmdMv(s *Shell, args []string) int {
 		s.errf("%s: %s: %s", s.Dev.Hostname, args[1], err2)
 		return 1
 	}
-	if err := s.Dev.WriteGuest(dst, data, s.User); err != nil {
+	if err := writeResolved(s, vfs2, dst, data); err != nil {
 		s.errf("%s: %s: %v", s.Dev.Hostname, args[1], err)
 		return 1
 	}
@@ -279,7 +279,7 @@ func cmdTouch(s *Shell, args []string) int {
 			n.MTime = s.W.Now()
 			continue
 		}
-		if err := s.Dev.WriteGuest(p, nil, s.User); err != nil {
+		if err := writeResolved(s, vfs, p, nil); err != nil {
 			s.errf("%s: %s: %v", s.Dev.Hostname, a, err)
 			return 1
 		}
@@ -542,11 +542,22 @@ func cmdLn(s *Shell, args []string) int {
 		s.errf("%s: %s: %s", s.Dev.Hostname, link, "Stale file handle")
 		return 1
 	}
-	if err := s.Dev.WriteGuest(dst, data, s.User); err != nil {
+	if err := writeResolved(s, vfs2, dst, data); err != nil {
 		s.errf("%s: %s: %v", s.Dev.Hostname, link, err)
 		return 1
 	}
 	return 0
+}
+
+// writeResolved stores through the filesystem a resolved path belongs to:
+// the single write gate for local files, the server's own permission check
+// for mounted ones — the same split the redirect path uses, so cp, mv,
+// touch and ln agree with echo > everywhere.
+func writeResolved(s *Shell, vfs *core.VFS, p string, data []byte) error {
+	if vfs == s.Dev.FS {
+		return s.Dev.WriteGuest(p, data, s.User)
+	}
+	return vfs.WriteChecked(p, data, s.User)
 }
 
 func cmdChmod(s *Shell, args []string) int {

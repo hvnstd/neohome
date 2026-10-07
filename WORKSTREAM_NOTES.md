@@ -31,9 +31,11 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
@@ -2544,3 +2546,36 @@ syscall/文件/网络/机器码。恶意程序最多吃掉游戏 CPU：fuel 计�
 五个：循环/调用/比较求和+三死法（行号/除零/fuel）；文件往返+shadow
 拒绝；banner 抓取+关口拒绝+落地 flow；SPAWN 建表/收割/nohup/kill 摘除；
 存档往返跑完。`gofmt` 空、`vet` 干净、全量绿（338 pass，0 fail）。
+
+# 缺口 7:地下室 vault（§41）
+
+离线 Server：零网卡（无地址、无路由、无扫描、无登录——包路径点不出
+它的名）、默认断电躺黑；进去只走 crash cart（同 household 的手+有电），
+数据只走 USB 摆渡。这是灾备，不是保险箱：同屋谁都摸得着。
+
+## 模型
+
+* `vault-alex`（server，1TB，Debian）：seed 即 `MainsDropped`，`BootSet`
+  带 syslogd（通电自起）， leo 自带 BACKUP-ROUTINE.txt（五步摆渡法，
+  seed 即文档）。
+* `console HOST [COMMAND]`（power_cmds，物理动作簇）：同 `Device.Owner`
+  才许动手（拔插同规）；有网卡的一律指去 ssh；USB 存储拒绝；黑了先
+  `power plug`；进去即 root（物理即沦陷，写明），日志+证据照记；无
+  input 流配单命令可跑（openRemoteSession 同 reader 规则）。
+* 桥：stick 两头插拔+mount+cp 全走现成动词；在 vault 侧跑（console 会
+  话里），`echo >` 这类重定向必须进交互会话——`console vault echo x >
+  f` 的 `>` 会落在 caller 本机（和 `ssh host echo x > f` 同理），测试里
+  锁了这条。
+
+## 顺手修的跨 mount 写错设备
+
+`cp/mv/touch/ln` 把 ResolveVFS 解出的远端路径交 `s.Dev.WriteGuest` 写
+本地：跨 mount 全写错地方（vault 摆渡测出来的）。统一收敛到
+`writeResolved`（本地走 WriteGuest，挂载走对端 WriteChecked），与
+redirect 路径一致。注：挂载写仍不查远端满盘（redirect 同病，单列）。
+
+## 测试与验证
+
+五个：三无（无口无由无扫描）+黑拒+单命令也得先通电；通电/console
+root/证据/syslog/断网读写/断电存数；pc→stick→vault 完整摆渡；blake 被
+拒；过存档（电量/数据/无口）。`gofmt` 空、`vet` 干净、全量绿（343 pass，0 fail）。

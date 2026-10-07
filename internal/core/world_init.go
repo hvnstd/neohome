@@ -304,6 +304,33 @@ func NewWorld() *World {
 		OSInfo{"FAT32", "1.0", "-", "none", "none"},
 		Hardware{"USB Stick", 0, 0, 0, 32768, 0, false, false}, "")
 	_ = stick
+
+	// ---- the basement vault (§41) -----------------------------------------
+	// An offline server: no network interfaces at all (so no address, no
+	// route, no scan, no login — the packet path cannot name it), unplugged
+	// in the dark until someone walks downstairs. The only way in is the
+	// crash cart (`console vault` from a same-household machine, as root,
+	// because physical access is game over for access control) and the only
+	// way data crosses the gap is the USB stick. It is disaster recovery,
+	// not an absolute safe: anyone in the house can touch it.
+	vault := w.addDevice("vault-alex", "vault", "server", "alex",
+		OSInfo{"Debian", "12", "6.1.0", "x86_64", "bash"},
+		Hardware{"Basement Server", 4, 2400, 8192, 1048576, 1000, false, false}, "")
+	vault.MainsDropped = true
+	vault.BootSet = []string{"syslogd"}
+	vault.Notes = "air-gapped backup server"
+	mkUsers(vault, map[string]*User{
+		"root": {Name: "root", UID: 0, Groups: []string{"root"}, Home: "/root", Shell: "/bin/bash"},
+		"alex": {Name: "alex", UID: 1000, Pass: "alex123", Groups: []string{"alex"}, Home: "/home/alex", Shell: "/bin/bash"},
+	})
+	seedFS(vault, "server")
+	vault.FS.Write("/etc/motd", "vault: no network interfaces. air gap is a place, not a product.\n", 0644, "root", "root")
+	vault.FS.Write("/root/BACKUP-ROUTINE.txt",
+		"air-gap routine:\n1. power plug vault (from upstairs)\n2. console vault\n3. usb plug usb-alex (the stick travels, the network does not)\n4. mount -t vfat /dev/sda1 /mnt/usb && cp -r /srv/vault /mnt/usb\n5. unplug, power unplug vault\nread it back the same way, backwards.\n",
+		0644, "root", "root")
+	vault.FS.MkdirAll("/srv/vault", 0755, "root", "root")
+	vault.Services["syslogd"] = &Service{Name: "syslogd", Desc: "BusyBox syslogd", Port: 0, Proto: "udp",
+		Scope: "lan", State: "stopped", Handler: "syslog"}
 	// ---- NPC neighbour ----
 	npcpc := w.addDevice("npc-pc", "darkden", "pc", "mara", OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
 		Hardware{"Gaming rig", 8, 4800, 32768, 131072, 1000, false, false}, "10.88.1.11")
