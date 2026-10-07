@@ -110,7 +110,7 @@ func TestGitCommitPushAndFreshClone(t *testing.T) {
 
 	// edit, commit, push
 	g.must("modified:  backup.sh", g.exec("echo '# reviewed by alex' >> backup.sh && git status"), "status does not see the edit")
-	g.must("[main", g.exec("git commit -m 'reviewed the backup script'"), "commit failed")
+	g.must("[master", g.exec("git commit -m 'reviewed the backup script'"), "commit failed")
 	g.must("nothing to commit, working tree clean", g.exec("git status"), "commit left the tree dirty")
 	g.must("main -> main", g.exec("git push", "alex123"), "push failed")
 
@@ -201,4 +201,95 @@ func mustRead(t *testing.T, d *core.Device, p string) string {
 		t.Fatalf("%s is missing on %s", p, d.Hostname)
 	}
 	return string(data)
+}
+
+// Branches are ref files plus a symref HEAD: create, switch, diverge, merge
+// fast-forward. A diverged pair is refused — true merges are out of scope,
+// and the refusal says so instead of inventing a conflicted tree.
+func TestGitBranchAndFastForwardMerge(t *testing.T) {
+	w := core.NewWorld()
+	repairDNS(t, w)
+	g := newGSession(t, w, w.Devices["pc-alex"], "alex")
+
+	g.exec("git clone https://git.neohome.example/neohome-scripts.git work")
+	g.exec("cd work")
+	g.must("* master", g.exec("git branch"), "a fresh clone should be on master")
+	g.must("On branch master", g.exec("git status"), "status must name the real branch")
+
+	// feature branch: new file, committed there, invisible on master
+	g.must("Created branch feature", g.exec("git branch feature"), "branch create failed")
+	g.must("Switched to branch 'feature'", g.exec("git checkout feature"), "checkout failed")
+	g.exec("echo feature work > feat.txt")
+	g.must("[feature", g.exec("git commit -m 'feature work'"), "commit should name the branch")
+	if _, ok := w.Devices["pc-alex"].FS.Read("/home/alex/work/feat.txt"); !ok {
+		t.Fatal("the committed file must be in the working tree")
+	}
+	g.must("Switched to branch 'master'", g.exec("git checkout master"), "checkout back failed")
+	if _, ok := w.Devices["pc-alex"].FS.Read("/home/alex/work/feat.txt"); ok {
+		t.Fatal("switching branches must materialise master's tree")
+	}
+	// fast-forward: master takes the branch tip, history intact
+	g.must("Fast-forward", g.exec("git merge feature"), "ff merge failed")
+	if _, ok := w.Devices["pc-alex"].FS.Read("/home/alex/work/feat.txt"); !ok {
+		t.Fatal("the merged file must be in the working tree")
+	}
+	g.must("feature work", g.exec("git log"), "merged history must list the branch commit")
+
+	// diverge: a commit on master after the branch point...
+	g.exec("git checkout -b side")
+	g.exec("echo side > side.txt")
+	g.exec("git commit -m 'side work'")
+	g.exec("git checkout master")
+	g.exec("echo master > master.txt")
+	g.exec("git commit -m 'master work'")
+	out := g.exec("git merge side")
+	if !strings.Contains(out, "diverged") {
+		t.Fatalf("a diverged merge must be refused honestly, got:\n%s", out)
+	}
+	// ...and the refused merge changed nothing
+	if _, ok := w.Devices["pc-alex"].FS.Read("/home/alex/work/side.txt"); ok {
+		t.Fatal("a refused merge must not materialise the other side")
+	}
+}
+
+func TestGitCheckoutRefusesDirtyTree(t *testing.T) {
+	w := core.NewWorld()
+	repairDNS(t, w)
+	g := newGSession(t, w, w.Devices["pc-alex"], "alex")
+
+	g.exec("git clone https://git.neohome.example/dotfiles.git df")
+	g.exec("cd df")
+	g.exec("git branch alt")
+	g.exec("echo dirty > gitprompt.sh")
+	if out := g.exec("git checkout alt"); !strings.Contains(out, "would be overwritten") {
+		t.Fatalf("checkout over local changes must be refused, got:\n%s", out)
+	}
+	g.exec("git commit -m 'keep the change'")
+	g.must("Switched to branch 'alt'", g.exec("git checkout alt"), "checkout after commit should work")
+}
+
+func TestGitDeleteProtectsHistory(t *testing.T) {
+	w := core.NewWorld()
+	repairDNS(t, w)
+	g := newGSession(t, w, w.Devices["pc-alex"], "alex")
+
+	g.exec("git clone https://git.neohome.example/dotfiles.git df")
+	g.exec("cd df")
+	g.exec("git checkout -b doomed")
+	g.exec("echo doomed > doomed.txt")
+	g.exec("git commit -m 'doomed work'")
+	g.exec("git checkout master")
+	if out := g.exec("git branch -d doomed"); !strings.Contains(out, "not merged") {
+		t.Fatalf("deleting unmerged history must be refused, got:\n%s", out)
+	}
+	if out := g.exec("git branch -d master"); !strings.Contains(out, "checked out") {
+		t.Fatalf("deleting the current branch must be refused, got:\n%s", out)
+	}
+	g.must("Deleted branch doomed", g.exec("git branch -D doomed"), "force delete failed")
+	if out := g.exec("git branch"); strings.Contains(out, "doomed") {
+		t.Fatalf("the branch must be gone:\n%s", out)
+	}
+	if out := g.exec("git branch 'bad name'"); !strings.Contains(out, "invalid branch name") {
+		t.Fatalf("bad names must be refused, got:\n%s", out)
+	}
 }

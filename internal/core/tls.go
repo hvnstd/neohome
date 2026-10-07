@@ -319,12 +319,16 @@ func pkcs8(key *rsa.PrivateKey) []byte {
 
 // httpsHosts are the public names that speak TLS in the seeded world: a
 // leaf is issued for each and carried by the serving service on port 443.
+// httpsHosts are the names that speak TLS in the seeded world: public web
+// hosts on 443 and the household's own mail hosts on 993.
 var httpsHosts = []struct{ host, devID, svc string }{
 	{"mirror.neohome.example", "mirror", "nginx"},
 	{"api.novapanel.example", "prov-api", "nginx"},
 	{"bank.firstneohome.example", "bank", "httpd"},
 	{"jobs.hiring.example", "jobs", "httpd"},
 	{"git.neohome.example", "git", "nginx"},
+	{"home-pc", "pc-alex", "imaps"},
+	{"assistant", "asst-alex", "imaps"},
 }
 
 // seedTLS gives the fresh world a root CA whose material lives on the

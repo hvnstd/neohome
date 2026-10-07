@@ -38,7 +38,7 @@
 | 十六 | VM | 已完成 | 状态机+资源后果+快照/回滚+存档往返 |
 | 十七 | 资源管理 | 已完成 | CPU 分享/RAM→swap→OOM/满盘/磨损（SMART+fsck）/有限进程表（WS-1.11+后续） |
 | 十八 | screen/tmux | 已完成 | 真进程+detach 重连 |
-| 十九 | 通信系统 | 部分 | 13 项全通（DNS/WHOIS/HTTP(S)/SMTP/IMAP/IRC/BBS/FTP/SFTP/Git/任务/银行/仓库）+黑市；缺 IMAPS :993（仅扫描列表里有） |
+| 十九 | 通信系统 | 已完成 | 13 项全通+黑市+BBS私信+sftp -r+IMAPS；git 分支见§29 |
 | 二十 | NPC 世界 | 部分 | 账号/钱包/设备/日程/加固/报警齐；**缺记忆与关系**（`npc.go` 无 memory/relation） |
 | 二十一 | NPC AI 架构 | 部分 | 世界模拟 ✓ +  agent 巡逻/日程/加固（规则层）；LLM 层只有 MCP 透传，无“需决策时唤醒”调度 |
 | 二十二 | Assistant | 已完成 | 忠诚+能力受限（CPU/权限/凭据/知识/网络/时间）+授权执行 |
@@ -81,7 +81,7 @@
 3. NPC 记忆与关系（§20/§21，事件记忆+关系图+LLM 唤醒调度）
 4. Assistant 配额 + suid/keys 提权收尾（§24/§30，中件）
 5. VLAN + BGP 过程 + 数据库（§31/§38/§52，大件，可拆）
-6. BBS 私信 / git 分支合并 / sftp -r / IMAPS（§19/§29，小件，之前 marked 无 storyline——现在 PvP/组织故事已够，可做）
+6. ~~BBS 私信 / git 分支合并 / sftp -r / IMAPS~~ done（本批；真 3-way 合并仍不做）
 7. 地下室 vault（§41，中件：离线 Server/Storage+物理访问门控，USB 已就绪）
 8. 内容工具链：世界生成器/任务编辑器/社区格式（§44，大件）
 9. Phase 3：Web 客户端/可视化/多实例/调度（§50，大件）

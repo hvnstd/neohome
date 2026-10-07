@@ -59,8 +59,22 @@ func cmdBBS(s *Shell, args []string) int {
 			return 1
 		}
 		return bbsPost(s, args[1], strings.Join(args[2:], " "))
+	case "mail":
+		if len(args) < 3 {
+			s.errf("usage: bbs mail <user> <subject>  (body on following lines until '.')")
+			return 1
+		}
+		return bbsMail(s, args[1], strings.Join(args[2:], " "))
+	case "inbox", "mailbox", "mail-list":
+		return bbsInbox(s)
+	case "readmail", "mail-read":
+		if len(args) < 2 {
+			s.errf("usage: bbs readmail N")
+			return 1
+		}
+		return bbsReadmail(s, args[1])
 	}
-	s.errf("usage: bbs [boards|read <board> [N]|post <board> <subject>]")
+	s.errf("usage: bbs [boards|read <board> [N]|post <board> <subject>|mail <user> <subject>|inbox|readmail N]")
 	return 1
 }
 
@@ -72,7 +86,7 @@ func bbsBoards(s *Shell) int {
 	for _, b := range core.BBSBoards {
 		fmt.Fprintf(s.Out, "  %-10s %d posts\n", b, len(s.W.BBSList(b)))
 	}
-	fmt.Fprintf(s.Out, "usage: bbs read <board> [N] | bbs post <board> <subject>\n")
+	fmt.Fprintf(s.Out, "usage: bbs read <board> [N] | bbs post <board> <subject> | bbs mail <user> <subject> | bbs inbox | bbs readmail N\n")
 	return 0
 }
 
@@ -131,5 +145,69 @@ func bbsPost(s *Shell, board, subject string) int {
 		return 1
 	}
 	fmt.Fprintf(s.Out, "posted %s/%d — the board reads it within minutes\n", p.Board, p.Num)
+	return 0
+}
+
+// bbsMail sends a private letter: same body convention as posting, but the
+// letter lands in the addressee's mailbox, not on a board.
+func bbsMail(s *Shell, to, subject string) int {
+	if rc := dialBBS(s); rc != 0 {
+		return rc
+	}
+	fmt.Fprintln(s.Out, "enter body, end with a single '.':")
+	var lines []string
+	for {
+		l, err := s.bufrd.ReadString('\n')
+		if err != nil {
+			break
+		}
+		l = strings.TrimRight(l, "\r\n")
+		if l == "." {
+			break
+		}
+		lines = append(lines, l)
+	}
+	if err := s.W.BBSMail(s.User.Name, to, subject, strings.Join(lines, "\n"), ""); err != nil {
+		s.errf("bbs: %v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "letter to %s posted\n", to)
+	return 0
+}
+
+// bbsInbox lists the session user's own letters. The server filters by the
+// session account — anyone else's mail is simply not listed.
+func bbsInbox(s *Shell) int {
+	if rc := dialBBS(s); rc != 0 {
+		return rc
+	}
+	msgs := s.W.BBSInbox(s.User.Name)
+	if len(msgs) == 0 {
+		fmt.Fprintf(s.Out, "no letters for %s\n", s.User.Name)
+		return 0
+	}
+	fmt.Fprintf(s.Out, "mailbox %s (%d letters)\n", s.User.Name, len(msgs))
+	for _, p := range msgs {
+		fmt.Fprintf(s.Out, "%3d  %s  %-10s  %s\n", p.Num, p.Date, p.From, p.Subject)
+	}
+	return 0
+}
+
+func bbsReadmail(s *Shell, arg string) int {
+	if rc := dialBBS(s); rc != 0 {
+		return rc
+	}
+	n := 0
+	if _, err := fmt.Sscanf(arg, "%d", &n); err != nil || n <= 0 {
+		s.errf("bbs: bad letter number %q", arg)
+		return 1
+	}
+	p, ok := s.W.BBSMailRead(s.User.Name, n)
+	if !ok {
+		s.errf("bbs: no such letter: %d", n)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "letter %d\nFrom: %s\nDate: %s\nSubject: %s\n\n%s\n",
+		p.Num, p.From, p.Date, p.Subject, p.Body)
 	return 0
 }

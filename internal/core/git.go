@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -152,8 +153,8 @@ func readGitCommit(d *Device, base, sha string) (GitCommitInfo, bool) {
 
 // gitLog walks the parent chain from HEAD, oldest last.
 func gitLog(d *Device, base string) []GitCommitInfo {
-	head, ok := gitReadFile(d, base, "HEAD")
-	if !ok || strings.TrimSpace(head) == "" {
+	head := gitResolveHead(d, base)
+	if head == "" {
 		return nil
 	}
 	var out []GitCommitInfo
@@ -259,7 +260,7 @@ func (w *World) GitStatus(d *Device, dir string, u *User) ([]GitDelta, error) {
 	if len(unreadable) > 0 {
 		return nil, fmt.Errorf("cannot read tracked candidate: %s", unreadable[0])
 	}
-	head, _ := gitReadFile(d, base, "HEAD")
+	head := gitResolveHead(d, base)
 	headTree := map[string]string{}
 	if hc := strings.TrimSpace(head); hc != "" {
 		c, ok := readGitCommit(d, base, hc)
@@ -328,7 +329,7 @@ func (w *World) GitCommit(d *Device, dir string, u *User, msg string) (GitCommit
 			return GitCommitInfo{}, err
 		}
 	}
-	head, _ := gitReadFile(d, base, "HEAD")
+	head := gitResolveHead(d, base)
 	parent := strings.TrimSpace(head)
 	stamp := w.Sim.Format("2006-01-02 15:04")
 	c := GitCommitInfo{Parent: parent, Author: u.Name, Date: stamp, Message: strings.TrimSpace(msg), Tree: tree}
@@ -337,11 +338,227 @@ func (w *World) GitCommit(d *Device, dir string, u *User, msg string) (GitCommit
 		return GitCommitInfo{}, err
 	}
 	c.ID = id
-	if err := gitWriteFile(d, base, "HEAD", id+"\n", u.Name, u); err != nil {
+	if err := writeHead(d, base, id, u.Name, u); err != nil {
 		return GitCommitInfo{}, err
 	}
 	d.Logf("info", "git", "committed %s on %s by %s", id[:8], repo, u.Name)
 	return c, nil
+}
+
+// HeadBranchOf names the branch checked out in dir's repository for
+// display: the branch, or a bare-HEAD marker for legacy checkouts.
+func HeadBranchOf(d *Device, dir string) string {
+	repo, ok := findGitRepo(d, dir)
+	if !ok {
+		return "main"
+	}
+	if br := headBranch(d, repo+"/.git"); br != "" {
+		return br
+	}
+	return "(bare HEAD " + shortOrEmpty(gitResolveHead(d, repo+"/.git")) + ")"
+}
+
+// ---- branches ----
+
+// GitBranchInfo is one local branch: its name, its tip, and whether HEAD is
+// on it.
+type GitBranchInfo struct {
+	Name    string
+	Tip     string
+	Current bool
+}
+
+// GitBranches lists local branches, oldest creation first (sorted by name —
+// creation order is not stored, and sorted is honest about that).
+func GitBranches(d *Device, dir string) []GitBranchInfo {
+	repo, ok := findGitRepo(d, dir)
+	if !ok {
+		return nil
+	}
+	base := repo + "/.git"
+	cur := headBranch(d, base)
+	var out []GitBranchInfo
+	for _, p := range d.FS.List(base + "/refs/heads") {
+		name := p[strings.LastIndex(p, "/")+1:]
+		tip, _ := gitReadFile(d, base, "refs/heads/"+name)
+		out = append(out, GitBranchInfo{Name: name, Tip: strings.TrimSpace(tip), Current: name == cur})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// GitBranchCreate points a new branch at the current tip. The first branch
+// ever created also converts a legacy bare HEAD into master + symref, so the
+// repository the clone left behind joins the branched world instead of
+// forking it.
+func (w *World) GitBranchCreate(d *Device, dir, name string, u *User) error {
+	if err := gitCheckBranch(name); err != nil {
+		return err
+	}
+	repo, ok := findGitRepo(d, dir)
+	if !ok {
+		return fmt.Errorf("fatal: not a git repository: %s", dir)
+	}
+	base := repo + "/.git"
+	tip := gitResolveHead(d, base)
+	if tip == "" {
+		return fmt.Errorf("fatal: no commits yet")
+	}
+	if _, ok := gitReadFile(d, base, "refs/heads/"+name); ok {
+		return fmt.Errorf("fatal: a branch named %q already exists", name)
+	}
+	if headBranch(d, base) == "" {
+		if err := gitWriteFile(d, base, "refs/heads/master", tip+"\n", u.Name, u); err != nil {
+			return err
+		}
+		if err := gitWriteFile(d, base, "HEAD", gitRefPrefix+"master\n", u.Name, u); err != nil {
+			return err
+		}
+	}
+	if err := gitWriteFile(d, base, "refs/heads/"+name, tip+"\n", u.Name, u); err != nil {
+		return err
+	}
+	d.Logf("info", "git", "created branch %s on %s at %s", name, repo, shortOrEmpty(tip))
+	return nil
+}
+
+// GitCheckoutBranch moves HEAD to a branch and materialises its tree. A dirty
+// working tree refuses: no stash exists here, so overwriting it would lose
+// work with no way back.
+func (w *World) GitCheckoutBranch(d *Device, dir, name string, u *User) error {
+	if err := gitCheckBranch(name); err != nil {
+		return err
+	}
+	repo, ok := findGitRepo(d, dir)
+	if !ok {
+		return fmt.Errorf("fatal: not a git repository: %s", dir)
+	}
+	base := repo + "/.git"
+	tipData, ok := gitReadFile(d, base, "refs/heads/"+name)
+	if !ok || strings.TrimSpace(tipData) == "" {
+		return fmt.Errorf("error: pathspec %q did not match any branch", name)
+	}
+	tip := strings.TrimSpace(tipData)
+	if headBranch(d, base) == name {
+		return fmt.Errorf("already on %q", name)
+	}
+	deltas, err := w.GitStatus(d, repo, u)
+	if err != nil {
+		return err
+	}
+	if len(deltas) > 0 {
+		return fmt.Errorf("error: your local changes would be overwritten by checkout; commit them first")
+	}
+	cur := gitResolveHead(d, base)
+	oldTree := map[string]string{}
+	if c, ok := readGitCommit(d, base, cur); ok {
+		oldTree = gitTreeManifest(d, base, c.Tree)
+	}
+	nc, ok := readGitCommit(d, base, tip)
+	if !ok {
+		return fmt.Errorf("fatal: branch %q points nowhere", name)
+	}
+	if err := gitWriteFile(d, base, "HEAD", gitRefPrefix+name+"\n", u.Name, u); err != nil {
+		return err
+	}
+	if err := gitCheckout(d, repo, base, nc.Tree, oldTree, u); err != nil {
+		return err
+	}
+	d.Logf("info", "git", "checked out %s on %s (%s)", name, repo, shortOrEmpty(tip))
+	return nil
+}
+
+// GitDeleteBranch removes a branch pointer. The checked-out branch cannot go,
+// and an unmerged tip needs -D: deleting history no other branch holds would
+// orphan commits with no way back.
+func (w *World) GitDeleteBranch(d *Device, dir, name string, force bool, u *User) error {
+	if err := gitCheckBranch(name); err != nil {
+		return err
+	}
+	repo, ok := findGitRepo(d, dir)
+	if !ok {
+		return fmt.Errorf("fatal: not a git repository: %s", dir)
+	}
+	base := repo + "/.git"
+	if headBranch(d, base) == name {
+		return fmt.Errorf("error: cannot delete branch %q while it is checked out", name)
+	}
+	tipData, ok := gitReadFile(d, base, "refs/heads/"+name)
+	if !ok {
+		return fmt.Errorf("error: branch %q not found", name)
+	}
+	tip := strings.TrimSpace(tipData)
+	if !force {
+		merged := false
+		for _, b := range GitBranches(d, repo) {
+			if b.Name != name && gitAncestor(d, base, tip, b.Tip) {
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			return fmt.Errorf("error: branch %q is not merged (use -D to delete anyway)", name)
+		}
+	}
+	d.FS.Remove(base + "/refs/heads/" + name)
+	d.Logf("info", "git", "deleted branch %s on %s", name, repo)
+	_ = u
+	return nil
+}
+
+// GitMerge fast-forwards the current branch to the named one. Equal tips are
+// already up to date; a diverged pair is refused outright — this world does
+// true merges nowhere, and saying so beats inventing a conflicted tree.
+func (w *World) GitMerge(d *Device, dir, name string, u *User) (string, error) {
+	if err := gitCheckBranch(name); err != nil {
+		return "", err
+	}
+	repo, ok := findGitRepo(d, dir)
+	if !ok {
+		return "", fmt.Errorf("fatal: not a git repository: %s", dir)
+	}
+	base := repo + "/.git"
+	cur := headBranch(d, base)
+	if cur == "" {
+		return "", fmt.Errorf("fatal: not on any branch (bare HEAD) — create one with: git branch <name>")
+	}
+	otherData, ok := gitReadFile(d, base, "refs/heads/"+name)
+	if !ok {
+		return "", fmt.Errorf("error: branch %q not found", name)
+	}
+	other := strings.TrimSpace(otherData)
+	mine := gitResolveHead(d, base)
+	switch {
+	case mine == other:
+		return "Already up to date.", nil
+	case gitAncestor(d, base, mine, other):
+		deltas, err := w.GitStatus(d, repo, u)
+		if err != nil {
+			return "", err
+		}
+		if len(deltas) > 0 {
+			return "", fmt.Errorf("error: your local changes would be overwritten by merge; commit them first")
+		}
+		oldTree := map[string]string{}
+		if c, ok := readGitCommit(d, base, mine); ok {
+			oldTree = gitTreeManifest(d, base, c.Tree)
+		}
+		nc, ok := readGitCommit(d, base, other)
+		if !ok {
+			return "", fmt.Errorf("fatal: branch %q points nowhere", name)
+		}
+		if err := writeHead(d, base, other, u.Name, u); err != nil {
+			return "", err
+		}
+		if err := gitCheckout(d, repo, base, nc.Tree, oldTree, u); err != nil {
+			return "", err
+		}
+		d.Logf("info", "git", "merged %s into %s on %s (fast-forward to %s)", name, cur, repo, shortOrEmpty(other))
+		return fmt.Sprintf("Updating %s..%s\nFast-forward", shortOrEmpty(mine), shortOrEmpty(other)), nil
+	case gitAncestor(d, base, other, mine):
+		return "Already up to date.", nil
+	}
+	return "", fmt.Errorf("fatal: %s and %s diverged — true merges are not implemented (delete one side with: git branch -D <name>)", cur, name)
 }
 
 // ---- transport ----
@@ -515,7 +732,12 @@ func (w *World) GitClone(src *Device, raw, target string, u *User) (string, erro
 	if err := w.gitFetchObjects(dst, serverBase, src, localBase, u); err != nil {
 		return "", err
 	}
-	if err := gitWriteFile(src, localBase, "HEAD", head, u.Name, u); err != nil {
+	// a fresh clone checks out a branch, not a bare id: master starts at the
+	// server's HEAD and HEAD points at it
+	if err := gitWriteFile(src, localBase, "refs/heads/master", head, u.Name, u); err != nil {
+		return "", err
+	}
+	if err := gitWriteFile(src, localBase, "HEAD", gitRefPrefix+"master\n", u.Name, u); err != nil {
 		return "", err
 	}
 	if err := gitWriteFile(src, localBase, "remote", raw+"\n", u.Name, u); err != nil {
@@ -554,7 +776,7 @@ func (w *World) GitPull(d *Device, dir string, u *User) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	head, _ := gitReadFile(d, base, "HEAD")
+	head := headOf(d, base)
 	local := strings.TrimSpace(head)
 	remote := gitRemoteHead(dst, serverBase)
 	if local == remote {
@@ -601,7 +823,7 @@ func (w *World) GitPull(d *Device, dir string, u *User) (string, error) {
 	if lc, ok := readGitCommit(d, base, local); ok {
 		oldTree = gitTreeManifest(d, base, lc.Tree)
 	}
-	if err := gitWriteFile(d, base, "HEAD", remote+"\n", u.Name, u); err != nil {
+	if err := writeHead(d, base, remote, u.Name, u); err != nil {
 		return "", err
 	}
 	if err := gitCheckout(d, repo, base, rc.Tree, oldTree, u); err != nil {
@@ -661,8 +883,68 @@ func (w *World) GitPush(d *Device, dir string, u *User, user, pass string) (stri
 }
 
 func headOf(d *Device, base string) string {
+	return gitResolveHead(d, base)
+}
+
+// gitRefPrefix marks a HEAD that points at a branch instead of a commit id.
+// Server repositories and old clones keep bare ids; anything new grows a
+// master symref the first time a branch is created.
+const gitRefPrefix = "ref: refs/heads/"
+
+// gitResolveHead resolves HEAD to a commit id: a symref is followed to its
+// branch file, anything else is a legacy bare id.
+func gitResolveHead(d *Device, base string) string {
 	h, _ := gitReadFile(d, base, "HEAD")
+	h = strings.TrimSpace(h)
+	if rest, ok := strings.CutPrefix(h, gitRefPrefix); ok {
+		ref, _ := gitReadFile(d, base, "refs/heads/"+strings.TrimSpace(rest))
+		return strings.TrimSpace(ref)
+	}
 	return h
+}
+
+// headBranch names the branch HEAD points at, or "" for a bare id.
+func headBranch(d *Device, base string) string {
+	h, _ := gitReadFile(d, base, "HEAD")
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(h), gitRefPrefix); ok {
+		return strings.TrimSpace(rest)
+	}
+	return ""
+}
+
+// writeHead stores a new tip: through the branch file when HEAD is a symref,
+// directly when it is a legacy bare id. Every local mutation goes through
+// here, so a commit can never silently detach the branch.
+func writeHead(d *Device, base, id, owner string, u *User) error {
+	if br := headBranch(d, base); br != "" {
+		return gitWriteFile(d, base, "refs/heads/"+br, id+"\n", owner, u)
+	}
+	return gitWriteFile(d, base, "HEAD", id+"\n", owner, u)
+}
+
+// gitAncestor reports whether maybeAncestor is reachable by walking parents
+// from tip. Histories here are short; the cap is a backstop, not a limit.
+func gitAncestor(d *Device, base, maybeAncestor, tip string) bool {
+	for id := tip; id != ""; {
+		if id == maybeAncestor {
+			return true
+		}
+		c, ok := readGitCommit(d, base, id)
+		if !ok {
+			return false
+		}
+		id = c.Parent
+	}
+	return false
+}
+
+var gitBranchRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+func gitCheckBranch(name string) error {
+	if !gitBranchRe.MatchString(name) || name == "HEAD" {
+		return fmt.Errorf("fatal: invalid branch name %q", name)
+	}
+	return nil
 }
 
 func shortOrEmpty(s string) string {

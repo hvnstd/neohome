@@ -49,7 +49,7 @@ func cmdMutt(s *Shell, args []string) int {
 	if mailbox == "" {
 		mailbox = core.MailboxPath(s.User.Name)
 	}
-	if strings.HasPrefix(mailbox, "imap://") {
+	if strings.HasPrefix(mailbox, "imap://") || strings.HasPrefix(mailbox, "imaps://") {
 		return muttIMAP(s, mailbox, msgno)
 	}
 	return muttMbox(s, mailbox, msgno)
@@ -60,7 +60,12 @@ func cmdMutt(s *Shell, args []string) int {
 // records. Both ends log the session, so reads and failed logins are
 // evidence, exactly like an ssh session.
 func muttIMAP(s *Shell, mailbox string, msgno int) int {
+	tls := false
+	if strings.HasPrefix(mailbox, "imaps://") {
+		tls = true
+	}
 	rest := strings.TrimPrefix(mailbox, "imap://")
+	rest = strings.TrimPrefix(rest, "imaps://")
 	folder := "INBOX"
 	if i := strings.Index(rest, "/"); i >= 0 {
 		folder = rest[i+1:]
@@ -77,6 +82,9 @@ func muttIMAP(s *Shell, mailbox string, msgno int) int {
 		}
 	}
 	port := 143
+	if tls {
+		port = 993
+	}
 	host := hostport
 	if i := strings.Index(hostport, ":"); i >= 0 {
 		host = hostport[:i]
@@ -109,6 +117,15 @@ func muttIMAP(s *Shell, mailbox string, msgno int) int {
 	if svc == nil {
 		s.errf("mutt: connect to %s (%s): %s", host, ip, msg)
 		return 1
+	}
+	if tls {
+		// implicit TLS, the way port 993 works: the handshake runs before
+		// any IMAP byte, against the client's own trust store — a name
+		// mismatch or an untrusted issuer fails here, not at login
+		if _, _, err := s.W.Handshake(s.Dev, host, svc); err != nil {
+			s.errf("mutt: %s", err)
+			return 1
+		}
 	}
 	msgs, err := s.W.IMAPSelect(dst, user, pass)
 	if err != nil {

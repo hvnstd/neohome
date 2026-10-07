@@ -103,6 +103,75 @@ func seedBBS(w *World) {
 	for _, th := range threads {
 		w.BBSPost(th.board, th.from, th.subject, th.body, stamp)
 	}
+	// one letter waiting in alex's box: private mail is how the market
+	// board's "mail me here" actually works
+	_ = w.BBSMail("daemon42", "alex", "re: your resolver questions",
+		"saw your threads. if the gateway still SERVFAILs after the blip, read the resolv-file line first —\nwritten from experience.\nand if you ever need a password tried without burning your own address, the bazaar probes for a fee.", stamp)
+}
+
+// BBSMail drops a private letter into a user's mailbox: files under
+// /srv/bbs/mail/<to>/, readable only by their owner (0600) — the board is
+// open, the mailbox is not. Anyone may send (same ethos as posting); only
+// the addressee's session lists them, though root on the box sees all,
+// exactly like an mbox.
+func (w *World) BBSMail(from, to, subject, body, stamp string) error {
+	d := w.BBSDevice()
+	if d == nil {
+		return fmt.Errorf("bbs: no board host in this world")
+	}
+	if strings.TrimSpace(to) == "" || strings.TrimSpace(subject) == "" {
+		return fmt.Errorf("bmail: needs a To and a Subject")
+	}
+	if stamp == "" {
+		stamp = w.Sim.Format("2006-01-02 15:04")
+	}
+	dir := bbsRoot + "/mail/" + to
+	n := 1
+	for _, name := range d.FS.List(dir) {
+		var k int
+		if _, err := fmt.Sscanf(path.Base(name), "%03d.txt", &k); err == nil && k >= n {
+			n = k + 1
+		}
+	}
+	d.FS.MkdirAll(dir, 0700, to, to)
+	content := fmt.Sprintf("From: %s\nDate: %s\nSubject: %s\n\n%s\n", from, stamp, subject, strings.TrimRight(body, "\n"))
+	d.FS.Write(fmt.Sprintf("%s/%03d.txt", dir, n), content, 0600, to, to)
+	d.Logf("info", "bbsd", "mail for %s from %s: %s", to, from, subject)
+	return nil
+}
+
+// BBSInbox lists the mailbox of user: number, date, from, subject — parsed
+// from the files, so deleting one deletes the mail and root on the box can
+// read everything, exactly like the board itself.
+func (w *World) BBSInbox(user string) []BBSPost {
+	var out []BBSPost
+	d := w.BBSDevice()
+	if d == nil {
+		return out
+	}
+	names := d.FS.List(bbsRoot + "/mail/" + user)
+	sort.Strings(names)
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".txt") {
+			continue
+		}
+		data, ok := d.FS.Read(name)
+		if !ok {
+			continue
+		}
+		out = append(out, parseBBSPost("mail", name, string(data)))
+	}
+	return out
+}
+
+// BBSMailRead returns one letter by number, or false when there is none.
+func (w *World) BBSMailRead(user string, num int) (BBSPost, bool) {
+	for _, p := range w.BBSInbox(user) {
+		if p.Num == num {
+			return p, true
+		}
+	}
+	return BBSPost{}, false
 }
 
 // BBSPost writes one post as a real file on the BBS host and leaves the same

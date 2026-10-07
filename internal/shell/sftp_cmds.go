@@ -177,39 +177,142 @@ func cmdSftp(s *Shell, args []string) int {
 			}
 		case "get":
 			if len(fields) < 2 {
-				fmt.Fprintf(s.Out, "usage: get <remote> [local]\n")
+				fmt.Fprintf(s.Out, "usage: get [-r] <remote> [local]\n")
 				continue
 			}
-			remote := core.SFTPCleanPath(cwd, fields[1])
-			local := s.CWD + "/" + path.Base(remote)
-			if len(fields) > 2 {
-				local = s.abs(fields[2])
+			rest := fields[1:]
+			recursive := false
+			if len(rest) > 0 && rest[0] == "-r" {
+				recursive, rest = true, rest[1:]
 			}
-			if err := s.W.SFTPGet(s.Dev, s.User, dst, ru, remote, local); err != nil {
+			if len(rest) < 1 {
+				fmt.Fprintf(s.Out, "usage: get [-r] <remote> [local]\n")
+				continue
+			}
+			remote := core.SFTPCleanPath(cwd, rest[0])
+			local := s.CWD + "/" + path.Base(remote)
+			if len(rest) > 1 {
+				local = s.abs(rest[1])
+			}
+			if !recursive {
+				if err := s.W.SFTPGet(s.Dev, s.User, dst, ru, remote, local); err != nil {
+					fmt.Fprintf(s.Out, "%s\n", err)
+					continue
+				}
+				fmt.Fprintf(s.Out, "Fetched %s -> %s\n", remote, local)
+				continue
+			}
+			n, b, err := s.sftpGetTree(dst, ru, remote, local)
+			if err != nil {
 				fmt.Fprintf(s.Out, "%s\n", err)
 				continue
 			}
-			fmt.Fprintf(s.Out, "Fetched %s -> %s\n", remote, local)
+			fmt.Fprintf(s.Out, "Fetched %d file(s), %d bytes\n", n, b)
 		case "put":
 			if len(fields) < 2 {
-				fmt.Fprintf(s.Out, "usage: put <local> [remote]\n")
+				fmt.Fprintf(s.Out, "usage: put [-r] <local> [remote]\n")
 				continue
 			}
-			local := s.abs(fields[1])
-			remote := cwd + "/" + path.Base(local)
-			if len(fields) > 2 {
-				remote = core.SFTPCleanPath(cwd, fields[2])
+			rest := fields[1:]
+			recursive := false
+			if len(rest) > 0 && rest[0] == "-r" {
+				recursive, rest = true, rest[1:]
 			}
-			if err := s.W.SFTPPut(s.Dev, s.User, dst, ru, local, remote); err != nil {
+			if len(rest) < 1 {
+				fmt.Fprintf(s.Out, "usage: put [-r] <local> [remote]\n")
+				continue
+			}
+			local := s.abs(rest[0])
+			remote := cwd + "/" + path.Base(local)
+			if len(rest) > 1 {
+				remote = core.SFTPCleanPath(cwd, rest[1])
+			}
+			if !recursive {
+				if err := s.W.SFTPPut(s.Dev, s.User, dst, ru, local, remote); err != nil {
+					fmt.Fprintf(s.Out, "%s\n", err)
+					continue
+				}
+				fmt.Fprintf(s.Out, "Stored %s -> %s\n", local, remote)
+				continue
+			}
+			n, b, err := s.sftpPutTree(dst, ru, local, remote)
+			if err != nil {
 				fmt.Fprintf(s.Out, "%s\n", err)
 				continue
 			}
-			fmt.Fprintf(s.Out, "Stored %s -> %s\n", local, remote)
+			fmt.Fprintf(s.Out, "Stored %d file(s), %d bytes\n", n, b)
 		default:
 			fmt.Fprintf(s.Out, "? Invalid command\n")
 		}
 	}
 	return 0
+}
+
+// sftpGetTree fetches a remote tree: directories are created locally, files
+// come through the same single-file gate (same permission checks, same
+// evidence). A lone file behaves exactly like a plain get.
+func (s *Shell) sftpGetTree(dst *core.Device, ru *core.User, remote, local string) (int, int, error) {
+	remote = path.Clean(remote)
+	entries, err := s.W.SFTPList(dst, ru, remote)
+	if err != nil {
+		if err := s.W.SFTPGet(s.Dev, s.User, dst, ru, remote, local); err != nil {
+			return 0, 0, err
+		}
+		if data, ok := s.Dev.FS.Read(local); ok {
+			return 1, len(data), nil
+		}
+		return 1, 0, nil
+	}
+	if err := s.Dev.FS.MkdirAllChecked(local, 0755, s.User); err != nil {
+		return 0, 0, fmt.Errorf("%s: %v", local, err)
+	}
+	n, b := 0, 0
+	for _, e := range entries {
+		cn, cb, err := s.sftpGetTree(dst, ru, remote+"/"+e.Name, local+"/"+e.Name)
+		if err != nil {
+			return n, b, err
+		}
+		n += cn
+		b += cb
+	}
+	return n, b, nil
+}
+
+// sftpPutTree stores a local tree on the remote: directories are created
+// through SFTPMkdir, files through SFTPPut. An unreadable local directory
+// fails fast instead of silently skipping its contents.
+func (s *Shell) sftpPutTree(dst *core.Device, ru *core.User, local, remote string) (int, int, error) {
+	local = path.Clean(local)
+	if !s.Dev.FS.IsDir(local) {
+		if err := s.W.SFTPPut(s.Dev, s.User, dst, ru, local, remote); err != nil {
+			return 0, 0, err
+		}
+		if data, ok := s.Dev.FS.Read(local); ok {
+			return 1, len(data), nil
+		}
+		return 1, 0, nil
+	}
+	if !s.Dev.FS.CanRead(local, s.User) {
+		return 0, 0, fmt.Errorf("%s: permission denied", local)
+	}
+	if err := s.W.SFTPMkdir(dst, ru, remote); err != nil {
+		// the directory may already exist from an earlier run: only a real
+		// refusal stops the transfer
+		if !dst.FS.IsDir(remote) {
+			return 0, 0, err
+		}
+	}
+	n, b := 0, 0
+	for _, p := range s.Dev.FS.List(local) {
+		name := path.Base(p)
+		cn, cb, err := s.sftpPutTree(dst, ru, p, remote+"/"+name)
+		if err != nil {
+			return n, b, err
+		}
+		n += cn
+		b += cb
+	}
+	return n, b, nil
 }
 
 // cmdScp copies between two filesystems: local-to-local stays cp, one

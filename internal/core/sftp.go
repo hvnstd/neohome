@@ -88,6 +88,20 @@ func (w *World) SFTPPut(src *Device, lu *User, dst *Device, ru *User, localPath,
 	return nil
 }
 
+// SFTPMkdir creates a directory on the remote as the remote account: the
+// primitive recursive transfers build on, with the same permission checks
+// as every other write.
+func (w *World) SFTPMkdir(dst *Device, ru *User, dir string) error {
+	if dst == nil || ru == nil {
+		return fmt.Errorf("no session")
+	}
+	if err := dst.FS.MkdirAllChecked(dir, 0755, ru); err != nil {
+		return fmt.Errorf("%s: %v", dir, err)
+	}
+	dst.Logf("info", "sshd", "sftp: %s created directory %s", ru.Name, dir)
+	return nil
+}
+
 // SFTPCleanPath resolves a remote path the way the sftp client does:
 // absolute paths stand, relative ones hang off the session's remote CWD.
 func SFTPCleanPath(cwd, p string) string {

@@ -192,3 +192,62 @@ func TestSFTPGatedByServiceState(t *testing.T) {
 		t.Fatalf("sftp did not come back with sshd:\n%s", out)
 	}
 }
+
+// Recursive transfers walk real trees on both ends: directories are created,
+// files go through the same single-file gates, and a refusal stops the walk
+// with what already landed left in place.
+func TestSFTPRecursivePutAndGet(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	nas := w.Devices["nas-alex"]
+
+	// a local tree with a nested directory
+	pc.FS.MkdirAll("/home/alex/project/src", 0755, "alex", "alex")
+	pc.FS.Write("/home/alex/project/README", "project\n", 0644, "alex", "alex")
+	pc.FS.Write("/home/alex/project/src/main.sh", "echo hi\n", 0644, "alex", "alex")
+
+	out := sftpExec(t, w, pc, "alex", "sftp alex@nas",
+		"alex123",
+		"put -r /home/alex/project /home/alex/uploaded",
+		"quit",
+	)
+	if !strings.Contains(out, "Stored 2 file(s)") {
+		t.Fatalf("recursive put should move the tree, got:\n%s", out)
+	}
+	for _, p := range []string{"/home/alex/uploaded/README", "/home/alex/uploaded/src/main.sh"} {
+		data, ok := nas.FS.Read(p)
+		if !ok || len(data) == 0 {
+			t.Fatalf("%s did not land on the NAS", p)
+		}
+	}
+	// and back down under a new local name
+	out = sftpExec(t, w, pc, "alex", "sftp alex@nas",
+		"alex123",
+		"get -r /home/alex/uploaded /home/alex/back",
+		"quit",
+	)
+	if !strings.Contains(out, "Fetched 2 file(s)") {
+		t.Fatalf("recursive get should move the tree, got:\n%s", out)
+	}
+	if _, ok := pc.FS.Read("/home/alex/back/src/main.sh"); !ok {
+		t.Fatal("the nested file did not come back down")
+	}
+	// a lone file through -r behaves like a plain transfer
+	out = sftpExec(t, w, pc, "alex", "sftp alex@nas",
+		"alex123",
+		"get -r /srv/data/photos/vacation.txt /home/alex/single.txt",
+		"quit",
+	)
+	if !strings.Contains(out, "Fetched 1 file(s)") {
+		t.Fatalf("a lone file through -r must work, got:\n%s", out)
+	}
+	// a missing source fails cleanly instead of creating an empty shell
+	out = sftpExec(t, w, pc, "alex", "sftp alex@nas",
+		"alex123",
+		"get -r /srv/data/nope /home/alex/nope",
+		"quit",
+	)
+	if !strings.Contains(out, "no such file") {
+		t.Fatalf("a missing source must fail honestly, got:\n%s", out)
+	}
+}

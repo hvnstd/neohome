@@ -152,3 +152,40 @@ func TestMuttLocalMbox(t *testing.T) {
 		t.Fatalf("reading root's nonexistent mailbox must be honest about it:\n%s", out)
 	}
 }
+
+// IMAPS: the same mailbox over implicit TLS on 993. The handshake runs
+// against the client's own trust store before any IMAP byte — a name
+// mismatch fails there, not at login.
+func TestIMAPSOverTLS(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	nas := w.Devices["nas-alex"]
+
+	if svc := pc.Svc("imaps"); svc == nil || svc.Port != 993 || svc.State != "running" {
+		t.Fatalf("imaps is not a real service on the mail host: %+v", svc)
+	}
+	if err := w.DeliverLocal(pc, "world@neohome", "alex", "tls test", "secret body"); err != nil {
+		t.Fatalf("seed delivery failed: %v", err)
+	}
+	sh := func(line string) string { return run(t, w, nas, "alex", line) }
+
+	// by hostname: the certificate names home-pc, so this verifies
+	out := sh("mutt -f imaps://alex:alex123@home-pc/INBOX")
+	if !strings.Contains(out, "1 messages in INBOX") {
+		t.Fatalf("TLS INBOX did not open:\n%s", out)
+	}
+	if !strings.Contains(out, "tls test") {
+		t.Fatalf("the subject is missing:\n%s", out)
+	}
+	// by IP: the name does not match the certificate, and the handshake —
+	// not the login — is what refuses
+	out = sh("mutt -f imaps://alex:alex123@" + pc.FirstLANIP() + "/INBOX")
+	if !strings.Contains(strings.ToLower(out), "subject name") && !strings.Contains(out, "handshake") {
+		t.Fatalf("an IP connection must fail the name check, got:\n%s", out)
+	}
+	// stopping the daemon closes the port like any other service
+	pc.StopService("imaps")
+	if out := sh("mutt -f imaps://alex:alex123@home-pc/INBOX"); !strings.Contains(out, "connect") {
+		t.Fatalf("a stopped imaps must refuse connections, got:\n%s", out)
+	}
+}

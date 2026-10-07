@@ -202,3 +202,44 @@ func TestBBSPersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("post numbering restarted after load: %+v err=%v", p, err)
 	}
 }
+
+// Private mail: anyone may send, only the addressee's session lists it.
+// The letters are 0600 files on the board host — root sees all, like mbox.
+func TestBBSMailIsPrivate(t *testing.T) {
+	w := core.NewWorld()
+	repairDNS(t, w)
+	pc := w.Devices["pc-alex"]
+	sh := func(line string) string { return run(t, w, pc, "alex", line) }
+
+	// the seeded letter from daemon42 is waiting in alex's box
+	if out := sh("bbs inbox"); !strings.Contains(out, "daemon42") {
+		t.Fatalf("the seeded letter should be listed:\n%s", out)
+	}
+	if out := sh("bbs readmail 1"); !strings.Contains(out, "resolv-file") {
+		t.Fatalf("the letter body should read:\n%s", out)
+	}
+	// another account's session sees none of it
+	npc := w.Devices["npc-pc"]
+	if out := run(t, w, npc, "mara", "bbs inbox"); strings.Contains(out, "daemon42") {
+		t.Fatalf("another user must not see alex's mail:\n%s", out)
+	}
+	// send one back over the same body convention as posting
+	out := runWithStdin(t, w, pc, "alex", "bbs mail daemon42 thanks", "noted", ".")
+	if !strings.Contains(out, "letter to daemon42") {
+		t.Fatalf("sending failed:\n%s", out)
+	}
+	// the letter is a root-readable file with the right mode and owner
+	bbs := w.Devices["bbs"]
+	n, ok := bbs.FS.Get("/srv/bbs/mail/daemon42/001.txt")
+	if !ok || n.Mode.Perm()&0077 != 0 {
+		t.Fatalf("letters must be 0600 files: %+v", n)
+	}
+	data, _ := bbs.FS.Read("/srv/bbs/mail/daemon42/001.txt")
+	if !strings.Contains(string(data), "noted") || !strings.Contains(string(data), "From: alex") {
+		t.Fatalf("the letter content is wrong:\n%s", string(data))
+	}
+	// bad numbers are refused, not invented
+	if out := sh("bbs readmail 9"); !strings.Contains(out, "no such letter") {
+		t.Fatalf("a missing letter must be refused, got:\n%s", out)
+	}
+}

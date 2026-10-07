@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 6:四小件 | this commit | sftp -r 双向树、bbs mail/inbox、私信0600、git 分支+FF合并、imaps:993 证书握手 | §"缺口 6" |
 | 缺口 1:身份+家 | this commit | useradd/userdel/usermod/groupadd/groups/chpasswd + /etc/group + GID 规则 + Household 一等实体 | §"缺口 1" |
 | P2 剩余:多人/组织/PvP | this commit | Citizens with vouched PCs and bank transfers, orgs with treasuries and escrowed trophy contracts, async PvP proven across two citizens | §"P2 剩余" |
 | 复杂任务框架 (Phase 2 + §44) | this commit | Staged missions: ordered Verify predicates with per-stage pay, Requires gates, assistant stage cycles through the same payStage, J-108/J-109 seeded | §"复杂任务框架" |
@@ -2265,3 +2266,62 @@ house 继承；成员随邀请进出；创始人 seed；老存档 load 时按 pl
 
 `gofmt -l` 空、`go vet ./...` 干净、`go test ./... -count=1` 绿
 （297 pass，0 fail）。无 live 脚本：未碰入口与网络。
+
+# 缺口 6:四个小件（BBS 私信 / git 分支 / sftp -r / IMAPS）
+
+Four items the workstreams marked "no storyline needs it yet" — the stories
+arrived with PvP and crews, so here they are. Each is small, each reuses the
+gates its neighbours already pass through.
+
+## sftp -r
+
+`get -r`/`put -r` walk real trees on both ends through the existing
+single-file gates (`SFTPGet`/`SFTPPut` per file: same permission checks,
+same evidence). Directories are made with the new `SFTPMkdir` (checked
+writes, logged); a lone file through `-r` behaves like a plain transfer; a
+refusal stops the walk with what already landed left in place. Tested both
+directions plus the two failure shapes.
+
+## BBS 私信
+
+`bbs mail <user> <subject>` (same until-`.` body as posting) drops a 0600
+letter into `/srv/bbs/mail/<to>/`; `bbs inbox` lists and `bbs readmail N`
+reads the session user's own letters only. Anyone may send (the board's
+open ethos); root on the box reads all, like mbox. The market board's "mail
+me here" finally works — daemon42's seeded letter to alex waits in his box.
+
+## git 分支（FF 合并）
+
+Branches are ref files plus a symref HEAD: `git branch` (create/list/`-d`
+with merged-check/`-D`), `git checkout [-b]` (dirty tree refuses — no
+stash exists, so overwriting would lose work), `git merge` (fast-forward
+only; diverged pairs are refused by name instead of inventing a conflicted
+tree). `headOf` resolves symrefs with legacy bare ids passing through, so
+old clones, server repos and every existing caller keep working; fresh
+clones check out master. `git status`/`commit` print the real branch.
+True 3-way merges stay out (see below).
+
+## IMAPS :993
+
+The mail hosts bind a second socket each: `imaps` on 993 with a leaf cert
+for the LAN hostname, issued in seedTLS like every other TLS name.
+`mutt -f imaps://user@home-pc/INBOX` handshakes against the client's own
+trust store before any IMAP byte — an IP connection fails the name check
+at the handshake, not at login — and `openssl s_client -connect host:993`
+diagnoses it through the generic path. Stopping the daemon closes the port
+like any other service.
+
+## 测试与验证
+
+sftp 递归双向+失败形、BBS 私信隔离+0600、分支全流程（FF/脏树/删保护/坏
+名）+旧断言更新（`[main`→`[master]`，写死的分支名）、IMAPS 开箱+IP 名
+称拒绝+停服。`gofmt` 空、`vet` 干净、全量绿（303 pass，0 fail）。
+
+## Not implemented on purpose
+
+* **True 3-way merges**: commits are single-parent; a merge commit with two
+  parents plus content resolution is its own workstream. Diverged pairs tell
+  you to delete a side, which always exists as a way out.
+* **BBS accounts/passwords**: letters are addressed by shell identity, like
+  posts. A passworded BBS login would be a second account system for one
+  command's benefit.

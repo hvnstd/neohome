@@ -141,8 +141,12 @@ func NewWorld() *World {
 			Banner: "220 neohome ESMTP smtpd ready", Conf: "/etc/mail/smtpd.conf"}
 		// The reading half of the mail system (WS-0.6): a mailbox on this
 		// host is reachable from any other machine over IMAP, gated by the
-		// account's real credentials.
+		// account's real credentials — plaintext on 143, TLS on 993 (the
+		// certificate is issued in seedTLS; without it the port is decoration).
 		d.Services["imapd"] = &Service{Name: "imapd", Desc: "IMAP mailbox access", Port: 143, Proto: "tcp",
+			Scope: "lan", State: "running", Handler: "imapd",
+			Banner: "* OK IMAP4rev1 neohome imapd ready", Conf: "/etc/mail/imapd.conf"}
+		d.Services["imaps"] = &Service{Name: "imaps", Desc: "IMAP over TLS", Port: 993, Proto: "tcp",
 			Scope: "lan", State: "running", Handler: "imapd",
 			Banner: "* OK IMAP4rev1 neohome imapd ready", Conf: "/etc/mail/imapd.conf"}
 		d.FS.MkdirAll("/etc/mail", 0755, "root", "root")

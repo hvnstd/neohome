@@ -18,7 +18,7 @@ func init() {
 
 func cmdGit(s *Shell, args []string) int {
 	if len(args) == 0 {
-		s.errf("usage: git clone <url> [dir] | git status | git log | git commit -m <msg> | git pull | git push")
+		s.errf("usage: git clone <url> [dir] | git status | git log | git commit -m <msg> | git pull | git push | git branch [NAME] [-d|-D NAME] | git checkout [-b] <branch> | git merge <branch>")
 		return 1
 	}
 	switch args[0] {
@@ -34,8 +34,14 @@ func cmdGit(s *Shell, args []string) int {
 		return gitPull(s)
 	case "push":
 		return gitPush(s)
+	case "branch":
+		return gitBranchCmd(s, args[1:])
+	case "checkout":
+		return gitCheckoutCmd(s, args[1:])
+	case "merge":
+		return gitMergeCmd(s, args[1:])
 	}
-	s.errf("git: '%s' is not a git command (clone, status, log, commit, pull, push)", args[0])
+	s.errf("git: '%s' is not a git command (clone, status, log, commit, pull, push, branch, checkout, merge)", args[0])
 	return 1
 }
 
@@ -72,7 +78,8 @@ func gitStatus(s *Shell) int {
 		s.errf("%v", err)
 		return 1
 	}
-	fmt.Fprintln(s.Out, "On branch main")
+	branch := core.HeadBranchOf(s.Dev, s.CWD)
+	fmt.Fprintf(s.Out, "On branch %s\n", branch)
 	if len(deltas) == 0 {
 		fmt.Fprintln(s.Out, "nothing to commit, working tree clean")
 		return 0
@@ -116,6 +123,105 @@ func gitLogCmd(s *Shell) int {
 	return 0
 }
 
+func gitBranchCmd(s *Shell, args []string) int {
+	// forms: git branch | git branch NAME | git branch -d NAME | git branch -D NAME
+	del := ""
+	f := false
+	var rest []string
+	for _, a := range args {
+		switch a {
+		case "-d", "--delete":
+			del = "safe"
+		case "-D":
+			del = "force"
+			f = true
+		case "-v", "--verbose", "-a", "--all", "-l", "--list":
+			// list view is the default with no name; flags accepted, ignored
+		default:
+			if strings.HasPrefix(a, "-") {
+				s.errf("git branch: unknown option '%s'", a)
+				return 1
+			}
+			rest = append(rest, a)
+		}
+	}
+	switch {
+	case del != "" && len(rest) == 1:
+		if err := s.W.GitDeleteBranch(s.Dev, s.CWD, rest[0], f, s.User); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "Deleted branch %s.\n", rest[0])
+		return 0
+	case del == "" && len(rest) == 1:
+		if err := s.W.GitBranchCreate(s.Dev, s.CWD, rest[0], s.User); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "Created branch %s.\n", rest[0])
+		return 0
+	case len(rest) == 0:
+		branches := core.GitBranches(s.Dev, s.CWD)
+		if len(branches) == 0 {
+			fmt.Fprintln(s.Out, "(no branches yet — create one with: git branch <name>)")
+			return 0
+		}
+		for _, b := range branches {
+			mark := " "
+			if b.Current {
+				mark = "*"
+			}
+			tip := b.Tip
+			if len(tip) > 8 {
+				tip = tip[:8]
+			}
+			fmt.Fprintf(s.Out, "%s %s  %s\n", mark, b.Name, tip)
+		}
+		return 0
+	}
+	s.errf("usage: git branch [NAME] [-d|-D NAME]")
+	return 1
+}
+
+func gitCheckoutCmd(s *Shell, args []string) int {
+	if len(args) == 0 {
+		s.errf("usage: git checkout [-b] <branch>")
+		return 1
+	}
+	name := args[0]
+	if args[0] == "-b" {
+		if len(args) < 2 {
+			s.errf("usage: git checkout -b <branch>")
+			return 1
+		}
+		name = args[1]
+		if err := s.W.GitBranchCreate(s.Dev, s.CWD, name, s.User); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+	}
+	if err := s.W.GitCheckoutBranch(s.Dev, s.CWD, name, s.User); err != nil {
+		s.errf("%v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "Switched to branch '%s'.\n", name)
+	return 0
+}
+
+func gitMergeCmd(s *Shell, args []string) int {
+	if len(args) != 1 {
+		s.errf("usage: git merge <branch>")
+		return 1
+	}
+	res, err := s.W.GitMerge(s.Dev, s.CWD, args[0], s.User)
+	if err != nil {
+		s.errf("%v", err)
+		return 1
+	}
+	fmt.Fprintln(s.Out, res)
+	return 0
+}
+
 func gitCommit(s *Shell, args []string) int {
 	msg := ""
 	for i, a := range args {
@@ -132,7 +238,7 @@ func gitCommit(s *Shell, args []string) int {
 		s.errf("%v", err)
 		return 1
 	}
-	fmt.Fprintf(s.Out, "[main %s] %s\n", c.ID[:8], c.Message)
+	fmt.Fprintf(s.Out, "[%s %s] %s\n", core.HeadBranchOf(s.Dev, s.CWD), c.ID[:8], c.Message)
 	return 0
 }
 
