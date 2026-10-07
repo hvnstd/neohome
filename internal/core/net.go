@@ -433,6 +433,11 @@ func Reach(src *Device, dstIP string) (string, bool) {
 	if up, why := src.W.linkUpVia(dst, !toLAN); !up {
 		return "Destination Host Unreachable (link down: " + why + ")", false
 	}
+	// BGP RIB, same as dial(): withdrawn public space is unreachable with
+	// the session's name on it
+	if ok, why := bgpReachable(src.W, dstIP); !ok {
+		return why, false
+	}
 
 	sameLAN := src.onLink(dstIP)
 	if !sameLAN && !IsV6(dstIP) {
@@ -600,6 +605,13 @@ func dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 		return nil, nil, "No route to host"
 	}
 	dst := src.W.Devices[dstID]
+
+	// BGP RIB: a withdrawn public prefix is no route at all, before power,
+	// firewall or anything else gets a vote. Private space never consults
+	// the RIB — it was never announced.
+	if ok, why := bgpReachable(src.W, dstIP); !ok {
+		return nil, dst, why
+	}
 
 	// Power is the first gate: a dark machine cannot open a socket, and a dark
 	// target cannot accept one.

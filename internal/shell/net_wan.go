@@ -125,7 +125,14 @@ func cmdBgp(s *Shell, args []string) int {
 		return 1
 	}
 	if len(args) > 0 {
-		return bgpOne(s, args[0])
+		switch args[0] {
+		case "summary", "neighbors", "neighbours":
+			return bgpSummary(s)
+		case "routes", "route", "rib":
+			return bgpRoutes(s, args[1:])
+		default:
+			return bgpOne(s, args[0])
+		}
 	}
 	asns := make([]int, 0, len(wan.ASes))
 	for n := range wan.ASes {
@@ -175,6 +182,61 @@ func bgpOne(s *Shell, arg string) int {
 	fmt.Fprintf(s.Out, "  announcing:\n")
 	for _, p := range as.Prefixes {
 		fmt.Fprintf(s.Out, "    %s\n", p)
+	}
+	return 0
+}
+
+// bgpSummary is the operator's looking glass: every session of the transit
+// router with its state and reason. Derived live — stopping bird or losing
+// an AS flips this output with no other write.
+func bgpSummary(s *Shell) int {
+	if s.W.WAN == nil {
+		s.errf("bgp: no transit information")
+		return 1
+	}
+	sess := core.BGPSessions(s.W)
+	fmt.Fprintf(s.Out, "BGP sessions on core-gw (bird)\n")
+	fmt.Fprintf(s.Out, "%-9s %-12s %-20s %s\n", "NEIGHBOR", "STATE", "PREFIXES", "WHY")
+	for _, b := range sess {
+		fmt.Fprintf(s.Out, "AS%-7d %-12s %-20d %s\n", b.PeerASN, b.State, b.Prefixes, b.Why)
+	}
+	return 0
+}
+
+// bgpRoutes prints the RIB: originated prefixes and whether the sessions
+// currently carry them. A withdrawn prefix is listed as such — the table
+// shows the outage, it does not hide it.
+func bgpRoutes(s *Shell, args []string) int {
+	if s.W.WAN == nil {
+		s.errf("bgp: no transit information")
+		return 1
+	}
+	filter := ""
+	if len(args) > 0 {
+		filter = args[0]
+	}
+	type row struct {
+		prefix string
+		origin int
+		up     bool
+	}
+	var rows []row
+	for _, as := range s.W.WAN.ASes {
+		for _, p := range as.Prefixes {
+			if filter != "" && !strings.Contains(p, filter) {
+				continue
+			}
+			rows = append(rows, row{p, as.ASN, core.BGPSessionUp(s.W, as.ASN)})
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].prefix < rows[j].prefix })
+	fmt.Fprintf(s.Out, "%-20s %-9s %s\n", "PREFIX", "ORIGIN", "STATE")
+	for _, r := range rows {
+		st := fmt.Sprintf("via AS%d", r.origin)
+		if !r.up {
+			st = "WITHDRAWN"
+		}
+		fmt.Fprintf(s.Out, "%-20s AS%-7d %s\n", r.prefix, r.origin, st)
 	}
 	return 0
 }

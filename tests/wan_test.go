@@ -231,3 +231,139 @@ func TestSSHWithoutInteractiveInputDoesNotCrash(t *testing.T) {
 		t.Fatalf("ssh without an input stream must not panic:\n%s", out)
 	}
 }
+
+// BGP sessions are derived state: bird running + neighbor configured + peer
+// SYNCED (BEHIND counts as up). The summary shows every session with its
+// reason, and the RIB carries every originated prefix.
+func TestBGPSessionsAndRIB(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+
+	out := run(t, w, pc, "alex", "bgp summary")
+	if !strings.Contains(out, "Established") {
+		t.Fatalf("sessions should be established:\n%s", out)
+	}
+	if !strings.Contains(out, "AS64520") {
+		t.Fatalf("NovaPanel session missing:\n%s", out)
+	}
+	out = run(t, w, pc, "alex", "bgp routes")
+	if !strings.Contains(out, "WITHDRAWN") && !strings.Contains(out, "via AS") {
+		t.Fatalf("RIB should list prefix states:\n%s", out)
+	}
+	if strings.Contains(out, "WITHDRAWN") {
+		t.Fatalf("a healthy world withdraws nothing:\n%s", out)
+	}
+}
+
+// Stopping bird drops every session: peer prefixes withdraw and the data
+// plane refuses with the session named — a blackhole with a paper trail.
+// (Core-originated space stays: connected routes need no BGP to be true.)
+func TestBirdDownWithdrawsPublicSpace(t *testing.T) {
+	w := core.NewWorld()
+	repairDNS(t, w)
+	pc := w.Devices["pc-alex"]
+	vps, _, err := w.ProvisionVPS("alex", "small-2", "edge1")
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	pub := vps.FirstWANIP()
+	if _, _, msg := core.Dial(pc, pub, 22); msg != "connected" {
+		t.Fatalf("setup: vps should be reachable, got %s", msg)
+	}
+	gw := w.Devices["core-gw"]
+	gw.StopService("bird")
+	if out := run(t, w, pc, "alex", "bgp summary"); !strings.Contains(out, "Idle") {
+		t.Fatalf("sessions must idle without bird:\n%s", out)
+	}
+	if _, _, msg := core.Dial(pc, pub, 22); !strings.Contains(msg, "withdrawn") {
+		t.Fatalf("withdrawn space must refuse with cause, got %s", msg)
+	}
+	if out := run(t, w, pc, "alex", "ping "+pub); !strings.Contains(out, "withdrawn") {
+		t.Fatalf("ping must name the withdrawal, got:\n%s", out)
+	}
+	if out := run(t, w, pc, "alex", "bgp routes"); !strings.Contains(out, "WITHDRAWN") {
+		t.Fatalf("RIB must show the outage:\n%s", out)
+	}
+	// core-originated space needs no session: the mirror never noticed
+	mirrorIP := w.Devices["mirror"].Ifaces[1].IP
+	if _, _, msg := core.Dial(pc, mirrorIP, 80); msg != "connected" {
+		t.Fatalf("directly attached space must survive, got %s", msg)
+	}
+	// recovery is the daemon, nothing else
+	gw.StartService("bird")
+	if _, _, msg := core.Dial(pc, pub, 22); msg != "connected" {
+		t.Fatalf("restarting bird must restore routes, got %s", msg)
+	}
+}
+
+// One AS going OFFLINE withdraws only its own prefixes: the rest of the
+// internet stays up, which is what makes this a scalpel and not an outage.
+func TestPeerOfflineWithdrawsItsPrefixes(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	vps, _, err := w.ProvisionVPS("alex", "small-2", "edge1")
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	vpsIP := vps.FirstWANIP()
+	mirrorIP := w.Devices["mirror"].Ifaces[1].IP
+	if _, _, msg := core.Dial(pc, vpsIP, 22); msg != "connected" {
+		t.Fatalf("setup: vps should be reachable, got %s", msg)
+	}
+	w.WAN.ASes[64520].Status = "OFFLINE"
+	if _, _, msg := core.Dial(pc, vpsIP, 22); !strings.Contains(msg, "AS64520") {
+		t.Fatalf("the dead AS must be named, got %s", msg)
+	}
+	if _, _, msg := core.Dial(pc, mirrorIP, 80); msg != "connected" {
+		t.Fatalf("other ASes must stay reachable, got %s", msg)
+	}
+	if out := run(t, w, pc, "alex", "bgp summary"); !strings.Contains(out, "AS64520 is OFFLINE") {
+		t.Fatalf("the summary must say why:\n%s", out)
+	}
+	w.WAN.ASes[64520].Status = "SYNCED"
+	if _, _, msg := core.Dial(pc, vpsIP, 22); msg != "connected" {
+		t.Fatalf("recovery must restore the AS, got %s", msg)
+	}
+}
+
+// A neighbor deleted from bird.conf never establishes: configuration is a
+// gate, not commentary.
+func TestUnconfiguredNeighborNeverEstablishes(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	gw := w.Devices["core-gw"]
+	data, _ := gw.FS.Read("/etc/bird.conf")
+	kept := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "64520 ") && strings.Contains(line, "neighbor") {
+			continue
+		}
+		kept += line + "\n"
+	}
+	gw.FS.Write("/etc/bird.conf", kept, 0644, "root", "root")
+
+	if out := run(t, w, pc, "alex", "bgp summary"); strings.Contains(out, "AS64520 ") {
+		t.Fatalf("an unconfigured neighbor must not be listed:\n%s", out)
+	}
+	vps, _, err := w.ProvisionVPS("alex", "small-2", "edge1")
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if _, _, msg := core.Dial(pc, vps.FirstWANIP(), 22); !strings.Contains(msg, "withdrawn") {
+		t.Fatalf("unannounced space must not route, got %s", msg)
+	}
+}
+
+// Traceroute prints the AS map alongside the devices.
+func TestTracerouteShowsAutonomousSystems(t *testing.T) {
+	w := core.NewWorld()
+	_, _, err := w.ProvisionVPS("alex", "nano-1", "edge1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := w.Devices["pc-alex"]
+	out := run(t, w, pc, "alex", "traceroute "+w.Devices["vps-edge1"].FirstWANIP())
+	if !strings.Contains(out, "[AS") {
+		t.Fatalf("hops must carry their AS:\n%s", out)
+	}
+}

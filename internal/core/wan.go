@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 )
@@ -124,6 +125,25 @@ func seedWAN(w *World) {
 
 	// The devices that physically carry public traffic.
 	wan.Transit["core-gw"] = true
+
+	// The daemon that speaks BGP on the transit router: sessions to every
+	// peer AS, each gated by this file (a neighbor removed here never
+	// establishes) and by the daemon running at all.
+	if gw := w.Devices["core-gw"]; gw != nil {
+		var b strings.Builder
+		b.WriteString("# bird on core-gw: one session per peer AS\nrouter id 10.0.0.1;\n")
+		for _, asn := range []int{asNetCrest, asNova, asNovaUS, asNovaAP, asPeer, asGov} {
+			name := ""
+			if as := wan.ASes[asn]; as != nil {
+				name = as.Name
+			}
+			fmt.Fprintf(&b, "neighbor %d { remote-as %d; description %q; }\n", asn, asn, name)
+		}
+		gw.FS.MkdirAll("/etc", 0755, "root", "root")
+		gw.FS.Write("/etc/bird.conf", b.String(), 0644, "root", "root")
+		gw.Services["bird"] = &Service{Name: "bird", Desc: "BGP daemon", Port: 179, Proto: "tcp",
+			Scope: "any", State: "running", Handler: "bgp", Banner: "BIRD 2.15"}
+	}
 
 	// Announce the /24 each public block belongs to. Allocation already placed
 	// every device inside the /24 of the AS that operates it, so ownership here
@@ -369,6 +389,7 @@ type Hop struct {
 	IP      string
 	Device  string // hostname, or "" for a pure network hop
 	Latency float64
+	ASN     int // the AS announcing this hop's address, 0 when unknown
 }
 
 // Trace builds the real path src -> dst. It only ever names devices that exist.
@@ -383,6 +404,11 @@ func (w *World) Trace(src *Device, dstIP string) ([]Hop, bool) {
 		h := Hop{IP: ip, Latency: acc}
 		if d != nil {
 			h.Device = d.Hostname
+		}
+		// the AS that announces the hop's address rides along: traceroute
+		// prints the map, not just the milestones
+		if as := w.WAN.ASFor(ip); as != nil {
+			h.ASN = as.ASN
 		}
 		hops = append(hops, h)
 	}
@@ -410,6 +436,7 @@ func (w *World) Trace(src *Device, dstIP string) ([]Hop, bool) {
 					IP:      as.edgeIP(dstIP),
 					Device:  as.Name,
 					Latency: acc,
+					ASN:     as.ASN,
 				})
 			}
 		}

@@ -380,11 +380,15 @@ func cmdTraceroute(s *Shell, args []string) int {
 	}
 	fmt.Fprintf(s.Out, "traceroute to %s (%s), 30 hops max\n", args[0], ip)
 	for i, h := range hops {
+		as := ""
+		if h.ASN != 0 {
+			as = fmt.Sprintf(" [AS%d]", h.ASN)
+		}
 		if h.Device != "" {
-			fmt.Fprintf(s.Out, "%2d  %-15s (%s)  %.3f ms\n", i+1, h.Device, h.IP, h.Latency)
+			fmt.Fprintf(s.Out, "%2d  %-15s (%s)%s  %.3f ms\n", i+1, h.Device, h.IP, as, h.Latency)
 			continue
 		}
-		fmt.Fprintf(s.Out, "%2d  %-15s (%s)  %.3f ms\n", i+1, "*", h.IP, h.Latency)
+		fmt.Fprintf(s.Out, "%2d  %-15s (%s)%s  %.3f ms\n", i+1, "*", h.IP, as, h.Latency)
 	}
 	return 0
 }
