@@ -18,6 +18,7 @@ func init() {
 	builtinTable["vmstat"] = cmdVmstat
 	builtinTable["smartctl"] = cmdSmartctl
 	builtinTable["fsck"] = cmdFsck
+	builtinTable["quota"] = cmdQuota
 }
 
 // ---- stress ----------------------------------------------------------------
@@ -577,4 +578,150 @@ func countFiles(d *core.Device) (files, dirs int) {
 		}
 	}
 	return files, dirs
+}
+
+// quota manages compute allocation across the household's machines: the same
+// Quota mechanism `assist quota` sets on the assistant node, generalized to
+// any owned device, plus one table showing the whole household. Caps are
+// enforced where the consequences live (share, swap, OOM) on every capped
+// box, not just the assistant's.
+func cmdQuota(s *Shell, args []string) int {
+	if len(args) > 0 && (args[0] == "list" || args[0] == "ls") {
+		return quotaList(s)
+	}
+	target := s.Dev
+	rest := args
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") && args[0] != "clear" {
+		d := s.W.Devices[args[0]]
+		if d == nil {
+			for _, id := range s.W.Order {
+				if dd := s.W.Devices[id]; dd.Hostname == args[0] {
+					d = dd
+				}
+			}
+		}
+		if d == nil {
+			s.errf("quota: no device called %s", args[0])
+			return 1
+		}
+		target = d
+		rest = args[1:]
+	}
+	if len(rest) == 0 {
+		quotaShow(s, target)
+		return 0
+	}
+	if len(rest) >= 1 && rest[0] == "clear" {
+		if len(rest) != 1 && len(rest) != 2 {
+			s.errf("usage: quota [HOST] [--cpu N] [--mem MB] | quota clear [HOST] | quota list")
+			return 1
+		}
+		if len(rest) == 2 {
+			d := s.W.Devices[rest[1]]
+			if d == nil {
+				for _, id := range s.W.Order {
+					if dd := s.W.Devices[id]; dd.Hostname == rest[1] {
+						d = dd
+					}
+				}
+			}
+			if d == nil {
+				s.errf("quota: no device called %s", rest[1])
+				return 1
+			}
+			target = d
+		}
+		if !quotaAuthority(s, target) {
+			return 1
+		}
+		target.Quota = nil
+		target.Logf("info", "quota", "cap cleared by %s", s.User.Name)
+		fmt.Fprintf(s.Out, "quota cleared on %s — full hardware again\n", target.Hostname)
+		return 0
+	}
+	cores, mem := 0.0, 0
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--cpu":
+			if i+1 >= len(rest) {
+				s.errf("usage: quota [HOST] [--cpu N] [--mem MB] | quota clear [HOST] | quota list")
+				return 1
+			}
+			i++
+			if _, err := fmt.Sscanf(rest[i], "%f", &cores); err != nil || cores <= 0 {
+				s.errf("quota: bad --cpu %q", rest[i])
+				return 1
+			}
+		case "--mem":
+			if i+1 >= len(rest) {
+				s.errf("usage: quota [HOST] [--cpu N] [--mem MB] | quota clear [HOST] | quota list")
+				return 1
+			}
+			i++
+			if _, err := fmt.Sscanf(rest[i], "%d", &mem); err != nil || mem <= 0 {
+				s.errf("quota: bad --mem %q", rest[i])
+				return 1
+			}
+		default:
+			s.errf("usage: quota [HOST] [--cpu N] [--mem MB] | quota clear [HOST] | quota list")
+			return 1
+		}
+	}
+	if cores == 0 || mem == 0 {
+		s.errf("usage: quota [HOST] [--cpu N] [--mem MB] (both required)")
+		return 1
+	}
+	if !quotaAuthority(s, target) {
+		return 1
+	}
+	if err := target.SetQuota(cores, mem); err != nil {
+		s.errf("quota: %v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "%s capped at %.1f cores, %d MiB\n", target.Hostname, cores, mem)
+	return 0
+}
+
+// quotaAuthority answers whether the session may cap the target: its owner,
+// no one else. Quotas are policy over someone's machine.
+func quotaAuthority(s *Shell, target *core.Device) bool {
+	if target.Owner != s.User.Name {
+		s.errf("quota: only %s caps %s", target.Owner, target.Hostname)
+		return false
+	}
+	return true
+}
+
+func quotaShow(s *Shell, d *core.Device) {
+	if d.Quota == nil {
+		fmt.Fprintf(s.Out, "%s: uncapped (%d cores, %d MiB)\n", d.Hostname, d.HW.Cores, d.HW.RAMMB)
+		return
+	}
+	fmt.Fprintf(s.Out, "%s: %.1f cores, %d MiB of %d cores, %d MiB hardware\n",
+		d.Hostname, d.Quota.Cores, d.Quota.RAMMB, d.HW.Cores, d.HW.RAMMB)
+}
+
+func quotaList(s *Shell) int {
+	fmt.Fprintf(s.Out, "%-14s %-6s %-12s %-12s %s\n", "HOST", "OWNER", "CPU", "RAM", "LOAD")
+	shown := false
+	for _, id := range s.W.Order {
+		d := s.W.Devices[id]
+		if d == nil || (d.Owner != s.User.Name && s.User.UID != 0) {
+			continue
+		}
+		if d.Profile == "usb" {
+			continue
+		}
+		cpu, ram := fmt.Sprintf("%d", d.HW.Cores), fmt.Sprintf("%dM", d.HW.RAMMB)
+		if d.Quota != nil {
+			cpu, ram = fmt.Sprintf("%.1f/%.0f", d.Quota.Cores, float64(d.HW.Cores)), fmt.Sprintf("%d/%dM", d.Quota.RAMMB, d.HW.RAMMB)
+		}
+		r := d.Resources()
+		fmt.Fprintf(s.Out, "%-14s %-6s %-12s %-12s %.2f\n", d.Hostname, d.Owner, cpu, ram, r.Load1)
+		shown = true
+	}
+	if !shown {
+		fmt.Fprintln(s.Out, "(no machines)")
+	}
+	return 0
 }

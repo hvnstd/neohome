@@ -131,3 +131,40 @@ func TestQuotaSurvivesSave(t *testing.T) {
 		t.Fatalf("quota must survive the save: %+v", b.Quota)
 	}
 }
+
+func TestQuotaGeneralizedAcrossHousehold(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+
+	// cap the household PC itself: 1 core of 4, 1 GiB of 8
+	if out := run(t, w, pc, "alex", "quota home-pc --cpu 1 --mem 1024"); !strings.Contains(out, "capped at") {
+		t.Fatalf("set failed:\n%s", out)
+	}
+	// someone else's box is not yours to cap
+	run(t, w, pc, "alex", "player invite blake temp123")
+	blake := w.Devices["pc-blake"]
+	if out := run(t, w, blake, "blake", "quota home-pc --cpu 1 --mem 1024"); !strings.Contains(out, "only alex caps") {
+		t.Fatalf("foreign caps must be refused, got:\n%s", out)
+	}
+	// the household table shows caps and load side by side
+	if out := run(t, w, pc, "alex", "quota list"); !strings.Contains(out, "1.0/4") || !strings.Contains(out, "1024/8192M") {
+		t.Fatalf("list must show the cap:\n%s", out)
+	}
+	// enforcement is the same machinery: 1500 MiB on a 1024-capped box pages
+	// into its 512 swap and then kills
+	if out := run(t, w, pc, "root", "stress --vm 1 --vm-bytes 1500M --timeout 40"); !strings.Contains(out, "1500 MiB resident") {
+		t.Fatalf("setup: stress must start:\n%s", out)
+	}
+	w.Tick()
+	if pc.Resources().OOMCount == 0 {
+		t.Fatal("a capped box must OOM at its quota, not its hardware")
+	}
+	run(t, w, pc, "root", "pkill stress")
+	// clear by name from anywhere owned
+	if out := run(t, w, pc, "alex", "quota clear home-pc"); !strings.Contains(out, "cleared") {
+		t.Fatalf("clear failed:\n%s", out)
+	}
+	if pc.EffRAMMB() != pc.HW.RAMMB {
+		t.Fatal("clear must restore hardware")
+	}
+}

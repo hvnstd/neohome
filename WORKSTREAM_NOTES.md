@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| P3c:资源调度 | this commit | quota 动词全household化+全家算力表 | §"P3c" |
 | P3b:builders | this commit | server build 四角色+回滚、backup init 五步+重入认旧仓 | §"P3b" |
 | P3a:社区软件包 | this commit | pkg export/import+InstallCommunity+来源命名+风险双记 | §"P3a" |
 | 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
@@ -39,6 +40,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| P3c:资源调度 | this commit | quota 动词全household化+全家算力表 | §"P3c" |
 | P3b:builders | this commit | server build 四角色+回滚、backup init 五步+重入认旧仓 | §"P3b" |
 | P3a:社区软件包 | this commit | pkg export/import+InstallCommunity+来源命名+风险双记 | §"P3a" |
 | 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
@@ -2690,3 +2692,12 @@ backup 五步+重入认旧仓+坏 schedule 先拒。`gofmt` 空、`vet` 干净�
 * **Mirror Builder**：目录即单服务主机模型（Repo.DeviceID 一树一主），
   真多镜像要改 catalogue 结构——动静超出 builder 本批；operator 现有
   mirror-sync/status/cron 已够用，缺的是文档不是动词。
+
+# P3c:资源调度（quota 全 household 化）
+
+`assist quota` 的机制早就在所有设备上（`Device.Quota` + EffCores/
+EffRAMMB 进调度/swap/OOM/显示），缺的只是动词：`quota [HOST]
+[--cpu N] [--mem MB] | quota clear [HOST] | quota list`，owner 才许动
+自己的机器。`quota list` 是全家算力表（配额/硬件/负载并排），OOM 照配
+额杀、`free`/htop 照配额报——同一套 §17 规矩。`gofmt` 空、`vet` 干净、
+全量绿（357 pass，0 fail）。
