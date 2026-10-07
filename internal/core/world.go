@@ -423,6 +423,13 @@ type Job struct {
 	// Org names the organisation that posted this as a contract ("" for a
 	// regular job). A contract pays from its escrowed hold, never minted.
 	Org string
+	// Hold escrows a player-posted mission's pay: deducted from the funder
+	// at creation, released per completion, refunded on cancel. Org
+	// contracts track theirs on the org instead (see Org.Hold) — both
+	// conserved, neither minted.
+	Hold int64
+	// Funder is who escrowed the Hold (a player name, or org treasury acct).
+	Funder string
 	// Cancelled marks a contract pulled off the board unpaid: it reads
 	// "cancelled", never "paid", in every listing.
 	Cancelled bool

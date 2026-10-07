@@ -43,7 +43,12 @@ func (w *World) AssistantWork() {
 			st := j.Stages[j.StageIdx]
 			if w.assistantAct(a, st.Verify) {
 				if ok, _ := w.verifyStage(j); ok {
-					paid, msg := w.payStage(owner, j)
+					paid, msg, err := w.payStage(owner, j)
+					if err != nil {
+						t.Done = true
+						w.AddEvent(a.ID, "warn", "assistant", "assistant gave up on %s: %v", j.ID, err)
+						continue
+					}
 					a.Logf("info", "assistant", "job %s stage %s finished, invoiced $%.2f",
 						j.ID, st.Name, float64(paid)/100)
 					w.AddEvent(a.ID, "info", "assistant", "assistant finished %s stage %s", j.ID, st.Name)

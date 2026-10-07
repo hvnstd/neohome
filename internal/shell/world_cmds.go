@@ -154,9 +154,198 @@ func cmdJob(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "advanced: %s\n", why)
 		fmt.Fprintf(s.Out, "paid %s to your account\n", fmtMoney(paid))
 		return 0
+	case "new", "post", "create":
+		return jobNew(s, args[1:])
+	case "export":
+		if len(args) < 2 {
+			s.errf("usage: job export ID")
+			return 1
+		}
+		text, err := s.W.JobExport(args[1])
+		if err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprint(s.Out, text)
+		return 0
+	case "import":
+		return jobImport(s)
+	case "cancel":
+		if len(args) < 2 {
+			s.errf("usage: job cancel ID")
+			return 1
+		}
+		if err := s.W.JobCancel(s.User.Name, args[1]); err != nil {
+			s.errf("%v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "%s cancelled, escrow refunded\n", args[1])
+		return 0
 	}
-	s.errf("usage: job [list|show ID|accept ID|pay ID|advance ID|delegate ID]")
+	s.errf("usage: job [list|show ID|accept ID|pay ID|advance ID|delegate ID|new|export ID|import|cancel ID]")
 	return 1
+}
+
+// jobNew authors a mission from flags: escrowed by the author, verified by
+// the world's own predicates, importable by anyone. Stages repeat:
+// --stage NAME:VERIFY:PAY:HELP (colons inside HELP survive via SplitN).
+func jobNew(s *Shell, args []string) int {
+	var title, verify, target, help string
+	var pay int64
+	var requires []string
+	type stageFlag struct {
+		name, verify, help string
+		pay                int64
+	}
+	var stages []stageFlag
+	var solutions []string
+	var expected, evidence string
+	usage := "usage: job new --title T --pay $P --verify V [--target T] [--help H] [--require ID]... [--stage NAME:VERIFY:PAY:HELP]... [--solution S]... [--expected E] [--evidence E]"
+	dollars := func(v string) (int64, bool) {
+		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(v, ".00")))
+		if err != nil || n <= 0 {
+			return 0, false
+		}
+		return int64(n) * 100, true
+	}
+	for i := 0; i < len(args); i++ {
+		val := func() (string, bool) {
+			if i+1 >= len(args) {
+				return "", false
+			}
+			i++
+			return args[i], true
+		}
+		switch args[i] {
+		case "--title":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			title = v
+		case "--pay":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			p, ok := dollars(v)
+			if !ok {
+				s.errf("job: bad pay %q (whole dollars)", v)
+				return 1
+			}
+			pay = p
+		case "--verify":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			verify = v
+		case "--target":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			target = v
+		case "--help":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			help = v
+		case "--require":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			requires = append(requires, v)
+		case "--stage":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			parts := strings.SplitN(v, ":", 4)
+			if len(parts) != 4 {
+				s.errf("job: bad stage %q (want NAME:VERIFY:PAY:HELP)", v)
+				return 1
+			}
+			p, ok := dollars(parts[2])
+			if !ok {
+				s.errf("job: bad stage pay %q", parts[2])
+				return 1
+			}
+			stages = append(stages, stageFlag{strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[3]), p})
+		case "--solution":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			solutions = append(solutions, v)
+		case "--expected":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			expected = v
+		case "--evidence":
+			v, ok := val()
+			if !ok {
+				s.errf("%s", usage)
+				return 1
+			}
+			evidence = v
+		default:
+			s.errf("%s", usage)
+			return 1
+		}
+	}
+	var mstages []core.MissionStage
+	for _, st := range stages {
+		mstages = append(mstages, core.MissionStage{Name: st.name, Verify: st.verify, Pay: st.pay, Help: st.help})
+	}
+	j, err := s.W.JobNew(s.User.Name, title, pay, verify, target, help, requires, mstages, solutions, expected, evidence)
+	if err != nil {
+		s.errf("job: %v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "mission %s posted (%s escrowed) — anyone may accept it\n", j.ID, fmtMoney(pay))
+	return 0
+}
+
+// jobImport reads community-format text from stdin (end with a single '.',
+// like bbs post) and posts it funded by the importer.
+func jobImport(s *Shell) int {
+	if s.bufrd == nil {
+		s.errf("usage: job import < mission.txt (end body with '.')")
+		return 1
+	}
+	var lines []string
+	for {
+		l, err := s.bufrd.ReadString('\n')
+		if err != nil {
+			break
+		}
+		l = strings.TrimRight(l, "\r\n")
+		if l == "." {
+			break
+		}
+		lines = append(lines, l)
+	}
+	j, err := s.W.JobImport(s.User.Name, strings.Join(lines, "\n"))
+	if err != nil {
+		s.errf("job: %v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "mission %s imported and posted (%s escrowed)\n", j.ID, fmtMoney(j.Pay))
+	return 0
 }
 
 // ---- bank ----

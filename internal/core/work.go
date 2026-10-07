@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -265,6 +266,26 @@ func (w *World) PayJob(who, id string) (int64, string, error) {
 	if !ok {
 		return 0, why, fmt.Errorf("not done yet")
 	}
+	// Player-posted missions pay from their escrow: the funder's money moved
+	// at posting time, so this credit conserves the total instead of minting.
+	if j.Hold > 0 {
+		if j.Hold < j.Pay {
+			return 0, "", fmt.Errorf("mission %s hold is short", id)
+		}
+		j.Hold -= j.Pay
+		acc := w.Bank.Accts[who]
+		if acc == nil {
+			acc = &Account{Owner: who, Name: who, Balance: 0}
+			w.Bank.Accts[who] = acc
+		}
+		acc.Balance += j.Pay
+		acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: j.Pay, Memo: "mission " + j.ID + " escrow payout", Balance: acc.Balance})
+		j.Done = true
+		w.AddEvent("world", "info", "bank", "paid %s for %s from escrow: %d cents", who, j.ID, j.Pay)
+		w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s). balance %d.%02d",
+			j.Pay/100, j.Pay%100, j.ID, acc.Balance/100, acc.Balance%100))
+		return j.Pay, why, nil
+	}
 	// Contracts pay from their escrowed hold, never minted: the money left
 	// the treasury when the contract was posted, and arrives here.
 	if j.Org != "" {
@@ -332,8 +353,16 @@ func (w *World) verifyStage(j *Job) (bool, string) {
 // payStage moves the current stage's pay and advances. The last stage also
 // completes the job. Shared by the player's `job advance` and the
 // assistant's staged work, so both are paid by the same hand.
-func (w *World) payStage(who string, j *Job) (int64, string) {
+func (w *World) payStage(who string, j *Job) (int64, string, error) {
 	st := j.Stages[j.StageIdx]
+	if j.Hold > 0 {
+		// creation escrows exactly the stage sum, so a short hold means
+		// state corruption, not poverty — refuse rather than half-pay
+		if j.Hold < st.Pay {
+			return 0, "", fmt.Errorf("mission %s hold is short", j.ID)
+		}
+		j.Hold -= st.Pay
+	}
 	acc := w.Bank.Accts[who]
 	if acc == nil {
 		acc = &Account{Owner: who, Name: who, Balance: 0}
@@ -355,7 +384,7 @@ func (w *World) payStage(who string, j *Job) (int64, string) {
 	}
 	w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s %s). balance %d.%02d",
 		st.Pay/100, st.Pay%100, j.ID, st.Name, acc.Balance/100, acc.Balance%100))
-	return st.Pay, why
+	return st.Pay, why, nil
 }
 
 // AdvanceJob completes the job's current stage: verify against world state,
@@ -387,11 +416,222 @@ func (w *World) AdvanceJob(who, id string) (int64, string, error) {
 	if !ok {
 		return 0, why, fmt.Errorf("stage %s not done yet", j.Stages[j.StageIdx].Name)
 	}
-	paid, msg := w.payStage(who, j)
+	paid, msg, err := w.payStage(who, j)
+	if err != nil {
+		return 0, "", err
+	}
 	return paid, msg + ": " + why, nil
 }
 
-// TaskAssistant queues a job for the assistant to work on its own node.
+// ---- player-authored missions: new, import, export, cancel ----
+
+// KnownVerifiers lists every verifier a mission may name: the ten world
+// predicates plus trophy bounties (validated structurally, not enumerated).
+func KnownVerifiers() []string {
+	return []string{"dns-fix", "pkg-busybox", "web-up", "ssh-up", "abuse-report",
+		"abuse-triage", "meridian-share", "law-intake", "law-warrant", "clean"}
+}
+
+// CheckVerify refuses unknown verifiers at authoring time, so a posted
+// mission can always be completed in principle — never a dead promise.
+func (w *World) CheckVerify(v string) error {
+	for _, k := range KnownVerifiers() {
+		if v == k {
+			return nil
+		}
+	}
+	if f := strings.Fields(v); len(f) == 3 && f[0] == "trophy" {
+		if w.marketFindDevice(f[1]) == nil {
+			return fmt.Errorf("unknown trophy target %q", f[1])
+		}
+		if !strings.HasPrefix(f[2], "/") {
+			return fmt.Errorf("trophy path must be absolute")
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown verifier %q", v)
+}
+
+// JobNew posts a player-authored mission, escrowing the full pay from the
+// author up front: whoever completes it collects money that already moved,
+// which is why a broke author cannot post. Returns the new job.
+func (w *World) JobNew(by, title string, pay int64, verify, target, help string, requires []string, stages []MissionStage, solutions []string, expected, evidence string) (*Job, error) {
+	if strings.TrimSpace(title) == "" {
+		return nil, fmt.Errorf("a mission needs a title")
+	}
+	if pay <= 0 {
+		return nil, fmt.Errorf("pay must be positive")
+	}
+	if len(stages) > 0 {
+		var sum int64
+		for _, st := range stages {
+			if strings.TrimSpace(st.Name) == "" {
+				return nil, fmt.Errorf("every stage needs a name")
+			}
+			if err := w.CheckVerify(st.Verify); err != nil {
+				return nil, fmt.Errorf("stage %s: %v", st.Name, err)
+			}
+			if st.Pay <= 0 {
+				return nil, fmt.Errorf("stage %s needs positive pay", st.Name)
+			}
+			sum += st.Pay
+		}
+		if sum != pay {
+			return nil, fmt.Errorf("stage pays total %d, want %d", sum, pay)
+		}
+	} else if err := w.CheckVerify(verify); err != nil {
+		return nil, err
+	}
+	for _, req := range requires {
+		if r := w.Job(req); r == nil {
+			return nil, fmt.Errorf("no such prerequisite job: %s", req)
+		}
+	}
+	acc := w.Bank.Accts[by]
+	if acc == nil || acc.Balance < pay {
+		return nil, fmt.Errorf("%s cannot escrow %d cents", by, pay)
+	}
+	id := w.nextContractID()
+	acc.Balance -= pay
+	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: -pay, Memo: "escrow mission " + id, Balance: acc.Balance})
+	j := &Job{ID: id, Title: title, Client: by, Pay: pay, Tier: 1, Help: help,
+		Verify: verify, Target: target, Requires: requires, Stages: stages,
+		Solutions: solutions, Expected: expected, Evidence: evidence,
+		Hold: pay, Funder: by}
+	w.Jobs.List = append(w.Jobs.List, j)
+	w.AddEvent("world", "info", "jobs", "%s posted mission %s (%d cents escrowed)", by, id, pay)
+	return j, nil
+}
+
+// JobCancel pulls an unaccepted player mission off the board and refunds the
+// escrow to its funder. Only the funder may cancel; taken work is protected.
+func (w *World) JobCancel(by, id string) error {
+	j := w.Job(id)
+	if j == nil {
+		return fmt.Errorf("no such job: %s", id)
+	}
+	if j.Hold <= 0 || j.Funder == "" {
+		return fmt.Errorf("job %s is not a player mission (seeded and org work cancel differently)", id)
+	}
+	if j.Funder != by {
+		return fmt.Errorf("only %s can cancel %s", j.Funder, id)
+	}
+	if j.Accepted != "" {
+		return fmt.Errorf("%s is taken by %s", id, j.Accepted)
+	}
+	if acc := w.Bank.Accts[j.Funder]; acc != nil {
+		acc.Balance += j.Hold
+		acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: j.Hold, Memo: "refund mission " + id, Balance: acc.Balance})
+	}
+	j.Hold = 0
+	j.Done = true
+	j.Cancelled = true
+	w.AddEvent("world", "info", "jobs", "%s cancelled mission %s (escrow refunded)", by, id)
+	return nil
+}
+
+// JobExport renders a mission as shareable text: the community format.
+// Secrets never travel in it — verifiers name checks, never credentials.
+func (w *World) JobExport(id string) (string, error) {
+	j := w.Job(id)
+	if j == nil {
+		return "", fmt.Errorf("no such job: %s", id)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "mission: %s\n", j.Title)
+	fmt.Fprintf(&b, "pay: %d\n", j.Pay/100)
+	fmt.Fprintf(&b, "verify: %s\n", j.Verify)
+	fmt.Fprintf(&b, "target: %s\n", j.Target)
+	for _, r := range j.Requires {
+		fmt.Fprintf(&b, "requires: %s\n", r)
+	}
+	fmt.Fprintf(&b, "help: %s\n", j.Help)
+	for _, st := range j.Stages {
+		fmt.Fprintf(&b, "stage: %s | %s | %d | %s\n", st.Name, st.Verify, st.Pay/100, st.Help)
+	}
+	for _, s := range j.Solutions {
+		fmt.Fprintf(&b, "solution: %s\n", s)
+	}
+	if j.Expected != "" {
+		fmt.Fprintf(&b, "expected: %s\n", j.Expected)
+	}
+	if j.Evidence != "" {
+		fmt.Fprintf(&b, "evidence: %s\n", j.Evidence)
+	}
+	return b.String(), nil
+}
+
+// JobImport parses community-format text into a new mission funded by the
+// importer: same validation as authoring, a fresh ID, their escrow.
+func (w *World) JobImport(by, text string) (*Job, error) {
+	var title, verify, target, help, expected, evidence string
+	var pay int64
+	var requires, solutions []string
+	type stageLine struct {
+		name, verify, help string
+		pay                int64
+	}
+	var stages []stageLine
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil, fmt.Errorf("bad mission line %q (want key: value)", line)
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		intDollars := func() (int64, error) {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				return 0, fmt.Errorf("bad pay %q (whole dollars)", v)
+			}
+			return int64(n) * 100, nil
+		}
+		switch strings.ToLower(k) {
+		case "mission", "title":
+			title = v
+		case "pay":
+			p, err := intDollars()
+			if err != nil {
+				return nil, err
+			}
+			pay = p
+		case "verify":
+			verify = v
+		case "target":
+			target = v
+		case "requires":
+			requires = append(requires, v)
+		case "help":
+			help = v
+		case "stage":
+			parts := strings.SplitN(v, "|", 4)
+			if len(parts) != 4 {
+				return nil, fmt.Errorf("bad stage %q (want name | verify | pay | help)", v)
+			}
+			p, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+			if err != nil || p <= 0 {
+				return nil, fmt.Errorf("bad stage pay %q", parts[2])
+			}
+			stages = append(stages, stageLine{strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[3]), int64(p) * 100})
+		case "solution":
+			solutions = append(solutions, v)
+		case "expected":
+			expected = v
+		case "evidence":
+			evidence = v
+		default:
+			return nil, fmt.Errorf("unknown mission key %q", k)
+		}
+	}
+	var mstages []MissionStage
+	for _, s := range stages {
+		mstages = append(mstages, MissionStage{Name: s.name, Verify: s.verify, Pay: s.pay, Help: s.help})
+	}
+	return w.JobNew(by, title, pay, verify, target, help, requires, mstages, solutions, expected, evidence)
+}
 func (w *World) TaskAssistant(jobID string) error {
 	p := w.PlayerForName(whoOwns(w, jobID))
 	if p == nil {

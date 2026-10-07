@@ -31,10 +31,12 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
 | 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
 | 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
@@ -2579,3 +2581,29 @@ redirect 路径一致。注：挂载写仍不查远端满盘（redirect 同病�
 五个：三无（无口无由无扫描）+黑拒+单命令也得先通电；通电/console
 root/证据/syslog/断网读写/断电存数；pc→stick→vault 完整摆渡；blake 被
 拒；过存档（电量/数据/无口）。`gofmt` 空、`vet` 干净、全量绿（343 pass，0 fail）。
+
+# 缺口 8a:任务编撰（§44 社区格式）
+
+Mission 模板有了结构，缺的是人人可写的笔：`job new` 发任务（押金现
+结）、`job export/import` 传文本、`job cancel` 退款。托管代替印钞——
+发布扣、兑现放、取消退，总额分毫不差。
+
+## 模型
+
+* `Job.Hold/Funder`：发布即从作者账上扣足（没钱发不出），单发兑现从
+  hold 出、清零；分段每段扣一段（创建时校验段和=总额，短了是状态腐
+  坏，直接拒付）。org 单走 `Org.Hold` 老路（测试锁死，不并）。
+* 验证器注册表：十个谓词白名单+trophy 三段式（目标须存在、路径须绝
+  对），发时全验——死约发不出来。前置须有其任务。
+* 社区格式：`mission:/pay:/verify:/stage: 名|验|$|help` 等行文本，
+  严格解析（坏行/坏钱/坏验/未知键全拒，半条不进）；导入换新号、导入人
+  出押金。密钥永不进文本（验的是检查名，不是口令）。
+* Shell：`job new --title --pay --verify [--target] [--help]
+  [--require]... [--stage]...`，`export` 打印，`import` 读 stdin（`.`
+  收尾同 bbs），`cancel` 限作者未接单。`job show` 早会打模板。
+
+## 测试与验证
+
+三个：押金不足/坏验拒绝→押足建单→总额守恒→兑现放款（hold 清零）；
+取消退款+已读 cancelled+已接保护；导出带段→导入换号带押→坏文本两
+拒零入库。`gofmt` 空、`vet` 干净、全量绿（346 pass，0 fail）。
