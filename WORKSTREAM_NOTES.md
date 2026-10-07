@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 4:密钥+配额 | this commit | 公钥文件匹配+ssh-keygen+种子钥匙去重、Assistant Quota 进调度/swap/OOM/显示、suid 不适用结论 | §"缺口 4" |
 | 缺口 6:四小件 | this commit | sftp -r 双向树、bbs mail/inbox、私信0600、git 分支+FF合并、imaps:993 证书握手 | §"缺口 6" |
 | 缺口 1:身份+家 | this commit | useradd/userdel/usermod/groupadd/groups/chpasswd + /etc/group + GID 规则 + Household 一等实体 | §"缺口 1" |
 | P2 剩余:多人/组织/PvP | this commit | Citizens with vouched PCs and bank transfers, orgs with treasuries and escrowed trophy contracts, async PvP proven across two citizens | §"P2 剩余" |
@@ -2325,3 +2326,39 @@ sftp 递归双向+失败形、BBS 私信隔离+0600、分支全流程（FF/脏�
 * **BBS accounts/passwords**: letters are addressed by shell identity, like
   posts. A passworded BBS login would be a second account system for one
   command's benefit.
+
+# 缺口 4:密钥登录 + Assistant 配额（§24/§30）
+
+## 公钥认证
+
+ssh/sftp 原来是“口令优先，assistant 例外走拓扑”：`AssistantKeyTrusted`
+根本不读钥匙文件，种子里的 authorized_keys 只是装饰。本批把它做成真
+的：`KeyTrusted(src, srcUser, dst, dstUser)` 读连接方 `~/.ssh/*.pub`、读
+目标方 authorized_keys，只有 key body 逐字相等才算数；客户端公钥优先、
+口令回退、assistant 拓扑保底（顺序如此，行为兼容）。
+
+修了一个真 bug：种子公钥全身同一个常量——每台机器钥匙相同，assistant
+等于信任全世界（抓包测试：mcp-agent 的机器也被放行）。现在 `sshKeyBody`
+按设备 id 确定派生，`pc-alex` 的 body 才进 assistant 的 authorized_keys；
+`ssh-keygen` 用 PID 计数器保证唯一。`id_ed25519(.pub)` 0600/0644、已存在
+拒绝、`-N` 明确拒绝（不做半吊子加密）。
+
+附带结论：suid 不适用——chmod 的 04000 位根本落不到 Go FileMode 上，
+且本世界没有用户态 exec 语义（builtin 按会话用户执行），setuid 挂不
+住任何东西；`passwd` 的 setuid-like 是显式特例，保持现状即诚实。
+
+## Assistant 配额
+
+`Device.Quota{Cores, RAMMB}`（nil=不限）：`EffCores/EffRAMMB` 进
+`CPUCapacity`、`memoryTick`、`SwapTotalMB`——配额内 swap/OOM/CPU 分享全
+按配额数走；`free` 报有效值+quota 行，`htop` 标 `[quota]`（显示与后果
+同一状态，resources 测试锁的规矩）；`fastfetch` 保持硬件清单（那是资
+产不是政策）。`assist quota [--cpu N] [--mem MB]` 限 node 主人从任何地
+方下（政策不是本地文件），超硬件/过小拒绝，`clear` 恢复。gob 三件套齐。
+
+## 测试与验证
+
+keys 三个（免密+文件为证+keygen 全链，含 sftp 首行不被口令吞）；
+quota 四个（512 配额 700M 照 OOM 不误、share 0.25、校验与陌生人、
+过存档）；顺带旧 `TestAssistantNodeIsReachableByKeyOnly` 一字未改全过
+（拓扑保底+陌生机器继续拒绝）。`gofmt` 空、`vet` 干净、全量绿（310 pass，0 fail）。

@@ -17,6 +17,7 @@ func init() {
 		{"su", cmdSu}, {"sudo", cmdSudo}, {"passwd", cmdPasswd},
 		{"useradd", cmdUseradd}, {"userdel", cmdUserdel}, {"usermod", cmdUsermod},
 		{"groupadd", cmdGroupadd}, {"groups", cmdGroups}, {"chpasswd", cmdChpasswd},
+		{"ssh-keygen", cmdKeygen},
 		{"fastfetch", cmdFastfetch}, {"neofetch", cmdFastfetch},
 		{"who", cmdWho}, {"w", cmdWho}, {"clear", cmdClear}, {"history", cmdHistory},
 		{"exit", cmdExit}, {"logout", cmdExit},
@@ -341,6 +342,94 @@ func cmdChpasswd(s *Shell, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// ssh-keygen grows a keypair for the session account: the private half stays
+// 0600 in ~/.ssh, the public half is printed for distribution — which the
+// player does by hand (append it to the far account's authorized_keys),
+// exactly like reality. Passphrases are refused rather than half-kept, and
+// the key id comes from the world's PID counter, so two keypairs never
+// collide the way two processes never share a PID.
+func cmdKeygen(s *Shell, args []string) int {
+	alg, file, comment := "ed25519", "", ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-t":
+			if i+1 >= len(args) {
+				s.errf("usage: ssh-keygen [-t ed25519] [-f PATH] [-C comment]")
+				return 1
+			}
+			i++
+			alg = args[i]
+		case "-f":
+			if i+1 >= len(args) {
+				s.errf("usage: ssh-keygen [-t ed25519] [-f PATH] [-C comment]")
+				return 1
+			}
+			i++
+			file = args[i]
+		case "-C":
+			if i+1 >= len(args) {
+				s.errf("usage: ssh-keygen [-t ed25519] [-f PATH] [-C comment]")
+				return 1
+			}
+			i++
+			comment = args[i]
+		case "-N":
+			s.errf("ssh-keygen: passphrases are not implemented (keys here are unencrypted files)")
+			return 1
+		default:
+			s.errf("usage: ssh-keygen [-t ed25519] [-f PATH] [-C comment]")
+			return 1
+		}
+	}
+	if alg != "ed25519" {
+		s.errf("ssh-keygen: only ed25519 here (got %s)", alg)
+		return 1
+	}
+	if file == "" {
+		file = s.User.Home + "/.ssh/id_ed25519"
+	} else {
+		file = s.abs(file)
+	}
+	if comment == "" {
+		comment = s.User.Name + "@" + s.Dev.Hostname
+	}
+	pub := file + ".pub"
+	if s.Dev.FS.Exists(file) || s.Dev.FS.Exists(pub) {
+		s.errf("ssh-keygen: %s already exists (remove it or pick -f elsewhere)", file)
+		return 1
+	}
+	keyid := fmt.Sprintf("%d", s.W.NewPID())
+	if err := s.Dev.FS.MkdirAllChecked(sshDirOf(file), 0700, s.User); err != nil {
+		s.errf("ssh-keygen: %v", err)
+		return 1
+	}
+	priv := "-----BEGIN OPENSSH PRIVATE KEY-----\nkey-" + keyid + "-private-not-a-real-key\n-----END OPENSSH PRIVATE KEY-----\n"
+	if err := s.Dev.WriteGuest(file, []byte(priv), s.User); err != nil {
+		s.errf("ssh-keygen: %v", err)
+		return 1
+	}
+	// owner-only, always: a private key readable by the room is not private
+	if n, ok := s.Dev.FS.Get(file); ok {
+		n.Mode = 0600
+		n.Owner = s.User.Name
+	}
+	if err := s.Dev.WriteGuest(pub, []byte("ssh-ed25519 AAAA"+keyid+" "+comment+"\n"), s.User); err != nil {
+		s.errf("ssh-keygen: %v", err)
+		return 1
+	}
+	s.Dev.Logf("info", "ssh-keygen", "%s generated %s", s.User.Name, file)
+	fmt.Fprintf(s.Out, "Generating public/private ed25519 key pair.\n")
+	fmt.Fprintf(s.Out, "Your public key has been saved in %s.\n", pub)
+	return 0
+}
+
+func sshDirOf(p string) string {
+	if i := strings.LastIndex(p, "/"); i > 0 {
+		return p[:i]
+	}
+	return "."
 }
 
 // passwd changes an account's password for real: the account record and

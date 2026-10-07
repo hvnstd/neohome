@@ -208,16 +208,56 @@ func (d *Device) Resources() *Rsrc {
 
 func (d *Device) rsrc() *Rsrc { return d.Resources() }
 
+// Quota caps what a machine may use: fewer cores and less RAM than its
+// hardware carries. Both bounds are enforced where the consequences live
+// (CPUCapacity, memoryTick, SwapTotalMB), never as a display filter.
+type Quota struct {
+	Cores float64
+	RAMMB int
+}
+
+// EffCores is the CPU the scheduler divides: the quota when capped.
+func (d *Device) EffCores() float64 {
+	if d.Quota != nil && d.Quota.Cores > 0 && d.Quota.Cores < float64(d.HW.Cores) {
+		return d.Quota.Cores
+	}
+	return float64(d.HW.Cores)
+}
+
+// EffRAMMB is the memory the kernel accounts against: the quota when capped.
+func (d *Device) EffRAMMB() int {
+	if d.Quota != nil && d.Quota.RAMMB > 0 && d.Quota.RAMMB < d.HW.RAMMB {
+		return d.Quota.RAMMB
+	}
+	return d.HW.RAMMB
+}
+
+// SetQuota installs a cap: both bounds must fit inside the hardware, because
+// allocating what does not exist is a lie the scheduler would have to keep.
+func (d *Device) SetQuota(cores float64, ramMB int) error {
+	if cores < 0.5 || ramMB < 128 {
+		return fmt.Errorf("quota too small (min 0.5 cores, 128 MiB)")
+	}
+	if cores > float64(d.HW.Cores) || ramMB > d.HW.RAMMB {
+		return fmt.Errorf("quota exceeds hardware (%d cores, %d MiB)",
+			d.HW.Cores, d.HW.RAMMB)
+	}
+	d.Quota = &Quota{Cores: cores, RAMMB: ramMB}
+	d.Logf("info", "quota", "capped at %.1f cores, %d MiB RAM", cores, ramMB)
+	return nil
+}
+
 // ---- CPU --------------------------------------------------------------------
 
 // CPUCapacity is what the machine can execute at once, in the same unit the
-// process table uses: one core is 100.
+// process table uses: one core is 100. A quota narrows it — the share every
+// process gets is divided from what is allocated, not what is installed.
 func (d *Device) CPUCapacity() float64 {
-	c := d.HW.Cores
-	if c < 1 {
+	c := d.EffCores()
+	if c < 0.5 {
 		c = 1
 	}
-	return float64(c) * 100
+	return c * 100
 }
 
 // CPUDemand is the CPU the process table is asking for. A process that has not
@@ -264,8 +304,9 @@ func (d *Device) CPULoad() float64 {
 // ---- memory -----------------------------------------------------------------
 
 // SwapTotalMB is this machine's swap: half its RAM, which is the same rule the
-// `free` output has always used, now the one owner of that fact.
-func (d *Device) SwapTotalMB() int { return d.HW.RAMMB / 2 }
+// `free` output has always used, now the one owner of that fact. Quota RAM,
+// not hardware RAM — swap is sized to what the kernel may use.
+func (d *Device) SwapTotalMB() int { return d.EffRAMMB() / 2 }
 
 // ---- disk -------------------------------------------------------------------
 
@@ -463,7 +504,7 @@ func (d *Device) reapLoad() {
 // difference is only who owns the limit — here it is the machine itself.
 func (d *Device) memoryTick() {
 	r := d.rsrc()
-	ram := d.HW.RAMMB
+	ram := d.EffRAMMB()
 	if ram <= 0 {
 		return
 	}
@@ -534,7 +575,7 @@ func (d *Device) oomKill(excess, swapMax int) {
 				svc.State = "failed"
 				svc.PID = 0
 				d.Logf("err", "kernel", "service %s failed — out of memory (%d MiB RAM, %d MiB swap)",
-					svc.Name, d.HW.RAMMB, swapMax)
+					svc.Name, d.EffRAMMB(), swapMax)
 			}
 		}
 		d.W.AddEvent(d.ID, "err", "kernel", "%s is out of memory: every service failed", d.Hostname)

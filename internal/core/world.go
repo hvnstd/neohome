@@ -192,6 +192,12 @@ type Device struct {
 	// is derived from the real state instead of stored here.
 	Rsrc *Rsrc
 
+	// Quota is an operator-set resource cap (§24): nil means uncapped. While
+	// set, the machine schedules, swaps and OOMs against the quota instead
+	// of its hardware — the same numbers `free` reports, so the display and
+	// the consequence stay one state.
+	Quota *Quota
+
 	// Security is §33's defensive state: the connection attempts this machine
 	// really saw, the authentication failures it recorded, the bans it has
 	// issued (which Dial/Reach enforce), the alerts its detectors raised and
@@ -629,6 +635,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		Printer                      *PrinterState
 		BackupIndex                  int
 		Rsrc                         *Rsrc
+		Quota                        *Quota
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -650,7 +657,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		NetUp: d.NetUp, MainsDropped: d.MainsDropped, UPS: d.UPS, BootSet: d.BootSet,
 		Switch: d.Switch, Uplink: d.Uplink, UplinkPort: d.UplinkPort,
 		PoEPowered: d.PoEPowered, PoeUp: d.PoeUp, Battery: d.Battery, Printer: d.Printer,
-		BackupIndex: d.BackupIndex, Rsrc: d.Rsrc,
+		BackupIndex: d.BackupIndex, Rsrc: d.Rsrc, Quota: d.Quota,
 		Dmesg: d.Dmesg, DHCPL: d.DHCPL, Notes: d.Notes,
 		Purposes: d.Purposes, Installed: d.Installed, InstalledFrom: d.InstalledFrom,
 		Mounts: d.Mounts, Sessions: d.Sessions,
@@ -689,6 +696,7 @@ func (d *Device) GobDecode(b []byte) error {
 		Printer                      *PrinterState
 		BackupIndex                  int
 		Rsrc                         *Rsrc
+		Quota                        *Quota
 		MeterKWh                     float64
 		BillDue                      int64
 		Dmesg                        []string
@@ -732,6 +740,7 @@ func (d *Device) GobDecode(b []byte) error {
 	d.PoEPowered, d.PoeUp = shadow.PoEPowered, shadow.PoeUp
 	d.Battery, d.Printer, d.BackupIndex = shadow.Battery, shadow.Printer, shadow.BackupIndex
 	d.Rsrc = shadow.Rsrc
+	d.Quota = shadow.Quota
 	return nil
 }
 

@@ -343,9 +343,82 @@ func cmdAssist(s *Shell, args []string) int {
 		}
 		fmt.Fprintf(s.Out, "assistant learned %s: %s\n", args[1], desc)
 		return 0
+	case "quota":
+		return assistQuota(s, args[1:])
 	}
-	s.errf("usage: assist [status|guide|tasks|train TRACK]")
+	s.errf("usage: assist [status|guide|tasks|train TRACK|quota [--cpu N] [--mem MB]|quota clear]")
 	return 1
+}
+
+// assistQuota caps the assistant node's compute: fewer cores and less RAM
+// than its hardware carries, enforced where the consequences live (share,
+// swap, OOM) and reported where the operator looks (free, htop). Only the
+// node's owner may set it, from anywhere — it is policy, not a local file.
+func assistQuota(s *Shell, args []string) int {
+	node := s.W.AssistantNodeFor(s.W.Players[s.User.Name])
+	if node == nil {
+		s.errf("assist: no assistant node for %s", s.User.Name)
+		return 1
+	}
+	if node.Owner != s.User.Name {
+		s.errf("assist: only %s sets this node's quota", node.Owner)
+		return 1
+	}
+	if len(args) == 0 {
+		if node.Quota == nil {
+			fmt.Fprintf(s.Out, "assistant node %s: uncapped (%d cores, %d MiB)\n",
+				node.Hostname, node.HW.Cores, node.HW.RAMMB)
+			return 0
+		}
+		fmt.Fprintf(s.Out, "assistant node %s: %.1f cores, %d MiB of %d cores, %d MiB hardware\n",
+			node.Hostname, node.Quota.Cores, node.Quota.RAMMB, node.HW.Cores, node.HW.RAMMB)
+		return 0
+	}
+	if len(args) == 1 && args[0] == "clear" {
+		node.Quota = nil
+		node.Logf("info", "quota", "cap cleared by %s", s.User.Name)
+		fmt.Fprintf(s.Out, "quota cleared — full hardware again\n")
+		return 0
+	}
+	cores, mem := 0.0, 0
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--cpu":
+			if i+1 >= len(args) {
+				s.errf("usage: assist quota [--cpu N] [--mem MB]")
+				return 1
+			}
+			i++
+			if _, err := fmt.Sscanf(args[i], "%f", &cores); err != nil || cores <= 0 {
+				s.errf("assist: bad --cpu %q", args[i])
+				return 1
+			}
+		case "--mem":
+			if i+1 >= len(args) {
+				s.errf("usage: assist quota [--cpu N] [--mem MB]")
+				return 1
+			}
+			i++
+			if _, err := fmt.Sscanf(args[i], "%d", &mem); err != nil || mem <= 0 {
+				s.errf("assist: bad --mem %q", args[i])
+				return 1
+			}
+		default:
+			s.errf("usage: assist quota [--cpu N] [--mem MB]")
+			return 1
+		}
+	}
+	if cores == 0 || mem == 0 {
+		s.errf("usage: assist quota [--cpu N] [--mem MB] (both required)")
+		return 1
+	}
+	if err := node.SetQuota(cores, mem); err != nil {
+		s.errf("assist: %v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "assistant node capped at %.1f cores, %d MiB — its jobs slow down under load like any starved box\n",
+		cores, mem)
+	return 0
 }
 
 func cmdAssistGuide(s *Shell) int {

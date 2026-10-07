@@ -57,7 +57,24 @@ func macFor(seed string) string {
 	return b
 }
 
-// seedFS lays down the files a real box of this type would have.
+// sshKeyBody derives a device-unique public key body: every machine's key
+// must differ, or one authorized_keys entry would trust the whole world.
+// Deterministic (same device id, same key) so saves and fresh worlds agree.
+func sshKeyBody(seed string) string {
+	h := uint32(2166136261)
+	for i := 0; i < len(seed); i++ {
+		h ^= uint32(seed[i])
+		h *= 16777619
+	}
+	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	var b []byte
+	v := h
+	for i := 0; i < 22; i++ {
+		b = append(b, alpha[v%64])
+		v = v/64 + uint32(i)*2654435761 + 11
+	}
+	return "AAAA" + string(b)
+}
 func seedFS(d *Device, kind string) {
 	v := d.FS
 	for _, p := range []string{"/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/var/log", "/var/run", "/var/lib", "/var/spool/cron/crontabs", "/root", "/home", "/tmp", "/etc/systemd", "/etc/systemd/system", "/etc/systemd/system/multi-user.target.wants", "/etc/apt", "/etc/apt/sources.list.d", "/etc/init.d", "/usr/local/bin", "/usr/local/sbin"} {
@@ -88,6 +105,10 @@ func seedFS(d *Device, kind string) {
 		v.MkdirAll(home, 0755, d.Owner, d.Owner)
 		v.MkdirAll(home+"/.ssh", 0700, d.Owner, d.Owner)
 		v.Write(home+"/.ssh/id_ed25519", "-----BEGIN OPENSSH PRIVATE KEY-----\nbG9jYWxseS1mYWtlLWJ1dC1yZWFsLXN0YXRl\n-----END OPENSSH PRIVATE KEY-----\n", 0600, d.Owner, d.Owner)
+		// the public half lives beside the private one, as usual. On the
+		// household PC this is the key the assistant node already trusts
+		// (see the authorized_keys seeded there).
+		v.Write(home+"/.ssh/id_ed25519.pub", "ssh-ed25519 "+sshKeyBody(d.ID)+" "+d.Owner+"@home-pc\n", 0644, d.Owner, d.Owner)
 		v.Write(home+"/.bashrc", "# ~/.bashrc\nalias ll='ls -alF'\n", 0644, d.Owner, d.Owner)
 		v.Write(home+"/notes.txt", "todo: wifi is up but all websites error. ping by IP works?? ask on irc #local\n", 0644, d.Owner, d.Owner)
 	case "router":
@@ -159,8 +180,8 @@ func seedFS(d *Device, kind string) {
 		v.Write("/etc/apk/repositories", "http://mirror.neohome.example/alpine/v3.20/main\n", 0644, "root", "root")
 		v.MkdirAll("/home/assistant", 0755, "assistant", "assistant")
 		v.MkdirAll("/home/assistant/.ssh", 0700, "assistant", "assistant")
-		v.Write("/home/assistant/.ssh/id_ed25519.pub", "ssh-ed25519 AAAAfakebutrealstate assistant@neohome\n", 0644, "assistant", "assistant")
-		v.Write("/home/assistant/.ssh/authorized_keys", "ssh-ed25519 AAAAfakebutrealstate alex@home-pc\n", 0600, "assistant", "assistant")
+		v.Write("/home/assistant/.ssh/id_ed25519.pub", "ssh-ed25519 "+sshKeyBody(d.ID)+" assistant@neohome\n", 0644, "assistant", "assistant")
+		v.Write("/home/assistant/.ssh/authorized_keys", "ssh-ed25519 "+sshKeyBody("pc-alex")+" alex@home-pc\n", 0600, "assistant", "assistant")
 		v.Write("/home/assistant/tasks.md", "# assistant workspace\nskills: dns-troubleshoot(level 1), shell(level 1), sysadmin(level 1)\nloyalty: absolute. budget: household sub-account.\n", 0644, "assistant", "assistant")
 		v.Write("/home/assistant/jobs.log", "2026-09-30 ran 'apk update' for olduser laptop job — incomplete\n", 0644, "assistant", "assistant")
 		v.MkdirAll("/var/log", 0750, "root", "root")

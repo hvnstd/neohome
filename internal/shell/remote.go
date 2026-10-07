@@ -66,6 +66,15 @@ func cmdSsh(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
 		return 1
 	}
+	// auth order, like a real client with keys loaded: publickey first, then
+	// password. The key the session offers is whatever ~/.ssh holds; the
+	// server answers from the account's authorized_keys, and both ends log
+	// the result the way every other auth does.
+	if s.W.KeyTrusted(s.Dev, s.User.Name, dst, user) {
+		dst.Logf("info", "sshd", "Accepted publickey for %s from %s", user, s.Dev.Hostname)
+		fmt.Fprintf(s.Out, "Welcome to %s, %s!\n", dst.Hostname, user)
+		return s.openRemoteSession("ssh", dst, u, args[1:])
+	}
 	// password auth (only if the service allows it)
 	allowPass := true
 	if data, has := dst.FS.Read("/etc/ssh/sshd_config"); has {

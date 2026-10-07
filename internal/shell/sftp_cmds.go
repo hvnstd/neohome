@@ -54,6 +54,12 @@ func sshLogin(s *Shell, user, host, ip string, dst *core.Device) (*core.User, in
 			allowPass = false
 		}
 	}
+	// publickey first, like the ssh client: a matching key skips the prompt
+	// without consuming a line of input
+	if s.W.KeyTrusted(s.Dev, s.User.Name, dst, user) {
+		dst.Logf("info", "sshd", "Accepted publickey for %s from %s (sftp)", user, s.Dev.Hostname)
+		return u, 0
+	}
 	if allowPass {
 		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
 		pass := s.ReadPasswordLine("")

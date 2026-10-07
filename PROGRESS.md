@@ -43,13 +43,13 @@
 | 二十一 | NPC AI 架构 | 部分 | 世界模拟 ✓ +  agent 巡逻/日程/加固（规则层）；LLM 层只有 MCP 透传，无“需决策时唤醒”调度 |
 | 二十二 | Assistant | 已完成 | 忠诚+能力受限（CPU/权限/凭据/知识/网络/时间）+授权执行 |
 | 二十三 | Assistant 成长 | 已完成 | skills 计数+train 方向+状态文本体现 |
-| 二十四 | Assistant 资源 | 部分 | 独立 PC/目录/密钥/任务/账本齐；**缺 CPU/RAM 配额 enforcement** |
+| 二十四 | Assistant 资源 | 已完成 | Quota 进调度/swap/OOM/`free`/htop，`assist quota` 限主人，超硬件拒绝 |
 | 二十五 | Assistant 钱包 | 已完成 | 家庭共享+子账户+任务预算 |
 | 二十六 | 工作系统 | 已完成 | 白任务+分段任务+黑市交易；纯黑任务以后扩展（当前灰线由黑市承载） |
 | 二十七 | 黑客玩法 | 已完成 | Recon→撤离全链路动词齐，同一套状态机 |
 | 二十八 | 攻击面 | 已完成 | 全来自真实配置（转发/DMZ/UPnP/弱口令/暴露 IoT/防火墙） |
 | 二十九 | 漏洞利用 | 部分 | 框架完整（条件/后果/检测度/证据），但仅 3 个虚拟漏洞 |
-| 三十 | 权限提升 | 部分 | UID/GID/sudoers/钥匙齐；**无 suid 建模**，`authorized_keys` 只 enforce 了 assistant 单向 |
+| 三十 | 权限提升 | 已完成 | 公钥双向文件匹配+ssh-keygen+分发链；suid 经查不适用（无用户态 exec 语义，chmod 04000 落不到 FileMode） |
 | 三十一 | 横向移动 | 部分 | 企业网+DMZ 语义（`WPort==0`）齐；**无 VLAN 划分**（Server/Admin/Backup/Guest） |
 | 三十二 | Heat/Trace/Evidence | 已完成 | 证据图+权重+衰减+溯源（到运营商止） |
 | 三十三 | 防守软件 | 已完成 | 防火墙/IDS/HIDS/审计/杀毒/fail2ban/完整性/集中日志/备份/监控（WS-1.12） |
@@ -79,7 +79,7 @@
 1. ~~`useradd/userdel/groupadd` + Household 一等实体~~ done（本批）
 2. Game Bytecode VM（§8，独立大件：受控运行时+capability API）
 3. NPC 记忆与关系（§20/§21，事件记忆+关系图+LLM 唤醒调度）
-4. Assistant 配额 + suid/keys 提权收尾（§24/§30，中件）
+4. ~~Assistant 配额 + suid/keys~~ done（本批）
 5. VLAN + BGP 过程 + 数据库（§31/§38/§52，大件，可拆）
 6. ~~BBS 私信 / git 分支合并 / sftp -r / IMAPS~~ done（本批；真 3-way 合并仍不做）
 7. 地下室 vault（§41，中件：离线 Server/Storage+物理访问门控，USB 已就绪）

@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -215,6 +216,61 @@ func (w *World) AssistantKeyTrusted(src, dst *Device) bool {
 	}
 	p := w.Players[src.Owner]
 	return p != nil && p.Assistant == dst.ID
+}
+
+// KeyTrusted answers with files what AssistantKeyTrusted answers with
+// topology: does the connecting account hold a private key whose public half
+// is listed in the target account's authorized_keys? Both files are read as
+// the daemons would read them — the client offering its own pubkey, the
+// server consulting its own authorized_keys as root — and only an exact key
+// body match counts (comments may differ, keys may not).
+func (w *World) KeyTrusted(src *Device, srcUser string, dst *Device, dstUser string) bool {
+	if src == nil || dst == nil || srcUser == "" || dstUser == "" {
+		return false
+	}
+	su := src.FindUser(srcUser)
+	du := dst.FindUser(dstUser)
+	if su == nil || du == nil || su.Home == "" || du.Home == "" {
+		return false
+	}
+	var bodies []string
+	for _, p := range src.FS.List(su.Home + "/.ssh") {
+		if !strings.HasSuffix(p, ".pub") {
+			continue
+		}
+		data, exists, allowed := src.FS.ReadPathAs(p, su)
+		if !exists || !allowed {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if f := strings.Fields(strings.TrimSpace(line)); len(f) >= 2 {
+				bodies = append(bodies, f[1])
+			}
+		}
+	}
+	if len(bodies) == 0 {
+		return false
+	}
+	data, ok := dst.FS.Read(du.Home + "/.ssh/authorized_keys")
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		if len(f) >= 2 && containsKeyBody(bodies, f[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsKeyBody(bodies []string, body string) bool {
+	for _, b := range bodies {
+		if b == body {
+			return true
+		}
+	}
+	return false
 }
 
 // SeedAssistantAccess makes the assistant's machine reachable the way the

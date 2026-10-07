@@ -107,7 +107,7 @@ func cmdHtop(s *Shell, args []string) int {
 	fmt.Fprintf(s.Out, "Tasks: %d total, %d running | %d cores, %d MHz each\n",
 		len(d.Procs)+1, running+1, d.HW.Cores, d.HW.CPUMHz)
 	used := d.MemUsed()
-	fmt.Fprintf(s.Out, "Mem : %s/%d MiB (%.1f%%)\n", fmtMem(used), d.HW.RAMMB, pctOf(used, d.HW.RAMMB))
+	fmt.Fprintf(s.Out, "Mem : %s/%d MiB (%.1f%%)%s\n", fmtMem(used), d.EffRAMMB(), pctOf(used, d.EffRAMMB()), quotaTag(d))
 	fmt.Fprintf(s.Out, "Swp : %s/%d MiB\n", fmtMem(r.SwapUsedMB), d.SwapTotalMB())
 	fmt.Fprintf(s.Out, "Cpu : %.1f%% total", cpuPct)
 	if r.Share < 1 {
@@ -124,8 +124,8 @@ func cmdHtop(s *Shell, args []string) int {
 		}
 		fmt.Fprintf(s.Out, "%-8d %-8s %5.1f%% %5s%% %5dM %s\n", p.PID, p.User, p.CPU, want, p.Mem, p.Name)
 	}
-	if used > d.HW.RAMMB {
-		fmt.Fprintf(s.Out, "\n! %d MiB over RAM: the kernel pages to swap, and kills the biggest process when that runs out\n", used-d.HW.RAMMB)
+	if used > d.EffRAMMB() {
+		fmt.Fprintf(s.Out, "\n! %d MiB over RAM: the kernel pages to swap, and kills the biggest process when that runs out\n", used-d.EffRAMMB())
 	}
 	if d.DiskFull() {
 		fmt.Fprintf(s.Out, "! filesystem full (%d/%d MiB): writes are failing\n", d.FS.DiskUsedMB(), d.DiskLimitMB())
@@ -142,6 +142,15 @@ func fmtMem(mb int) string {
 		return fmt.Sprintf("%.1fG", float64(mb)/1024)
 	}
 	return fmt.Sprintf("%dM", mb)
+}
+
+// quotaTag marks capped machines in monitoring output, so a limit is never
+// mistaken for hardware.
+func quotaTag(d *core.Device) string {
+	if d.Quota != nil {
+		return " [quota]"
+	}
+	return ""
 }
 
 func pctOf(part, whole int) float64 {
@@ -209,19 +218,26 @@ func cmdFree(s *Shell, args []string) int {
 	d := s.Dev
 	r := d.Resources()
 	used := d.MemUsed()
-	free := d.HW.RAMMB - used
+	// the total is what the kernel may use: a capped box reports its quota,
+	// the way a container-aware free reports the cgroup limit
+	total := d.EffRAMMB()
+	free := total - used
 	if free < 0 {
 		free = 0
 	}
 	// a kb-first view like procps, but every number is the machine's own state
 	fmt.Fprintf(s.Out, "              total        used        free      shared  buff/cache   available\n")
 	fmt.Fprintf(s.Out, "Mem:      %10d %10d %10d %10d %10d %10d\n",
-		d.HW.RAMMB*1024, used*1024, free*1024, 0, 0, free*1024)
+		total*1024, used*1024, free*1024, 0, 0, free*1024)
 	swapTotal, swapUsed := d.SwapTotalMB(), r.SwapUsedMB
 	fmt.Fprintf(s.Out, "Swap:     %10d %10d %10d\n", swapTotal*1024, swapUsed*1024, (swapTotal-swapUsed)*1024)
-	if used > d.HW.RAMMB {
+	if used > total {
 		fmt.Fprintf(s.Out, "\nwarning: %d MiB over RAM — the kernel is paging (%d MiB in swap, %d MiB max)\n",
-			used-d.HW.RAMMB, swapUsed, swapTotal)
+			used-total, swapUsed, swapTotal)
+	}
+	if d.Quota != nil {
+		fmt.Fprintf(s.Out, "quota: %.1f cores, %d MiB RAM of %d cores, %d MiB hardware\n",
+			d.Quota.Cores, d.Quota.RAMMB, d.HW.Cores, d.HW.RAMMB)
 	}
 	if r.OOMCount > 0 {
 		fmt.Fprintf(s.Out, "OOM incidents: %d — %s\n", r.OOMCount, r.LastOOM)
