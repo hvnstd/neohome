@@ -264,9 +264,13 @@ func (w *World) SMSTick() {
 		case 0:
 			if svc := d.Svc("sshd"); svc != nil && svc.State == "running" {
 				d.StopService("sshd")
-				d.Logf("err", "battery", "phone powered off")
-				w.AddEvent(d.ID, "err", "battery", "phone powered off: battery empty")
 			}
+			// the machine is really off, not just quiet: the packet path,
+			// the shell gate and the scheduler all read NetUp/Powered, so
+			// nothing runs and every error names the cause
+			d.NetUp = false
+			d.Logf("err", "battery", "phone powered off")
+			w.AddEvent(d.ID, "err", "battery", "phone powered off: battery empty")
 		}
 	}
 }
@@ -278,6 +282,7 @@ func (w *World) PhoneCharge(d *Device) {
 		return
 	}
 	w.SMS.Battery[d.ID] = 100
+	d.NetUp = true
 	if svc := d.Svc("sshd"); svc != nil && svc.State != "running" {
 		d.StartService("sshd")
 	}

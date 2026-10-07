@@ -1,8 +1,12 @@
 package core
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Virtualisation in NeoHome is a SIMULATION, never a host container or VM
@@ -49,6 +53,76 @@ type VM struct {
 	OomEvents []string
 	DiskUsedM int
 	LastState string
+
+	// Snapshots are point-in-time copies of the guest's disk. They live on
+	// the guest (not the hypervisor) the way VPS snapshots live on the
+	// provider record — restoring one is a real rollback of files, users
+	// and packages.
+	Snapshots []VMSnapshot
+}
+
+// VMSnapshot is a point-in-time copy of a guest's disk: files deleted
+// afterwards come back, accounts created afterwards are gone again.
+type VMSnapshot struct {
+	Name          string
+	At            time.Time
+	FS            *VFS
+	Users         map[string]*User
+	Installed     map[string]*VPkg
+	InstalledFrom map[string]string
+}
+
+// GobEncode carries only the guest's data: the Host and W back-pointers
+// would otherwise drag the whole world into every guest (and recurse until
+// the stack blows — a world with a guest really could not be saved at all).
+// LoadWorld re-links both from the world it loads.
+func (v *VM) GobEncode() ([]byte, error) {
+	shadow := struct {
+		ID, Name, HostID, DeviceID, State string
+		VCores                            float64
+		VRAMMB, VDiskM                    int
+		SwapMB, SwapMaxMB, OOMCount       int
+		OomEvents                         []string
+		DiskUsedM                         int
+		LastState                         string
+		Snapshots                         []VMSnapshot
+	}{
+		ID: v.ID, Name: v.Name, HostID: v.HostID, DeviceID: v.DeviceID, State: v.State,
+		VCores: v.VCores, VRAMMB: v.VRAMMB, VDiskM: v.VDiskM,
+		SwapMB: v.SwapMB, SwapMaxMB: v.SwapMaxMB, OOMCount: v.OOMCount,
+		OomEvents: v.OomEvents, DiskUsedM: v.DiskUsedM, LastState: v.LastState,
+		Snapshots: v.Snapshots,
+	}
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(&shadow); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// GobDecode restores the guest's data; the back-pointers stay nil until
+// LoadWorld re-links them (see resolver.go), the same way device.W does.
+func (v *VM) GobDecode(b []byte) error {
+	shadow := struct {
+		ID, Name, HostID, DeviceID, State string
+		VCores                            float64
+		VRAMMB, VDiskM                    int
+		SwapMB, SwapMaxMB, OOMCount       int
+		OomEvents                         []string
+		DiskUsedM                         int
+		LastState                         string
+		Snapshots                         []VMSnapshot
+	}{}
+	if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&shadow); err != nil {
+		return err
+	}
+	v.ID, v.Name, v.HostID, v.DeviceID, v.State =
+		shadow.ID, shadow.Name, shadow.HostID, shadow.DeviceID, shadow.State
+	v.VCores, v.VRAMMB, v.VDiskM = shadow.VCores, shadow.VRAMMB, shadow.VDiskM
+	v.SwapMB, v.SwapMaxMB, v.OOMCount = shadow.SwapMB, shadow.SwapMaxMB, shadow.OOMCount
+	v.OomEvents, v.DiskUsedM, v.LastState = shadow.OomEvents, shadow.DiskUsedM, shadow.LastState
+	v.Snapshots = shadow.Snapshots
+	return nil
 }
 
 // MemPressure returns how over-committed the guest is, 0..1+. 1.0 means the
@@ -462,6 +536,74 @@ func (w *World) DestroyVM(name string) error {
 		w.WAN.dropOwner(blockOf(d.FirstWANIP()))
 	}
 	w.AddEvent(v.HostID, "info", "virt", "vm %s destroyed", name)
+	return nil
+}
+
+// ---- snapshots ----
+
+// VMSnapshot copies the guest's disk. A running guest can be snapshotted, as
+// on a real hypervisor; the copy is the state at this moment, not a pointer
+// to the live filesystem. This is the hypervisor half of Phase 1's
+// "Snapshots" — the VPS half already lives on the provider record.
+func (w *World) VMSnapshot(name, snap string) (*VMSnapshot, error) {
+	v := w.FindVM(name)
+	if v == nil {
+		return nil, fmt.Errorf("no such guest: %s", name)
+	}
+	d := w.Devices[v.DeviceID]
+	if d == nil {
+		return nil, fmt.Errorf("guest %s has no device", name)
+	}
+	if snap == "" {
+		snap = "snap-" + strconv.Itoa(len(v.Snapshots)+1)
+	}
+	for _, s := range v.Snapshots {
+		if s.Name == snap {
+			return nil, fmt.Errorf("a snapshot called %s already exists", snap)
+		}
+	}
+	s := VMSnapshot{Name: snap, At: w.Sim, FS: cloneVFS(d.FS), Users: cloneUsers(d.Users),
+		Installed: clonePkgs(d.Installed), InstalledFrom: cloneStrMap(d.InstalledFrom)}
+	v.Snapshots = append(v.Snapshots, s)
+	if len(v.Snapshots) > 8 {
+		v.Snapshots = v.Snapshots[len(v.Snapshots)-8:]
+	}
+	d.Logf("info", "libvirtd", "snapshot %s taken", snap)
+	w.AddEvent(v.HostID, "info", "virt", "vm %s: snapshot %s taken", name, snap)
+	return &s, nil
+}
+
+// VMRestore rolls the guest back to a snapshot. The disk is replaced
+// wholesale, so this only happens on a stopped guest: restoring underneath a
+// running system would be a different (and dishonest) operation.
+func (w *World) VMRestore(name, snap string) error {
+	v := w.FindVM(name)
+	if v == nil {
+		return fmt.Errorf("no such guest: %s", name)
+	}
+	if v.State == "running" {
+		return fmt.Errorf("refusing to restore %s while it is running — stop it first", name)
+	}
+	d := w.Devices[v.DeviceID]
+	if d == nil {
+		return fmt.Errorf("guest %s has no device", name)
+	}
+	var found *VMSnapshot
+	for i := range v.Snapshots {
+		if v.Snapshots[i].Name == snap {
+			found = &v.Snapshots[i]
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("no snapshot called %s on %s", snap, name)
+	}
+	d.FS = cloneVFS(found.FS)
+	d.Users = cloneUsers(found.Users)
+	d.Installed = clonePkgs(found.Installed)
+	d.InstalledFrom = cloneStrMap(found.InstalledFrom)
+	refreshPasswd(d)
+	d.Logf("info", "libvirtd", "restored from snapshot %s (%s)", found.Name, found.At.Format("2006-01-02 15:04"))
+	w.AddEvent(v.HostID, "warn", "virt", "vm %s rolled back to snapshot %s", name, snap)
 	return nil
 }
 

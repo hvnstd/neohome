@@ -522,6 +522,13 @@ func (w *World) CronTick() {
 		if d == nil || !d.CronDaemonRunning() {
 			continue // no daemon, no schedule — exactly like a stopped crond
 		}
+		// A dark machine runs no jobs: power cut, dead phone battery,
+		// suspended lid. Skipped runs are not backlogged — on boot the daemon
+		// re-arms from now (see the seen-map above), the way a real crond
+		// does not stampede after an outage.
+		if !d.Powered() {
+			continue
+		}
 		sched := e.Schedule()
 		if sched == nil {
 			e.Last = now

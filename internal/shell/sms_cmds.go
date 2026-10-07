@@ -87,6 +87,24 @@ func cmdSms(s *Shell, args []string) int {
 }
 
 func cmdPhone(s *Shell, args []string) int {
+	// Docking a phone is hands, not a shell command: it works from any of
+	// the owner's machines, because a dead phone whose sshd is stopped would
+	// otherwise be a one-way door with no way back in. Reading its status
+	// stays on the phone itself — you cannot read a screen you cannot reach.
+	if s.Dev.Profile != "phone" {
+		if len(args) == 1 && args[0] == "charge" {
+			d := s.W.PhoneFor(s.User.Name)
+			if d == nil {
+				s.errf("phone: no phone for %s", s.User.Name)
+				return 1
+			}
+			s.W.PhoneCharge(d)
+			fmt.Fprintf(s.Out, "docked %s: battery 100%%\n", d.Hostname)
+			return 0
+		}
+		requirePhone(s, "phone")
+		return 1
+	}
 	d := requirePhone(s, "phone")
 	if d == nil {
 		return 1

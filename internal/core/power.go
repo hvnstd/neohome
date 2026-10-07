@@ -82,6 +82,13 @@ func (d *Device) Powered() bool {
 	if d.IsOutOfBand() {
 		return d.UPS != nil && d.UPS.ChargePct > 0
 	}
+	// §15/WS-1.2: a phone's only power is its battery. At zero it is off — no
+	// processes, no cron, no ssh — until someone docks it (see PhoneCharge).
+	// The SMS layer already stops its sshd and its spool at zero; this is
+	// what makes the rest of the machine agree with them.
+	if phoneDead(d) {
+		return false
+	}
 	// §15: a device powered over ethernet has no plug of its own. Its power is
 	// the switch's business, which is why cutting a PoE port reboots a camera
 	// and a switch on a UPS keeps the cameras alive through an outage.
@@ -123,12 +130,26 @@ func (d *Device) UnavailableReason() string {
 		return "suspended (lid closed)"
 	case d.Battery != nil && d.Battery.Pct <= 0 && !d.Battery.Charging:
 		return "battery empty"
+	case phoneDead(d):
+		return "battery empty"
 	case d.MainsDropped:
 		return "no power — unplugged"
 	case !d.W.HouseholdPower():
 		return "no power — the household supply is off"
 	}
 	return "no power"
+}
+
+// phoneDead reports whether a phone's battery is spent. Only phones the SMS
+// layer tracks can be dead this way: a device without a battery entry is
+// assumed powered, so an unknown or future device is never bricked by a
+// missing counter.
+func phoneDead(d *Device) bool {
+	if d == nil || d.Profile != "phone" || d.W == nil || d.W.SMS == nil {
+		return false
+	}
+	pct, ok := d.W.SMS.Battery[d.ID]
+	return ok && pct <= 0
 }
 
 // OnBattery reports whether a device is running off its UPS.

@@ -323,3 +323,113 @@ func TestHouseholdServerIsTheHypervisor(t *testing.T) {
 		t.Fatal("a pc should not be able to host guests")
 	}
 }
+
+// A snapshot is the hypervisor's own rollback: files deleted afterwards come
+// back, and files created afterwards are gone again — on a stopped guest, the
+// way a real rollback replaces the disk wholesale.
+func TestVMSnapshotRollsBackAStoppedGuest(t *testing.T) {
+	w := core.NewWorld()
+	v, err := w.CreateVM("srv-alex", "web", 1, 1024, 8192, "public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := w.Devices[v.DeviceID]
+	srv := w.Devices["srv-alex"]
+
+	// a live guest can be snapshotted, over the same shell a player uses
+	if out := run(t, w, srv, "alex", "vm snapshot web pre-mistake"); !strings.Contains(out, "pre-mistake") {
+		t.Fatalf("snapshot should be confirmed by name, got:\n%s", out)
+	}
+	if out := run(t, w, srv, "alex", "vm snapshots web"); !strings.Contains(out, "pre-mistake") {
+		t.Fatalf("the snapshot should be listed, got:\n%s", out)
+	}
+	// diverge: a new file lands, a seeded one is deleted
+	d.FS.Write("/home/web/after.txt", "should not survive\n", 0644, "web", "web")
+	d.FS.Remove("/etc/hostname")
+	if err := w.StopVM("web"); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := run(t, w, srv, "alex", "vm restore web pre-mistake"); !strings.Contains(out, "rolled back") {
+		t.Fatalf("restore should confirm the rollback, got:\n%s", out)
+	}
+	if _, ok := d.FS.Read("/home/web/after.txt"); ok {
+		t.Fatal("a file created after the snapshot survived the rollback")
+	}
+	if data, ok := d.FS.Read("/etc/hostname"); !ok || !strings.Contains(string(data), "web") {
+		t.Fatalf("the snapshot's file did not come back: %q", string(data))
+	}
+	// restoring does not boot the guest: starting it is a separate act
+	if v.State != "stopped" {
+		t.Fatalf("restore must leave the guest stopped, got %q", v.State)
+	}
+	if err := w.StartVM("web"); err != nil {
+		t.Fatalf("the restored guest should boot: %v", err)
+	}
+}
+
+// Rolling back underneath a running system is refused, like the provider's
+// own restore — stop it first.
+func TestVMRestoreRefusesWhileRunning(t *testing.T) {
+	w := core.NewWorld()
+	if _, err := w.CreateVM("srv-alex", "web", 1, 1024, 8192, "public"); err != nil {
+		t.Fatal(err)
+	}
+	srv := w.Devices["srv-alex"]
+	run(t, w, srv, "alex", "vm snapshot web pre-mistake")
+
+	if out := run(t, w, srv, "alex", "vm restore web pre-mistake"); !strings.Contains(out, "while it is running") {
+		t.Fatalf("restore of a live guest must be refused, got:\n%s", out)
+	}
+	if out := run(t, w, srv, "alex", "vm restore web no-such-snap"); !strings.Contains(out, "while it is running") {
+		t.Fatalf("the running check must come before the lookup, got:\n%s", out)
+	}
+	if out := run(t, w, srv, "alex", "vm snapshot web pre-mistake"); !strings.Contains(out, "already exists") {
+		t.Fatalf("a duplicate snapshot name must be refused, got:\n%s", out)
+	}
+}
+
+// A world with a guest must survive a save: before VM GobEncode, saving with
+// a guest present recursed until the process died.
+func TestGuestAndSnapshotsSurviveSave(t *testing.T) {
+	w := core.NewWorld()
+	if _, err := w.CreateVM("srv-alex", "web", 1, 1024, 8192, "public"); err != nil {
+		t.Fatal(err)
+	}
+	srv := w.Devices["srv-alex"]
+	run(t, w, srv, "alex", "vm snapshot web pre-mistake")
+
+	path := t.TempDir() + "/w.gob"
+	if err := w.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	back, err := core.LoadWorld(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	v := back.FindVM("web")
+	if v == nil {
+		t.Fatal("the guest did not survive the save")
+	}
+	if v.Host == nil || v.W == nil {
+		t.Fatal("the guest's back-pointers were not re-linked after load")
+	}
+	if len(v.Snapshots) != 1 || v.Snapshots[0].Name != "pre-mistake" {
+		t.Fatalf("the snapshot did not survive the save: %+v", v.Snapshots)
+	}
+	d := back.Devices[v.DeviceID]
+	if d == nil || d.FindUser("web") == nil {
+		t.Fatal("the guest's device did not survive the save")
+	}
+	// and the restored-from-save guest still rolls back for real
+	d.FS.Write("/home/web/after.txt", "should not survive\n", 0644, "web", "web")
+	if err := back.StopVM("web"); err != nil {
+		t.Fatal(err)
+	}
+	if err := back.VMRestore("web", "pre-mistake"); err != nil {
+		t.Fatalf("restore after load: %v", err)
+	}
+	if _, ok := d.FS.Read("/home/web/after.txt"); ok {
+		t.Fatal("a file created after the snapshot survived the rollback")
+	}
+}

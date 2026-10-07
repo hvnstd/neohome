@@ -730,3 +730,64 @@ func TestCronIsHonestWithoutADaemon(t *testing.T) {
 		t.Fatalf("the crond applet must be honest:\n%s", out)
 	}
 }
+
+// A dark machine runs no jobs: cutting the house power must silence the
+// scheduler on the dead box (and only there), and restoring power must bring
+// the jobs back without a backlog stampede. Before the Powered gate, a
+// power-cut PC kept running its crontab in the dark.
+func TestCronDoesNotFireOnADarkMachine(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+
+	cronInstall(t, w, pc, "alex", "/home/alex/darkcron",
+		"* * * * * cp /etc/hostname /home/alex/dark-proof.txt\n")
+	e := entryFor(w, "pc-alex", "alex", "dark-proof.txt")
+	if e == nil {
+		t.Fatal("the installed crontab was not armed by the scheduler")
+	}
+
+	// cut the house power, then tick past the armed minute: nothing fires
+	w.CutPower("alex")
+	if pc.Powered() {
+		t.Fatal("setup: the pc should be dark after the power cut")
+	}
+	tickUntil(t, w, e.Next, 10)
+	w.Tick()
+	w.Tick()
+	if e.Runs != 0 {
+		t.Fatalf("a dark machine must run no jobs, got %d run(s)", e.Runs)
+	}
+	if _, ok := pc.FS.Read("/home/alex/dark-proof.txt"); ok {
+		t.Fatal("world state changed while the machine was dark")
+	}
+
+	// restore power: the daemon comes back up and re-arms from now — the
+	// missed run while dark is missed, exactly like a real outage (no
+	// backlog stampede). The next minute must fire exactly once.
+	w.RestorePower("alex")
+	if !pc.Powered() {
+		t.Fatal("setup: the pc should be back after restore")
+	}
+	e = entryFor(w, "pc-alex", "alex", "dark-proof.txt")
+	if e == nil {
+		t.Fatal("the entry should still be armed after power is back")
+	}
+	// the first tick after restore re-arms the daemon from now instead of
+	// firing the missed run: no backlog stampede
+	w.Tick()
+	if e.Runs != 0 {
+		t.Fatalf("the missed run must stay missed, got %d run(s)", e.Runs)
+	}
+	if !e.Next.After(w.Sim) {
+		t.Fatalf("the daemon should have re-armed from now, next=%s sim=%s", e.Next, w.Sim)
+	}
+	armed := e.Next
+	tickUntil(t, w, armed, 10)
+	w.Tick()
+	if e.Runs != 1 {
+		t.Fatalf("the job should fire once on its next minute, got %d run(s)", e.Runs)
+	}
+	if _, ok := pc.FS.Read("/home/alex/dark-proof.txt"); !ok {
+		t.Fatal("the job's effect is missing after power is back")
+	}
+}

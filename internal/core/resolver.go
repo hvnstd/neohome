@@ -213,6 +213,21 @@ func LoadWorld(path string) (*World, error) {
 	for _, id := range w.Order {
 		w.Devices[id].W = w
 	}
+	// guests carry Host/W pointers that gob drops by design (see VM.GobEncode:
+	// encoding them would drag the whole world into every guest, which is
+	// what made a world with a guest unsaveable). Re-link them here, the same
+	// way device.W is re-linked above.
+	if w.VMs != nil {
+		for _, list := range w.VMs.Hosts {
+			for _, v := range list {
+				if v == nil {
+					continue
+				}
+				v.W = w
+				v.Host = w.Devices[v.HostID]
+			}
+		}
+	}
 	if w.Chat == nil {
 		w.Chat = &Chat{Channels: map[string]bool{}}
 	}

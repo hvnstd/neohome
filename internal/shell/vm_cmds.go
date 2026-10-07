@@ -37,12 +37,18 @@ func cmdVM(s *Shell, args []string) int {
 		return vmRestart(s, args)
 	case "destroy", "delete", "rm", "undefine":
 		return vmDestroy(s, args)
+	case "snapshot", "snap":
+		return vmSnapshot(s, args)
+	case "snapshots", "snaps", "snap-list":
+		return vmSnapshots(s, args)
+	case "restore", "rollback":
+		return vmRestore(s, args)
 	case "console", "enter":
 		return vmConsole(s, args)
 	case "host", "hosts":
 		return vmHost(s, args)
 	}
-	s.errf("usage: vm [list|top|create NAME [--cpu N] [--mem MB] [--disk MB]|start|stop|restart|destroy NAME|console NAME|host]")
+	s.errf("usage: vm [list|top|create NAME [--cpu N] [--mem MB] [--disk MB]|start|stop|restart|destroy NAME|snapshot NAME [SNAP]|snapshots NAME|restore NAME SNAP|console NAME|host]")
 	return 1
 }
 
@@ -297,6 +303,71 @@ func vmDestroy(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "Domain %s destroyed\n", n)
 		return nil
 	})
+}
+
+// Snapshots are the hypervisor's own rollback: the guest's disk, users and
+// packages copied at this moment, restored onto a stopped guest. Same
+// contract as the provider's `vps snapshot` — a live guest can be
+// snapshotted, only a stopped one can be rolled back.
+func vmSnapshot(s *Shell, args []string) int {
+	if len(args) == 0 || len(args) > 2 {
+		s.errf("usage: vm snapshot NAME [SNAP]")
+		return 1
+	}
+	snap := ""
+	if len(args) == 2 {
+		snap = args[1]
+	}
+	v := s.W.FindVM(args[0])
+	if v == nil {
+		s.errf("no such guest: %s", args[0])
+		return 1
+	}
+	got, err := s.W.VMSnapshot(args[0], snap)
+	if err != nil {
+		s.errf("%v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "Snapshot %s taken on %s\n", got.Name, v.Name)
+	return 0
+}
+
+func vmSnapshots(s *Shell, args []string) int {
+	if len(args) != 1 {
+		s.errf("usage: vm snapshots NAME")
+		return 1
+	}
+	v := s.W.FindVM(args[0])
+	if v == nil {
+		s.errf("no such guest: %s", args[0])
+		return 1
+	}
+	if len(v.Snapshots) == 0 {
+		fmt.Fprintf(s.Out, "no snapshots on %s\n", v.Name)
+		return 0
+	}
+	for _, sn := range v.Snapshots {
+		fmt.Fprintf(s.Out, "%-16s %s\n", sn.Name, sn.At.Format("2006-01-02 15:04"))
+	}
+	return 0
+}
+
+func vmRestore(s *Shell, args []string) int {
+	if len(args) != 2 {
+		s.errf("usage: vm restore NAME SNAP")
+		return 1
+	}
+	v := s.W.FindVM(args[0])
+	if v == nil {
+		s.errf("no such guest: %s", args[0])
+		return 1
+	}
+	if err := s.W.VMRestore(args[0], args[1]); err != nil {
+		s.errf("%v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "Domain %s rolled back to %s (still stopped — start it to boot)\n", v.Name, args[1])
+	return 0
 }
 
 // vmConsole drops into the guest's own shell. The guest is a real device with

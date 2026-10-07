@@ -125,6 +125,7 @@ func TestBankDepositSMS(t *testing.T) {
 func TestPhoneBatteryLifecycle(t *testing.T) {
 	w := core.NewWorld()
 	phone := w.Devices["phone-alex"]
+	pc := w.Devices["pc-alex"]
 	alex := phone.FindUser("alex")
 
 	w.SMS.Battery[phone.ID] = 1
@@ -136,15 +137,33 @@ func TestPhoneBatteryLifecycle(t *testing.T) {
 	if phone.Svc("sshd").State != "stopped" {
 		t.Fatal("a dead phone must really power off its terminal")
 	}
+	// the whole machine agrees it is off: no shell, and the reason names
+	// the battery instead of a generic failure
+	if phone.Powered() {
+		t.Fatal("a phone at 0% must not be powered")
+	}
+	if got := phone.UnavailableReason(); got != "battery empty" {
+		t.Fatalf("the reason must name the battery, got %q", got)
+	}
+	if out := run(t, w, phone, "alex", "uptime"); !strings.Contains(out, "battery empty") {
+		t.Fatalf("no command may run on a dark phone, got:\n%s", out)
+	}
 	if err := w.SMSSend(phone, alex, "mara", "anyone there?"); err == nil || !strings.Contains(err.Error(), "switched off") {
 		t.Fatalf("a dead phone must not receive: %v", err)
 	}
-	// the physical act: dock it, and it comes back
-	out := run(t, w, phone, "alex", "phone charge")
+	// the physical act, from another machine: docking is hands, not a shell
+	// command, so a dead phone is never a one-way door
+	out := run(t, w, pc, "alex", "phone charge")
 	if !strings.Contains(out, "battery 100%") {
-		t.Fatalf("charging failed:\n%s", out)
+		t.Fatalf("charging from the PC failed:\n%s", out)
+	}
+	if !phone.Powered() {
+		t.Fatal("the phone must be back after charging")
 	}
 	if phone.Svc("sshd").State != "running" {
 		t.Fatal("the terminal did not come back after charging")
+	}
+	if out := run(t, w, phone, "alex", "phone status"); !strings.Contains(out, "100%") {
+		t.Fatalf("status should show the full battery:\n%s", out)
 	}
 }
