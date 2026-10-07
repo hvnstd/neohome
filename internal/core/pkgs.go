@@ -173,6 +173,20 @@ func debianRepo() *Repo {
 		Service: &SvcSpec{Name: "sshd", Desc: "OpenBSD Secure Shell server", Port: 22, Proto: "tcp", Scope: "lan",
 			Handler: "ssh", Autostart: true}})
 
+	unit, unitBody = unitFile(distroSpecs["debian"], "mariadb", "MariaDB database server", "/usr/sbin/mariadbd")
+	r.put(&VPkg{Name: "mariadb", Version: "1:11.4.2-1", Comp: "main", Desc: "MariaDB database server and client", Size: 120000,
+		Depends: []string{"libc"},
+		Files: map[string]*PkgFile{
+			"/usr/sbin/mariadbd": binFile("/usr/sbin/mariadbd"),
+			"/usr/bin/mysql":     binFile("/usr/bin/mysql"),
+			"/etc/mysql/my.cnf": cfgFile("/etc/mysql/my.cnf",
+				"[mysqld]\ndatadir = /var/lib/mysql\nport = 3306\nbind-address = 0.0.0.0\n"),
+			unit:                   cfgFile(unit, unitBody),
+			"/var/lib/mysql/.keep": cfgFile("/var/lib/mysql/.keep", "datadir\n"),
+		},
+		Service: &SvcSpec{Name: "mariadb", Desc: "MariaDB database server", Port: 3306, Proto: "tcp", Scope: "any",
+			Handler: "mysql", Conf: "/etc/mysql/my.cnf", Autostart: true}})
+
 	unit, unitBody = unitFile(distroSpecs["debian"], "vsftpd", "FTP daemon", "/usr/sbin/vsftpd")
 	r.put(&VPkg{Name: "vsftpd", Version: "3.0.5-1", Comp: "main", Desc: "the very secure FTP daemon", Size: 190,
 		Files: map[string]*PkgFile{

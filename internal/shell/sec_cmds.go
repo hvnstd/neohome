@@ -57,6 +57,7 @@ var pkgBinaries = map[string]string{
 	"auditctl":        "/usr/bin/auditctl",
 	"restic":          "/usr/bin/restic",
 	"rkhunter":        "/usr/bin/rkhunter",
+	"mysql":           "/usr/bin/mysql",
 }
 
 // pkgCommandMissing reports whether a §33 command is absent from this machine

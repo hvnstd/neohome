@@ -810,3 +810,32 @@ func openForward(router *core.Device, port int) bool {
 	}
 	return false
 }
+
+// Separators and redirects inside quotes are data: the shell must not split
+// `;`/`&&` or treat `>` as a redirect while quoted. SQL batches were the
+// casualty that exposed it (`WHERE price > 1000` became a file write).
+func TestQuotedSeparatorsAreData(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	sh := func(line string) string { return run(t, w, pc, "alex", line) }
+
+	if got := sh("echo 'a;b'"); strings.TrimSpace(got) != "a;b" {
+		t.Fatalf("quoted ; must not split, got %q", got)
+	}
+	if got := sh("echo \"a&&b\""); strings.TrimSpace(got) != "a&&b" {
+		t.Fatalf("quoted && must not split, got %q", got)
+	}
+	if got := sh("echo 'a>b'"); strings.TrimSpace(got) != "a>b" {
+		t.Fatalf("quoted > must not redirect, got %q", got)
+	}
+	if _, ok := pc.FS.Read("/home/alex/b"); ok {
+		t.Fatal("no phantom redirect file may exist")
+	}
+	// unquoted behaviour is unchanged: real separators still separate
+	if got := sh("echo one; echo two"); !strings.Contains(got, "one") || !strings.Contains(got, "two") {
+		t.Fatalf("real ; must still split, got %q", got)
+	}
+	if got := sh("echo yes && echo ok"); !strings.Contains(got, "ok") {
+		t.Fatalf("real && must still chain, got %q", got)
+	}
+}

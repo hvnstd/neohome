@@ -80,7 +80,7 @@
 2. Game Bytecode VM（§8，独立大件：受控运行时+capability API）
 3. ~~NPC 记忆与关系~~ done（本批；§21 的 LLM 唤醒调度仍无，规则层即 agent 层）
 4. ~~Assistant 配额 + suid/keys~~ done（本批）
-5. VLAN + BGP 过程 + 数据库（§31/§38/§52，大件，可拆）
+5. ~~VLAN + BGP 过程 + 数据库~~ done（本批三件；GRANT/JOIN/复制不做）
 6. ~~BBS 私信 / git 分支合并 / sftp -r / IMAPS~~ done（本批；真 3-way 合并仍不做）
 7. 地下室 vault（§41，中件：离线 Server/Storage+物理访问门控，USB 已就绪）
 8. 内容工具链：世界生成器/任务编辑器/社区格式（§44，大件）

@@ -219,9 +219,11 @@ func (s *Shell) ExecLineStatus(line string) int {
 	}
 	s.exitFlag = false
 	status := 0
-	for _, seg := range strings.Split(line, "&&") {
+	// statement separators are honoured outside quotes only: a `;` inside
+	// '...' is data (SQL batches, echo text), like the redirect scan above
+	for _, seg := range splitUnquoted(line, "&&") {
 		ok := true
-		for _, sub := range strings.Split(strings.TrimSpace(seg), ";") {
+		for _, sub := range splitUnquoted(strings.TrimSpace(seg), ";") {
 			sub = strings.TrimSpace(sub)
 			if sub == "" {
 				continue
@@ -240,16 +242,15 @@ func (s *Shell) ExecLineStatus(line string) int {
 }
 
 func (s *Shell) execOne(cmd string) bool {
+	// Redirects are found outside quotes: a `>` inside '...' or "..." is
+	// data (SQL comparisons, echo text), exactly like a real shell. The old
+	// raw Index scan ate `SELECT ... WHERE price > 1000` as a redirect.
 	var redirFile string
 	var appendMode bool
 	rest := cmd
-	if i := strings.Index(cmd, ">>"); i >= 0 {
-		appendMode = true
-		redirFile = strings.TrimSpace(cmd[i+2:])
+	if i, file, append := splitRedirect(cmd); i >= 0 {
 		rest = strings.TrimSpace(cmd[:i])
-	} else if i := strings.Index(cmd, ">"); i >= 0 {
-		redirFile = strings.TrimSpace(cmd[i+1:])
-		rest = strings.TrimSpace(cmd[:i])
+		redirFile, appendMode = strings.TrimSpace(file), append
 	}
 	if strings.TrimSpace(rest) == "" && redirFile == "" {
 		return true
@@ -414,6 +415,76 @@ func busyboxHas(name string) bool { return bbSet[name] }
 // ---- pipelines ----
 
 // splitPipeline splits a token list on "|" into stages.
+// splitUnquoted cuts s on each sep run outside quotes. Multi-char
+// separators (&&) match atomically; a trailing partial never splits.
+func splitUnquoted(s, sep string) []string {
+	var out []string
+	var cur strings.Builder
+	var quote byte
+	flush := func() {
+		out = append(out, cur.String())
+		cur.Reset()
+	}
+	for i := 0; i < len(s); {
+		c := s[i]
+		if quote != 0 {
+			cur.WriteByte(c)
+			if c == quote {
+				quote = 0
+			} else if c == '\\' && quote == '"' && i+1 < len(s) {
+				i++
+				cur.WriteByte(s[i])
+			}
+			i++
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			cur.WriteByte(c)
+			i++
+			continue
+		}
+		if strings.HasPrefix(s[i:], sep) {
+			flush()
+			i += len(sep)
+			continue
+		}
+		cur.WriteByte(c)
+		i++
+	}
+	flush()
+	return out
+}
+
+// splitRedirect finds the first unquoted > or >> in a command line: index
+// of the operator, the file part after it, and whether it appends. Quoted
+// regions are data and never split.
+func splitRedirect(cmd string) (idx int, file string, appendMode bool) {
+	var quote byte
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			} else if c == '\\' && quote == '"' {
+				i++
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c == '>' {
+			if i+1 < len(cmd) && cmd[i+1] == '>' {
+				return i, cmd[i+2:], true
+			}
+			return i, cmd[i+1:], false
+		}
+	}
+	return -1, "", false
+}
+
 func splitPipeline(toks []string) [][]string {
 	var stages [][]string
 	cur := []string{}

@@ -31,7 +31,9 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
 | 缺口 5a:企业 VLAN | this commit | meridian 分 10/20 两段、网关 allow 规则、包路径双钩子、同 VLAN 不经路由 | §"缺口 5a" |
 | 缺口 3:NPC 记忆 | this commit | 每 handle 事件环+有向 standing 七处钩子、聊天喊话/collector 拒收/`people` 三处读回 | §"缺口 3" |
@@ -2469,3 +2471,43 @@ Meridian 原来是扁平 `/24`：同一子网即同一 LAN，所谓隔离只剩�
 五个：建连+RIR 全量；停 bird 全对端撤回（ping/Dial/RIB 同报，mirror
 直连幸存，重启恢复）；单 AS OFFLINE 只死自家前缀；删邻居永不建连；
 traceroute 带 AS。`gofmt` 空、`vet` 干净、全量绿（327 pass，0 fail）。
+
+# 缺口 5c:MariaDB（§52 管理数据库）
+
+装出来的数据库，不是装饰：`mariadb` 包（debian 仓库，二进制+配置+
+unit+开机自启）落服务 3306，表是 `/var/lib/mysql/<db>/` 下的
+`.schema`+`.rows` 真文件（备份/证据/满盘全跟走），SQL 现解析，权限走
+设备账号+库 owner。
+
+## 模型
+
+* `core/db.go`：SQL 子集（SHOW/CREATE/DROP 库表、USE、INSERT、
+  SELECT 列/WHERE(= != <> < > <= >= LIKE, AND)/LIMIT、UPDATE、DELETE），
+  存的全文本；含 tab/换行的值写时拒绝（格式存不下）；MySQL 码报错
+  （1146/1054/1044/1049/1064…）；比较数值感知（"80">"1000" 的字符串
+  谎言专修过）。
+* 账号：无第二套账。本地默认会话用户（socket 信任），替身/远程一律口
+  令走设备 `CheckPassword`；库级授权=创建者或 root。远程 Dial 3306
+  照常过防火墙（家 DROP 默认关，VPS ACCEPT 开——装完即暴露面，扫描器
+  本来就扫 3306，弱口令会真倒）。
+* `mysql [-h] [-u [-p]] [-e] [DB]` + 交互 REPL（`use` 跨行保持）；
+  `mysql` 进 pkgBinaries：没装就是 command not found。失败登录记
+  NoteAuthFail→fail2ban 照吃。
+* 范围声明：TEXT 存储、无 GRANT（owner+root 足矣）、AND-only WHERE、
+  无 JOIN/事务/复制。
+
+## 顺手修的 shell 语法 bug（阻塞级）
+
+SQL 是照妖镜，照出两个引号无视：
+1. `execOne` 重定向裸扫：`WHERE price > 1000` 被当写文件。改引号感知
+   `splitRedirect`。
+2. `ExecLineStatus` 的 `;`/`&&` 裸切：`-e 'USE x; SHOW TABLES'` 后半截
+   当命令执行。改 `splitUnquoted`（pipeline 本就 token 级，无恙）。
+   另：batch 出错曾静默（只回码），现打印 ERROR。
+均有回归测试（`TestQuotedSeparatorsAreData` + 既有 pipeline/printf/CRLF 全过）。
+
+## 测试与验证
+
+六个：装前无命令；CRUD 全链+错误码+USE+文件落盘；跨账号拒绝/root
+放行；远端 TCP（未装/错口令/停服三拒+文件落远端）；过存档；引号分隔
+回归。`gofmt` 空、`vet` 干净、全量绿（333 pass，0 fail）。
