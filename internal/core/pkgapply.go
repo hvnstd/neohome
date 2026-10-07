@@ -199,6 +199,38 @@ func (w *World) InstallRendered(d *Device, r *Repo, p *VPkg) ([]string, error) {
 	return actions, nil
 }
 
+// InstallCommunity installs an unsigned payload from a file: the community
+// path. Dependencies must already be present (like dpkg -i: no fetching),
+// provenance records the file it came from, and the world logs the unsigned
+// install the way it logs every other third-party risk (§11). Same apply
+// path as everything else, so removal and services behave identically.
+func (w *World) InstallCommunity(d *Device, u *User, p *VPkg, file string) ([]string, error) {
+	if p == nil || p.Name == "" {
+		return nil, fmt.Errorf("empty package")
+	}
+	if d.Installed[p.Name] != nil {
+		return nil, fmt.Errorf("%s is already installed", p.Name)
+	}
+	for _, dep := range p.Depends {
+		name := dep
+		if i := strings.IndexAny(name, " ("); i >= 0 {
+			name = strings.TrimSpace(name[:i])
+		}
+		if d.Installed[name] == nil {
+			return nil, pkgErr("MISSING_DEP", "%s depends on %s, which is not installed", p.Name, name)
+		}
+	}
+	if d.InstalledFrom == nil {
+		d.InstalledFrom = map[string]string{}
+	}
+	d.InstalledFrom[p.Name] = "community:" + file
+	actions := w.ApplyPackage(d, p)
+	d.Logf("warn", "pkg", "installed unsigned community package %s %s from %s", p.Name, p.Version, file)
+	w.AddEvent(d.ID, "warn", "pkg", "%s installed unsigned %s from %s", d.Hostname, p.Name, file)
+	out := []string{"WARNING: " + p.Name + " is unsigned (community package, no signature check possible)"}
+	return append(out, actions...), nil
+}
+
 // ---- removal ----
 
 // RemoveCheck answers whether a package can be removed: something else

@@ -31,12 +31,14 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| P3a:社区软件包 | this commit | pkg export/import+InstallCommunity+来源命名+风险双记 | §"P3a" |
 | 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
 | 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
 | 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| P3a:社区软件包 | this commit | pkg export/import+InstallCommunity+来源命名+风险双记 | §"P3a" |
 | 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
 | 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
 | 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
@@ -2634,3 +2636,23 @@ Mission 模板有了结构，缺的是人人可写的笔：`job new` 发任务�
 四个：三机 IP/扣费/NPC 名单/BBS 帖/开箱即解；零转发+口令安全+手机注
 册；四 lot 上限+列表+穷人拒；双世界同街道+过存档续编不重号。`gofmt`
 空、`vet` 干净、全量绿（350 pass，0 fail）。
+
+# P3a:社区软件包（Phase 3）
+
+仓库之外的软件怎么流动：装好的包渲染成文本负载（文件，可摆渡、可买卖、
+可 scp），别处解析装回——无签名、查依赖、记来源、嚷嚷风险，全走同一
+apply 路径（卸载/服务行为一致）。
+
+## 模型
+
+* `pkg export NAME [FILE]`：已装包→`RenderPayload`（源仓库决定架构行，
+  找不到源按本机发行版兜底）→写文件。`pkg import FILE`：root 专用，
+  解析→`InstallCommunity`（已装拒绝、缺依赖点名如 dpkg -i、来源记
+  `community:FILE`、警告+syslog 双记 unsigned）。
+* 无第二信任源：依赖必须已在（不拉取），版本号只展示不校验（注明）。
+
+## 测试与验证
+
+三个：导出文件带包名+缺包拒绝；跨机字节一致+来源命名+风险落盘+重装
+拒绝+非 root 拒绝；垃圾/缺依赖拒绝且零半装。`gofmt` 空、`vet` 干净、
+全量绿（353 pass，0 fail）。

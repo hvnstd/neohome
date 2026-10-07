@@ -24,9 +24,117 @@ func init() {
 	}{
 		{"apt", cmdApt}, {"apk", cmdApk}, {"pacman", cmdPacman},
 		{"dnf", cmdDnf}, {"opkg", cmdOpkg}, {"mirror-sync", cmdMirrorSync},
+		{"pkg", cmdPkg},
 	} {
 		builtinTable[e.name] = e.fn
 	}
+}
+
+// ---- community packages: export installed software, import payload files ----
+
+// pkg export/import move software as files: an installed package renders to
+// the community payload format (shareable over dead drops, the bazaar, or
+// plain scp), and importing parses and installs it through the same apply
+// path as repository software — unsigned, dependency-checked, logged.
+func cmdPkg(s *Shell, args []string) int {
+	if len(args) == 0 {
+		s.errf("usage: pkg export NAME [FILE] | pkg import FILE")
+		return 1
+	}
+	switch args[0] {
+	case "export":
+		return pkgExport(s, args[1:])
+	case "import":
+		return pkgImport(s, args[1:])
+	}
+	s.errf("usage: pkg export NAME [FILE] | pkg import FILE")
+	return 1
+}
+
+func pkgExport(s *Shell, args []string) int {
+	if len(args) < 1 || len(args) > 2 {
+		s.errf("usage: pkg export NAME [FILE]")
+		return 1
+	}
+	p := s.Dev.Installed[args[0]]
+	if p == nil {
+		s.errf("pkg: %s is not installed here", args[0])
+		return 1
+	}
+	r := &core.Repo{Distro: distroKey(s.Dev)}
+	if src, ok := s.Dev.InstalledFrom[args[0]]; ok {
+		if repo := s.W.Repos[src]; repo != nil {
+			r = repo
+		}
+	}
+	body := core.RenderPayload(r, p)
+	dst := args[0] + ".npkg"
+	if len(args) == 2 {
+		dst = args[1]
+	}
+	if err := s.Dev.WriteGuest(s.abs(dst), []byte(body), s.User); err != nil {
+		s.errf("pkg: %v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "exported %s %s to %s (%d bytes, shareable)\n", p.Name, p.Version, dst, len(body))
+	return 0
+}
+
+func pkgImport(s *Shell, args []string) int {
+	if len(args) != 1 {
+		s.errf("usage: pkg import FILE")
+		return 1
+	}
+	if s.User.UID != 0 {
+		s.errf("pkg: importing software needs root")
+		return 1
+	}
+	data, exists, allowed := s.Dev.FS.ReadPathAs(s.abs(args[0]), s.User)
+	if !exists {
+		s.errf("pkg: %s: No such file", args[0])
+		return 1
+	}
+	if !allowed {
+		s.errf("pkg: %s: Permission denied", args[0])
+		return 1
+	}
+	p, err := core.ParsePayload(string(data))
+	if err != nil {
+		s.errf("pkg: %s: not a package (%v)", args[0], err)
+		return 1
+	}
+	actions, err := s.W.InstallCommunity(s.Dev, s.User, p, args[0])
+	if err != nil {
+		if perr, ok := err.(*core.PackageError); ok {
+			mgrErr(s, core.ManagerFor(s.Dev), perr)
+			return 1
+		}
+		s.errf("pkg: %v", err)
+		return 1
+	}
+	for _, a := range actions {
+		fmt.Fprintf(s.Out, "%s\n", a)
+	}
+	return 0
+}
+
+// distroKey maps a device to its repository family for rendering.
+func distroKey(d *core.Device) string {
+	if m := core.ManagerFor(d); m != "" {
+		switch m {
+		case "apt":
+			return "debian"
+		case "apk":
+			return "alpine"
+		case "pacman":
+			return "arch"
+		case "dnf":
+			return "fedora"
+		case "opkg":
+			return "openwrt"
+		}
+	}
+	return "debian"
 }
 
 // ---- manager voice ----
