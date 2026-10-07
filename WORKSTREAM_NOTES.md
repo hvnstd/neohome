@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| P1 补完 | this commit | Phase 1's three functional gaps: `vm snapshot/snapshots/restore` on hypervisor guests (plus the save-with-a-guest crash), phone battery wired into `Powered()` with cross-machine `phone charge` as the rescue, and cron skipping dark machines | §"P1 补完" |
 
 Verification status at tip: full `go test ./...` green (~182 tests, 29 files),
 `go vet` clean, `gofmt -l` empty across the tree (the pre-existing debt in
@@ -1925,3 +1926,71 @@ suite coverage is the verification.
   be its own workstream.
 * **RDP as a service**: unchanged from WS-1.14 — no Windows stack to answer
   it, the chain is identical over ssh.
+
+# P1 补完 — VM snapshots, phone power, cron respects power
+
+Phase 1's one-word list was almost done; three functional gaps were not.
+Each is closed here with its recovery half, and each fix is covered by the
+normal path, a boundary and a recovery in tests.
+
+## `vm snapshot` — the hypervisor half of "Snapshots"
+
+Phase 1 says Snapshots; only the provider record had them (`vps snapshot`).
+A hypervisor guest had no rollback at all — and worse, saving a world with a
+guest present recursed (`VM.Host`/`VM.W` drag the whole world into every
+guest) until the process died, which would have taken the live server down
+with it on the next scheduled save.
+
+* `VMSnapshot` (`internal/core/vm.go`) mirrors the provider's `Snapshot`
+  shape (FS, users, installed, provenance) and lives on the guest.
+  `World.VMSnapshot` copies a live guest; `World.VMRestore` replaces the disk
+  wholesale on a stopped guest only, then leaves it stopped — starting it is
+  a separate act. Cap 8, auto `snap-N` names, duplicate names refused.
+* `VM.GobEncode`/`GobDecode` carry data only; `LoadWorld` (`resolver.go`)
+  re-links `Host`/`W` the way `device.W` is re-linked. Old saves cannot
+  contain a guest (writing one was what crashed), so there is no backcompat
+  case to carry.
+* Shell: `vm snapshot NAME [SNAP]`, `vm snapshots NAME`, `vm restore NAME
+  SNAP` (`internal/shell/vm_cmds.go`), same contract words as `vps`.
+* `tests/vm_test.go` (three tests): live snapshot + stopped rollback (new
+  file gone, seeded file back, still stopped, boots after), restore refused
+  while running (checked before the snapshot lookup) plus duplicate names,
+  and save/load round-trip of guest + snapshot with a working restore
+  afterwards — the round-trip is also the regression test for the crash.
+
+## Phone power — a dead phone is off, and never a one-way door
+
+The SMS layer already drained the battery, stopped sshd and refused the
+spool at zero — but `Powered()` disagreed, so cron kept running and every
+error said "up". Meanwhile `phone charge` only ran on the phone itself,
+which a dead phone cannot reach.
+
+* `phoneDead(d)` (`internal/core/power.go`) is the one question — a tracked
+  phone at zero. `Powered()` returns false for it; `UnavailableReason()`
+  says "battery empty". Reaching zero also drops `NetUp` (like every other
+  power-off), charging restores it — the packet path and the shell gate read
+  the same fact.
+* `CronTick` skips unpowered devices: a dark machine runs no jobs, and the
+  daemon re-arms from boot instead of stampeding the backlog. This also
+  closes the same hole for power-cut PCs, which kept running their crontabs
+  in the dark.
+* `phone charge` works from any of the owner's machines (`PhoneFor`), the
+  way `power` verbs are hands rather than shell commands. `phone status`
+  stays on the phone itself.
+* Tests: `TestPhoneBatteryLifecycle` (updated — it used to charge from the
+  dead phone, which is exactly the one-way door) now pins dark/cause/rescue
+  from the PC, and `TestCronDoesNotFireOnADarkMachine` pins silence while
+  dark plus exactly-once firing on the next minute after restore.
+
+## Verified
+
+`gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
+(271 pass, 0 fail). No new live-verify script: no entry or networking path
+was touched.
+
+## Not implemented on purpose
+
+* **VM ownership checks**: `vm start/stop/destroy` never checked owners, so
+  the new verbs do not either — per-guest ACLs would be their own
+  workstream, not a silent asymmetry between verbs.
+* **A new-disk mechanic**: unchanged — see the wear section above.
