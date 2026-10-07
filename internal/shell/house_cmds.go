@@ -513,8 +513,11 @@ func cmdLaptopctl(s *Shell, args []string) int {
 
 func cmdBackup(s *Shell, args []string) int {
 	if len(args) == 0 {
-		s.errf("usage: backup run [PATH] | backup status")
+		s.errf("usage: backup run [PATH] | backup status | backup init [--repo SPEC] [--schedule CRON] [--tree PATH]")
 		return 1
+	}
+	if args[0] == "init" {
+		return cmdBackupInit(s, args[1:])
 	}
 	nas := nasFor(s)
 	if nas == nil {
@@ -543,7 +546,7 @@ func cmdBackup(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "backups on %s (%s):\n%s", nas.Hostname, core.BackupDir, string(data))
 		return 0
 	}
-	s.errf("usage: backup run [PATH] | backup status")
+	s.errf("usage: backup run [PATH] | backup status | backup init [--repo SPEC] [--schedule CRON] [--tree PATH]")
 	return 1
 }
 

@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| P3b:builders | this commit | server build 四角色+回滚、backup init 五步+重入认旧仓 | §"P3b" |
 | P3a:社区软件包 | this commit | pkg export/import+InstallCommunity+来源命名+风险双记 | §"P3a" |
 | 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
 | 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
@@ -38,6 +39,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| P3b:builders | this commit | server build 四角色+回滚、backup init 五步+重入认旧仓 | §"P3b" |
 | P3a:社区软件包 | this commit | pkg export/import+InstallCommunity+来源命名+风险双记 | §"P3a" |
 | 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
 | 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
@@ -2656,3 +2658,35 @@ apply 路径（卸载/服务行为一致）。
 三个：导出文件带包名+缺包拒绝；跨机字节一致+来源命名+风险落盘+重装
 拒绝+非 root 拒绝；垃圾/缺依赖拒绝且零半装。`gofmt` 空、`vet` 干净、
 全量绿（353 pass，0 fail）。
+
+# P3b: builders（Server + Backup）
+
+向导只许干实事：每一步都是玩家动词经 root 子 shell 跑出来，一步一验，
+败了按单回滚。`server build` 立角色服务（web/mail/ftp/db），`backup
+init` 接 restic 定时。
+
+## 模型
+
+* `server build ROLE`：查发行版有 manager→update→逐包装（已装跳过）→
+  起服务（已跑跳过）→Dial 自家端口验证（4/4）。败则逆序 `RemovePkg`
+  已装项并明示。角色=包+服务+端口表（nginx/opensmtpd/vsftpd/
+  mariadb）；未知发行版/角色诚实拒绝。`backup` 主命令撞名已存在（NAS
+  备份），新活并作 `backup init` 子命令，不抢注册——init 顺序定胜负的
+  仗不打。
+* `backup init [--repo SPEC] [--schedule CRON] [--tree PATH]`：装
+  restic→定仓库（flag 优先，否则沿用包里配好的 env 文件）→init（不在
+  就建，在就认；远端不通此处即 honestly fail）→cron.d 经 cron 自家解
+  析器验过再写→首备→快照列表验货。默认 nightly 3 点、备 /home。
+* 回滚只拆本轮装的；验证失败同样回滚（满盘装 db 即测）。
+
+## 测试与验证
+
+三个：web 全链+幂等+非 root/坏角色拒绝；满盘失败零半装+腾地方即好；
+backup 五步+重入认旧仓+坏 schedule 先拒。`gofmt` 空、`vet` 干净、
+全量绿（356 pass，0 fail）。
+
+## Not implemented on purpose
+
+* **Mirror Builder**：目录即单服务主机模型（Repo.DeviceID 一树一主），
+  真多镜像要改 catalogue 结构——动静超出 builder 本批；operator 现有
+  mirror-sync/status/cron 已够用，缺的是文档不是动词。
