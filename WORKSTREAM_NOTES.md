@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 3:NPC 记忆 | this commit | 每 handle 事件环+有向 standing 七处钩子、聊天喊话/collector 拒收/`people` 三处读回 | §"缺口 3" |
 | 缺口 4:密钥+配额 | this commit | 公钥文件匹配+ssh-keygen+种子钥匙去重、Assistant Quota 进调度/swap/OOM/显示、suid 不适用结论 | §"缺口 4" |
 | 缺口 6:四小件 | this commit | sftp -r 双向树、bbs mail/inbox、私信0600、git 分支+FF合并、imaps:993 证书握手 | §"缺口 6" |
 | 缺口 1:身份+家 | this commit | useradd/userdel/usermod/groupadd/groups/chpasswd + /etc/group + GID 规则 + Household 一等实体 | §"缺口 1" |
@@ -2362,3 +2363,40 @@ keys 三个（免密+文件为证+keygen 全链，含 sftp 首行不被口令吞
 quota 四个（512 配额 700M 照 OOM 不误、share 0.25、校验与陌生人、
 过存档）；顺带旧 `TestAssistantNodeIsReachableByKeyOnly` 一字未改全过
 （拓扑保底+陌生机器继续拒绝）。`gofmt` 空、`vet` 干净、全量绿（310 pass，0 fail）。
+
+# 缺口 3:NPC 记忆与关系（§20/§21）
+
+证据是全局的，记忆是私人的：点名道姓的每一次接触落进当事人的备忘，
+重复接触挪动双向 standing（±100）。三处读回——NPC 在频道里提旧账、
+market collector 不收仇家货、`people` 显示所有关系——这就是记忆为真、
+而不是日记的原因。
+
+## 模型
+
+`NPCMem`（每 handle 事件环，上限 100，老掉）+ `Standings`（有向分： A
+记 B 的账只动 A→B；怕人与被人怕是两回事）。`personOf` 定谁算人：
+NPCNames+Players，聊天 nick 去 `-bot`；scan-host 之类非人可当 actor 被
+记住，不持分。分值调用点显式给，不做文本推断：登录失败 -3（成功记
+0，只留事实）、sweep -5、成交双向 +4、给 NPC 干完活双向 +5、exploit
+-10、悬赏兑现双向 +6。
+
+钩子七处：`AttackLogin` 成败、`ScanTarget` 落地、`MarketBuy` 双分支、
+`PayJob`（legacy 按 client、org 按 founder）、`payStage` 完结、
+`applyEffect` 成功。调用点只管记住，`Remember` 管存在与钳制。
+
+读回：`grudgeRecall`（最恨且 24 sim-h 内有新账才在默认分支开口，
+不碰已有关键词回复的断言）、collector 跳过 standing≤-50 的卖家并记
+log、`people [NAME]`（名册+对方对你的分+对方最后一条记忆）。
+
+## 有向化修 bug
+
+初版 standing 无向：交易双向各 +4 落到同一个 key 上变成 +8。改有向后
+`people` 的图例也得跟着转（`!`/`+` 看对方对你的分），测试里抓到并修了。
+
+## 测试与验证
+
+七个：失败登录三连（-9+三条记忆，成功登录只记不挪）；公网 VPS 被扫
+记住 actor 非人（有记忆无分）；黑市成交双向 +4；17 连敲后 collector
+拒收并记 log（顺带证明 seeded M-1/M-2 的清空买单不算数）；-30 及线喊
+话、无仇恨沉默；`people` 双向与图例；记忆与分过存档。`gofmt` 空、
+`vet` 干净、全量绿（317 pass，0 fail）。

@@ -444,6 +444,10 @@ func (w *World) NPCRespond(ch, from, text string) {
 	default:
 		if hour >= 22 || hour < 6 {
 			w.ChatPost(ch, "mira-9", "it is late here, whatever it is can probably wait until morning")
+		} else if nick, line := w.grudgeRecall(from); line != "" {
+			// a fresh grudge gets said out loud; old ones stay in the
+			// ledger (and in trade decisions) instead of the chat
+			w.ChatPost(ch, nick, line)
 		}
 	}
 }

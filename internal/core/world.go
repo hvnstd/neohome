@@ -59,6 +59,10 @@ type World struct {
 	// Households (§46): people and shared boxes per home. Shape owned by
 	// players.go; seeded for the founder, backfilled for older saves.
 	Households map[string]*Household
+	// NPC memory and standings (§20): per-handle event ring plus pairwise
+	// scores. Shape owned by npcmem.go; created lazily like everything else.
+	NPCMem    map[string]*NPCMem
+	Standings map[string]int
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int

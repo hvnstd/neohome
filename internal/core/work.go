@@ -283,6 +283,11 @@ func (w *World) PayJob(who, id string) (int64, string, error) {
 		delete(o.Hold, j.ID)
 		j.Done = true
 		w.AddEvent("world", "info", "org", "%s completed %s for %s: %d cents", who, j.ID, j.Org, j.Pay)
+		// a collected bounty builds the relationship with whoever posted it
+		if f := o.Founder; f != "" {
+			w.Remember(f, who, "bounty", fmt.Sprintf("%s collected %s", who, j.ID), 6)
+			w.Remember(who, f, "bounty", fmt.Sprintf("collected %s for %s", j.ID, f), 6)
+		}
 		w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s). balance %d.%02d",
 			j.Pay/100, j.Pay%100, j.ID, w.Bank.Accts[who].Balance/100, w.Bank.Accts[who].Balance%100))
 		return j.Pay, why, nil
@@ -296,6 +301,11 @@ func (w *World) PayJob(who, id string) (int64, string, error) {
 	acc.Balance += j.Pay
 	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: j.Pay, Memo: "job " + j.ID + " — " + j.Title, Balance: acc.Balance})
 	w.AddEvent("world", "info", "bank", "paid %s for %s: %d cents", who, j.ID, j.Pay)
+	// finished work for a named client builds the relationship both ways
+	if _, ok := w.personOf(j.Client); ok {
+		w.Remember(j.Client, who, "job", fmt.Sprintf("%s completed %s", who, j.ID), 5)
+		w.Remember(who, j.Client, "job", fmt.Sprintf("completed %s for %s", j.ID, j.Client), 5)
+	}
 	// banks text you when money arrives — a deposit receipt to the phone on
 	// file, and none when there is no phone
 	w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s). balance %d.%02d",
@@ -338,6 +348,10 @@ func (w *World) payStage(who string, j *Job) (int64, string) {
 		j.Done = true
 		why += " — " + j.ID + " complete"
 		w.AddEvent("world", "info", "jobs", "%s completed %s", who, j.ID)
+		if _, ok := w.personOf(j.Client); ok {
+			w.Remember(j.Client, who, "job", fmt.Sprintf("%s completed %s", who, j.ID), 5)
+			w.Remember(who, j.Client, "job", fmt.Sprintf("completed %s for %s", j.ID, j.Client), 5)
+		}
 	}
 	w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s %s). balance %d.%02d",
 		st.Pay/100, st.Pay%100, j.ID, st.Name, acc.Balance/100, acc.Balance%100))

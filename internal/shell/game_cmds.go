@@ -17,7 +17,7 @@ func init() {
 		{"su", cmdSu}, {"sudo", cmdSudo}, {"passwd", cmdPasswd},
 		{"useradd", cmdUseradd}, {"userdel", cmdUserdel}, {"usermod", cmdUsermod},
 		{"groupadd", cmdGroupadd}, {"groups", cmdGroups}, {"chpasswd", cmdChpasswd},
-		{"ssh-keygen", cmdKeygen},
+		{"ssh-keygen", cmdKeygen}, {"people", cmdPeople},
 		{"fastfetch", cmdFastfetch}, {"neofetch", cmdFastfetch},
 		{"who", cmdWho}, {"w", cmdWho}, {"clear", cmdClear}, {"history", cmdHistory},
 		{"exit", cmdExit}, {"logout", cmdExit},
@@ -430,6 +430,59 @@ func sshDirOf(p string) string {
 		return p[:i]
 	}
 	return "."
+}
+
+// people lists who the world knows by name and where you stand with each:
+// your pairwise score plus the last thing they remember involving anyone.
+// Strangers read zero with no history — the ledger starts empty, not hostile.
+func cmdPeople(s *Shell, args []string) int {
+	if len(args) > 1 {
+		s.errf("usage: people [NAME]")
+		return 1
+	}
+	show := func(name string) int {
+		kind := "npc"
+		if _, ok := s.W.Players[name]; ok {
+			kind = "player"
+		}
+		me := ""
+		if name == s.User.Name {
+			me = " (you)"
+		}
+		st := s.W.Standing(s.User.Name, name)
+		fmt.Fprintf(s.Out, "%-12s %-6s you→them %+d / them→you %+d%s\n",
+			name, kind, st, s.W.Standing(name, s.User.Name), me)
+		if last, ok := s.W.LastMemory(name); ok {
+			fmt.Fprintf(s.Out, "  last: %s — %s (%s, %+d)\n",
+				last.At.Format("2006-01-02 15:04"), last.Detail, last.Actor, last.Delta)
+		}
+		return 0
+	}
+	if len(args) == 1 {
+		found := false
+		for _, p := range s.W.People() {
+			if p == args[0] {
+				found = true
+			}
+		}
+		if !found {
+			s.errf("people: nobody by the name %q", args[0])
+			return 1
+		}
+		return show(args[0])
+	}
+	for _, p := range s.W.People() {
+		theirs := s.W.Standing(p, s.User.Name)
+		mark := " "
+		if theirs <= -30 {
+			mark = "!"
+		} else if theirs >= 20 {
+			mark = "+"
+		}
+		fmt.Fprintf(s.Out, "%s %-12s %+d\n", mark, p, theirs)
+	}
+	fmt.Fprintf(s.Out, "(! holds a grudge against you, + holds you in favour — see: people NAME)\n")
+	return 0
 }
 
 // passwd changes an account's password for real: the account record and

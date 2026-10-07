@@ -641,6 +641,8 @@ func cmdExploit(s *Shell, args []string) int {
 	// success still leaves evidence, proportional to how noisy the vuln is
 	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(dst), dst.ID,
 		"exploit "+chosen.ID+" succeeded", chosen.Detection)
+	// and the target's owner remembers who did it
+	s.W.Remember(dst.Owner, s.User.Name, "exploit", "exploit "+chosen.ID+" succeeded", -10)
 	fmt.Fprintf(s.Out, "[!] this was logged on the target (detection weight %d)\n", chosen.Detection)
 	return 0
 }
@@ -1517,7 +1519,7 @@ Network:                  ip ifconfig route ss ping traceroute dig nslookup curl
 Services & packages:      systemctl service apt apk pacman dnf
 Remote:                   ssh scp sftp ftp telnet     Sessions: tmux screen
 System info:              fastfetch uname hostname uptime whoami id env free lscpu lsblk dmesg
-Accounts & disks:         passwd useradd userdel usermod groupadd groups chpasswd smartctl fsck
+Accounts & disks:         passwd useradd userdel usermod groupadd groups chpasswd people smartctl fsck
 
 The world layer:
   job [list|show ID|accept ID|pay ID|advance ID|delegate ID]   job board — pays only against real world state

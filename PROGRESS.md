@@ -39,7 +39,7 @@
 | 十七 | 资源管理 | 已完成 | CPU 分享/RAM→swap→OOM/满盘/磨损（SMART+fsck）/有限进程表（WS-1.11+后续） |
 | 十八 | screen/tmux | 已完成 | 真进程+detach 重连 |
 | 十九 | 通信系统 | 已完成 | 13 项全通+黑市+BBS私信+sftp -r+IMAPS；git 分支见§29 |
-| 二十 | NPC 世界 | 部分 | 账号/钱包/设备/日程/加固/报警齐；**缺记忆与关系**（`npc.go` 无 memory/relation） |
+| 二十 | NPC 世界 | 已完成 | 记忆环+有向 standing+七处钩子+三处读回（聊天/collector/`people`） |
 | 二十一 | NPC AI 架构 | 部分 | 世界模拟 ✓ +  agent 巡逻/日程/加固（规则层）；LLM 层只有 MCP 透传，无“需决策时唤醒”调度 |
 | 二十二 | Assistant | 已完成 | 忠诚+能力受限（CPU/权限/凭据/知识/网络/时间）+授权执行 |
 | 二十三 | Assistant 成长 | 已完成 | skills 计数+train 方向+状态文本体现 |
@@ -78,7 +78,7 @@
 
 1. ~~`useradd/userdel/groupadd` + Household 一等实体~~ done（本批）
 2. Game Bytecode VM（§8，独立大件：受控运行时+capability API）
-3. NPC 记忆与关系（§20/§21，事件记忆+关系图+LLM 唤醒调度）
+3. ~~NPC 记忆与关系~~ done（本批；§21 的 LLM 唤醒调度仍无，规则层即 agent 层）
 4. ~~Assistant 配额 + suid/keys~~ done（本批）
 5. VLAN + BGP 过程 + 数据库（§31/§38/§52，大件，可拆）
 6. ~~BBS 私信 / git 分支合并 / sftp -r / IMAPS~~ done（本批；真 3-way 合并仍不做）

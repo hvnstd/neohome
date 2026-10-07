@@ -301,6 +301,9 @@ func (w *World) MarketBuy(buyer, id string) (*Listing, string, error) {
 		w.Record("market", buyer, bazaar.SvcAddr(), l.Host,
 			fmt.Sprintf("bought credential %s@%s (%s) for %d cents", l.Account, dst.Hostname, l.ID, l.Price), 4)
 		w.AddEvent(m.BazaarID, "warn", "market", "%s bought %s (%s@%s)", buyer, l.ID, l.Account, dst.Hostname)
+		// a completed trade builds the relationship both ways
+		w.Remember(l.Seller, buyer, "trade", fmt.Sprintf("sold %s to %s", l.ID, buyer), 4)
+		w.Remember(buyer, l.Seller, "trade", fmt.Sprintf("bought %s from %s", l.ID, l.Seller), 4)
 		return l, secret, nil
 	case "file":
 		data, ok := bazaar.FS.Read(l.Path)
@@ -333,6 +336,8 @@ func (w *World) MarketBuy(buyer, id string) (*Listing, string, error) {
 			l.ID, buyer, l.Price, fee, l.Path)
 		w.Record("market", buyer, bazaar.SvcAddr(), m.BazaarID,
 			fmt.Sprintf("bought file %s (%s) for %d cents", l.Path, l.ID, l.Price), 3)
+		w.Remember(l.Seller, buyer, "trade", fmt.Sprintf("sold %s to %s", l.ID, buyer), 4)
+		w.Remember(buyer, l.Seller, "trade", fmt.Sprintf("bought %s from %s", l.ID, l.Seller), 4)
 		return l, l.Path, nil
 	}
 	return nil, "", fmt.Errorf("unknown goods: %s", l.Kind)
@@ -463,8 +468,15 @@ func (w *World) BazaarTick() {
 		return
 	}
 	var pick *Listing
+	skipped := 0
 	for _, l := range w.MarketLive() {
 		if l.Seller == "mara" {
+			continue
+		}
+		// attacked once too often, and the collector stops buying your
+		// drops: grudges have economic consequences
+		if w.Standing("mara", l.Seller) <= tradeFloor {
+			skipped++
 			continue
 		}
 		if pick == nil || l.Price < pick.Price {
@@ -472,6 +484,11 @@ func (w *World) BazaarTick() {
 		}
 	}
 	if pick == nil {
+		if skipped > 0 {
+			if bazaar := w.Devices[m.BazaarID]; bazaar != nil {
+				bazaar.Logf("info", "marketd", "mara refused %d listing(s) from known attackers", skipped)
+			}
+		}
 		return
 	}
 	if acc := w.Bank.Accts["mara"]; acc == nil || acc.Balance < pick.Price {

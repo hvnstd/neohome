@@ -111,6 +111,9 @@ func (w *World) ScanTarget(sc *Device, dst *Device) {
 	if len(dst.Sec().Flows) == before {
 		return // nothing reached the machine at all: a black hole is not a target
 	}
+	// a sweep that lands is remembered by whoever owns the box — the
+	// difference between background noise and a visitor is one entry
+	w.Remember(dst.Owner, actorName(sc), "scan", fmt.Sprintf("port sweep from %s", sc.Hostname), -5)
 	if sshLands == nil {
 		return
 	}
@@ -162,6 +165,9 @@ func AttackLogin(w *World, src, dst *Device, user, pass, proto string, port int)
 	if u := dst.FindUser(user); u.CheckPassword(pass) {
 		dst.Logf("notice", svc.Name, "accepted password for %s from %s (%s)", user, src.Hostname, srcIP)
 		w.Record("auth", src.Owner, srcIP, dst.ID, fmt.Sprintf("%s login %s@%s", proto, user, dst.Hostname), 3)
+		// a working login is remembered neutrally: who was where is a fact
+		// worth recalling, not yet a relationship
+		w.Remember(dst.Owner, actor, "auth-ok", fmt.Sprintf("%s login %s@%s", proto, user, dst.Hostname), 0)
 		// §36: a working credential on a machine the internet reached is not a
 		// log line, it is an intrusion. Only the world's own attacker acts on
 		// it — a player's session is a session, and the credential-attempt
@@ -174,6 +180,8 @@ func AttackLogin(w *World, src, dst *Device, user, pass, proto string, port int)
 	dst.Logf("notice", svc.Name, "failed password for %s from %s (%s)", user, src.Hostname, srcIP)
 	dst.NoteAuthFail(srcIP, src.Hostname, proto+" password for "+user)
 	w.Record("auth", actor, srcIP, dst.ID, fmt.Sprintf("failed %s login as %s", proto, user), 3)
+	// people remember who knocks: three failures are a pattern, not noise
+	w.Remember(dst.Owner, actor, "auth-fail", fmt.Sprintf("failed %s login as %s", proto, user), -3)
 	return false
 }
 
@@ -184,6 +192,18 @@ func containsInt(list []int, v int) bool {
 		}
 	}
 	return false
+}
+
+// actorName is who an act is attributed to: the owner, or the hostname when
+// nobody owns the box (the scanner's case).
+func actorName(d *Device) string {
+	if d == nil {
+		return "unknown"
+	}
+	if d.Owner != "" {
+		return d.Owner
+	}
+	return d.Hostname
 }
 
 // WANIP is this device's public address, if it has one.
