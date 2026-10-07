@@ -14,6 +14,7 @@ import (
 
 func init() {
 	builtinTable["vm"] = cmdVM
+	builtinTable["worldgen"] = cmdWorldgen
 }
 
 func cmdVM(s *Shell, args []string) int {
@@ -50,6 +51,52 @@ func cmdVM(s *Shell, args []string) int {
 	}
 	s.errf("usage: vm [list|top|create NAME [--cpu N] [--mem MB] [--disk MB]|start|stop|restart|destroy NAME|snapshot NAME [SNAP]|snapshots NAME|restore NAME SNAP|console NAME|host]")
 	return 1
+}
+
+// worldgen develops the world itself: routine NPC housing on the next free
+// street, paid by the developer. Generated boxes are ordinary devices —
+// same DNS, same firewall defaults, same safety (nothing forwarded).
+func cmdWorldgen(s *Shell, args []string) int {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "", "list", "ls":
+		if len(s.W.GenNames) == 0 {
+			fmt.Fprintln(s.Out, "no generated streets yet — develop one with: worldgen household ($100)")
+			return 0
+		}
+		fmt.Fprintf(s.Out, "%-10s %-14s %s\n", "TENANT", "STREET", "ROUTER")
+		for _, name := range s.W.GenNames {
+			for _, id := range s.W.Order {
+				d := s.W.Devices[id]
+				if d != nil && d.Owner == name && d.Profile == "router" {
+					fmt.Fprintf(s.Out, "%-10s %-14s %s\n", name, wanBaseOf(d), d.Hostname)
+				}
+			}
+		}
+		return 0
+	case "household", "house", "new":
+		name, err := s.W.GenHousehold(s.User.Name)
+		if err != nil {
+			s.errf("worldgen: %v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "developed a household for %s ($100) — router, pc, phone, all wired\n", name)
+		return 0
+	}
+	s.errf("usage: worldgen [list|household]")
+	return 1
+}
+
+func wanBaseOf(d *core.Device) string {
+	for _, i := range d.Ifaces {
+		if i.Zone == "lan" && i.CIDR != "" {
+			return i.CIDR
+		}
+	}
+	return "-"
 }
 
 // hypervisorFor picks the machine a guest should be created on: the one the

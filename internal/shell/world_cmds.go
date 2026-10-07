@@ -1734,6 +1734,7 @@ The world layer:
   vps [list|regions|create|show|start|stop|reboot]  rent a real node: choose a region and an
   vps [reinstall|console|resize|disk]               OS, then power it, rebuild it, resize it,
   vps [snapshot|snapshots|restore|rdns|ip]          snapshot it or roll it back
+  worldgen [list|household]                     develop routine NPC housing ($100 a lot)
 
   recon <host>      what is actually reachable + what is actually vulnerable
   scan <host|net>   port scan (logged on the target — it is not free)

@@ -83,5 +83,5 @@
 5. ~~VLAN + BGP 过程 + 数据库~~ done（本批三件；GRANT/JOIN/复制不做）
 6. ~~BBS 私信 / git 分支合并 / sftp -r / IMAPS~~ done（本批；真 3-way 合并仍不做）
 7. ~~地下室 vault~~ done（本批）
-8. 内容工具链：任务编辑器+社区格式 done（本批）；世界生成器待办
+8. ~~内容工具链~~ done（生成器 routine 民宅确定生成；编辑器=job new；格式=mission 文本）
 9. Phase 3：Web 客户端/可视化/多实例/调度（§50，大件）

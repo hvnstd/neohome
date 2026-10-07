@@ -66,6 +66,10 @@ type World struct {
 	// Bytecode background states (§8): pid-keyed resumable programs. Shape
 	// owned by bytecode.go; plain data round-trips through gob.
 	BCStates map[int]*BCState
+	// World generator (§44): development counter plus generated household
+	// names. Plain data; the households themselves are ordinary devices.
+	GenSeq   int
+	GenNames []string
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int

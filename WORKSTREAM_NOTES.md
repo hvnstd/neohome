@@ -31,11 +31,13 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
 | 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
 | 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| 缺口 8b:世界生成 | this commit | NPC民宅确定生成+DNS自带+零转发+BBS报到 | §"缺口 8b" |
 | 缺口 8a:任务编撰 | this commit | job new/export/import/cancel+押金托管+社区文本格式 | §"缺口 8a" |
 | 缺口 7:vault | this commit | 零网卡离线server+console crash cart+USB摆渡+cp系跨mount修正 | §"缺口 7" |
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
@@ -2607,3 +2609,28 @@ Mission 模板有了结构，缺的是人人可写的笔：`job new` 发任务�
 三个：押金不足/坏验拒绝→押足建单→总额守恒→兑现放款（hold 清零）；
 取消退款+已读 cancelled+已接保护；导出带段→导入换号带押→坏文本两
 拒零入库。`gofmt` 空、`vet` 干净、全量绿（346 pass，0 fail）。
+
+# 缺口 8b:世界生成器（§44，新街道）
+
+手写的归手写，生成器只盖 routine 民宅：NPC 一家（路由公网+PC+电话+
+租客）落上下一个空闲 10.88.x.0/24，DNS 自带能解（DHCP 学来的上游，
+无开局故障），默认零转发（§14 对生成盒与种子盒一视同仁），租客进名
+单+BBS 报到帖。全程确定：名单轮转、口令哈希派生、子网最低空闲——同
+世界同街道，无骰子。
+
+## 模型
+
+* `GenHousehold(payer)`（`core/worldgen.go`）：$100 开发费、四个 lot
+  （.2–.5）封顶、穷人拒单。`AllocNPCSubnet` 归 addr.go 管（数字一个主
+  人），全 IPMap 碰撞校验。
+* 租客口令派生（randPass），撞不上扫描器名单——世界开局不自己拥有自
+  己；手机进 SMS 注册（号段+电量）+通讯录；BBS 帖子即社会入场。
+* 路由 hosts 后补（seedFS 跑在 pc/phone 之前）、三机 resolv 指自家网
+  关——顺序坑，测试锁 DNS 实解。
+* `worldgen household|list`（vm_cmds，供给簇）。
+
+## 测试与验证
+
+四个：三机 IP/扣费/NPC 名单/BBS 帖/开箱即解；零转发+口令安全+手机注
+册；四 lot 上限+列表+穷人拒；双世界同街道+过存档续编不重号。`gofmt`
+空、`vet` 干净、全量绿（350 pass，0 fail）。
