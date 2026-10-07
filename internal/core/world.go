@@ -63,6 +63,9 @@ type World struct {
 	// scores. Shape owned by npcmem.go; created lazily like everything else.
 	NPCMem    map[string]*NPCMem
 	Standings map[string]int
+	// Bytecode background states (§8): pid-keyed resumable programs. Shape
+	// owned by bytecode.go; plain data round-trips through gob.
+	BCStates map[int]*BCState
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int

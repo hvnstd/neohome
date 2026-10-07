@@ -27,7 +27,7 @@
 | 五 | BusyBox | 已完成 | 38-applet 门控（`shell.go:394` + `APPLETS.txt`），ash 设备隔离 |
 | 六 | fastfetch | 已完成 | 全读真实状态，区分设备 |
 | 七 | 虚拟软件/架构 | 已完成 | Virtual Package/Binary，安装落文件/用户/服务/进程/端口 |
-| 八 | 程序执行三类 | 部分 | Builtin ✓ / Game Shell Script ✓ / **Game Bytecode VM 未开始** |
+| 八 | 程序执行三类 | 已完成 | brun+SPAWN+fuel+文件/socket能力（.py 前端仍无，PostInst 已改诚实） |
 | 九 | 软件包系统 | 已完成 | 名/版/架构/依赖/文件/服务/签名全建模 |
 | 十 | APT/仓库/镜像 | 已完成 | 六发行版+签名+SYNCED/BEHIND/OFFLINE/PARTIAL/CORRUPTED+自建镜像 |
 | 十一 | 供应链安全 | 已完成 | 签名校验、密钥过期、第三方恶意包（不知情 `postinst` 起后台服务并留日志） |
@@ -77,7 +77,7 @@
 ## 缺口清单（按依赖排序，做完即 Phase 3 之前无欠账）
 
 1. ~~`useradd/userdel/groupadd` + Household 一等实体~~ done（本批）
-2. Game Bytecode VM（§8，独立大件：受控运行时+capability API）
+2. ~~Game Bytecode VM~~ done（本批）
 3. ~~NPC 记忆与关系~~ done（本批；§21 的 LLM 唤醒调度仍无，规则层即 agent 层）
 4. ~~Assistant 配额 + suid/keys~~ done（本批）
 5. ~~VLAN + BGP 过程 + 数据库~~ done（本批三件；GRANT/JOIN/复制不做）

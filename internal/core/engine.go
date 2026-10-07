@@ -261,6 +261,9 @@ func (w *World) Tick() {
 	// Black market: listings expire and one NPC buyer walks the board on its
 	// own fixed schedule.
 	w.BazaarTick()
+	// Bytecode programs run their bounded slice after every other system
+	// has moved, so ps-visible background work is part of the same tick.
+	w.BCTick()
 	// §17 runs last: the numbers it charges describe the world as it now is
 	w.ResourceTick()
 }

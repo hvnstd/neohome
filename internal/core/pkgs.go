@@ -219,7 +219,7 @@ func debianRepo() *Repo {
 	r.put(&VPkg{Name: "python3", Version: "3.12.5-3", Comp: "main", Desc: "interpreted high-level language (game-VM)", Size: 21000,
 		Depends:  []string{"libc"},
 		Files:    map[string]*PkgFile{"/usr/bin/python3": binFile("/usr/bin/python3")},
-		PostInst: "registers the game bytecode runner for .py files (sandboxed, capability API)"})
+		PostInst: "bytecode programs run with brun (sandboxed, capability API); a .py frontend is future work"})
 	r.put(&VPkg{Name: "opensmtpd", Version: "6.8.2p1-1", Comp: "main", Desc: "small SMTP daemon (mail transport agent)", Size: 340,
 		Depends: []string{"libc"},
 		Files: map[string]*PkgFile{

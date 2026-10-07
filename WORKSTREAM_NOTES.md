@@ -31,8 +31,10 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
 | 缺口 5a:企业 VLAN | this commit | meridian 分 10/20 两段、网关 allow 规则、包路径双钩子、同 VLAN 不经路由 | §"缺口 5a" |
@@ -2511,3 +2513,34 @@ SQL 是照妖镜，照出两个引号无视：
 六个：装前无命令；CRUD 全链+错误码+USE+文件落盘；跨账号拒绝/root
 放行；远端 TCP（未装/错口令/停服三拒+文件落远端）；过存档；引号分隔
 回归。`gofmt` 空、`vet` 干净、全量绿（333 pass，0 fail）。
+
+# 缺口 2:Game Bytecode（§8）
+
+第三执行类：玩家/社区程序编译成游戏专用字节码，跑在能力 API 上——本机
+文件（调用者权限）、Dial 耦合的 socket、ps 可见的进程；无宿主机
+syscall/文件/网络/机器码。恶意程序最多吃掉游戏 CPU：fuel 计量+后台分
+片+超限 125 退出。
+
+## 模型
+
+* ISA（`core/bytecode.go`）：整数 R0-R7、字符串 S0-S3、256 内存格、4
+  socket 句柄；NOP/HALT/LOAD/STORE/四则/CPM+条件跳/CALL-RET/PRINT（含
+  S 寄存器——读出来的东西打不出来是测试抓到的真缺口）/SLOAD/文件读写/
+  建连读写关/SPAWN/EXIT。行号报错，未知 op/标号/寄存器/空栈/除零/超
+  fuel 全是带原因的死法。
+* 组装即执行：`brun prog.basm [--fuel N]`，错误带 `asm:行号`。
+* 后台：SPAWN 组装另一文件，生 ps 可见 Proc（Kind vm，WantCPU 参与分
+  享）+ 可恢复状态，`BCTick` 每 tick 每程序 200 条；断电冻结、kill 摘
+  除、跑完/nohup.out 落盘（否则后台输出凭空消失）+存档往返。
+* 权限即调用者：文件走 ReadPathAs/WriteGuest（满盘/EIO/审计全吃），
+  socket 走 Dial（DNS/路由/电源/防火墙/ban/IDS 全吃，banner 一读即
+  EOF，写缓冲 4K 落目标 syslog 话痨级）。无 SLEEP、无 GRANT、无多参
+  socket 会话——写明不做。
+* python3 包的 PostInst 曾许诺“.py 运行器”而无实现，已改成诚实文案
+  （brun 现状+.py 前端未来）。
+
+## 测试与验证
+
+五个：循环/调用/比较求和+三死法（行号/除零/fuel）；文件往返+shadow
+拒绝；banner 抓取+关口拒绝+落地 flow；SPAWN 建表/收割/nohup/kill 摘除；
+存档往返跑完。`gofmt` 空、`vet` 干净、全量绿（338 pass，0 fail）。
