@@ -258,6 +258,9 @@ func (w *World) Tick() {
 	// did in this same tick, and work their own cases on their own clocks.
 	w.AbuseTick()
 	w.LawTick()
+	// Black market: listings expire and one NPC buyer walks the board on its
+	// own fixed schedule.
+	w.BazaarTick()
 	// §17 runs last: the numbers it charges describe the world as it now is
 	w.ResourceTick()
 }

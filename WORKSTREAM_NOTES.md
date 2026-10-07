@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 黑市 (Phase 2) | this commit | Phase 2 opens with the only piece that chains existing systems: `bazaar.neohome.example` with verified credential listings, hash-pinned dead drops, atomic swaps, a 5% fee and `market` evidence | §"黑市 (Phase 2)" |
 | P1 补完 | this commit | Phase 1's three functional gaps: `vm snapshot/snapshots/restore` on hypervisor guests (plus the save-with-a-guest crash), phone battery wired into `Powered()` with cross-machine `phone charge` as the rescue, and cron skipping dark machines | §"P1 补完" |
 
 Verification status at tip: full `go test ./...` green (~182 tests, 29 files),
@@ -1994,3 +1995,83 @@ was touched.
   the new verbs do not either — per-guest ACLs would be their own
   workstream, not a silent asymmetry between verbs.
 * **A new-disk mechanic**: unchanged — see the wear section above.
+
+# 黑市 (Phase 2) — the bazaar
+
+Phase 2's remainder starts here, in dependency order: multiplayer, async PvP
+and orgs all need more world first, but a black market chains only systems
+that already exist — the BBS market board (classifieds with no execution),
+the bank (no escrow, no player transfer verb), anonymous FTP (a drop box
+with no market), and the evidence graph (no financial kind). So the bazaar
+is listings, atomic swaps, a fee, and evidence, on one shady host.
+
+## The model
+
+`bazaar.neohome.example` (infra box, public IP, `marketd` on 8444, anonymous
+vsftpd jail at `/srv/bazaar/drops`) holds `MarketState` (`internal/core/
+market.go`, which owns that shape; the pointer lives on `World`). The
+`market` shell builtin resolves and dials it like the BBS/IRC clients do —
+a stopped marketd is no market. Two goods, both real state:
+
+* **credentials** — `market sell-cred USER@HOST PRICE [--ftp]` reads the
+  password over stdin and proves it with one real login probe from the
+  bazaar host (`AttackLogin`, ssh/22 default, ftp/21 with the flag). The
+  probe is logged on the target like any other attempt: verification leaves
+  a trail, which is the point. Unreachable (a NATed box with no forward) or
+  wrong is refused, not warehoused. A published forward is dialed through
+  the router's front door (`marketFrontAddr`), the way the scanner reaches
+  the same box — a forwarded credential lists, an unforwarded one honestly
+  cannot.
+* **dead-drop files** — bytes already on the bazaar (put there with the same
+  `ftp -A` verbs as everything else), hash-pinned at list time.
+  `market buy` flips the file world-readable so the buyer fetches it over
+  ftp; a file that changed since listing delists instead of selling
+  something the buyer never saw.
+
+Buying is an atomic swap: re-verify, move money (seller proceeds, 5% fee to
+the `bazaar` account, floor 25¢), deliver, record. The buyer's balance is
+checked for the full price first, so a short buyer is refused before
+anything moves. A good that fails re-verification (a rotated password, a
+changed file, a dark host) delists with no charge. Fraud — re-listing
+someone else's drop — is possible and permanently attributed: the game
+answers fraud with evidence, not prevention.
+
+Every listing and every sale files `market` evidence (a new kind; the old
+readers filter by theirs, so nothing breaks) and both sides' bank histories
+carry the trade. The seeded credential is the neighbour's live ftp password,
+which her own heat reaction rotates — buy it after that and the re-probe
+delists it in front of you. Trades heat the world through the same `Record`
+as everything else, which closes the loop: heat → mara hardens → the goods
+go stale.
+
+`BazaarTick` (called from `World.Tick`) expires listings after 30 sim-days
+and runs one deterministic collector: every six sim-hours mara buys the
+cheapest affordable player listing. Same rules as any buyer.
+
+## The tests
+
+`tests/market_test.go` (eight tests): seeded board lists without leaking
+the secret; credential buy end-to-end (exact cents each way, password works
+on darkden afterwards, `market` evidence filed, goods leave the board);
+rotation before purchase delists with no money moved; NATed and
+wrong-password sells refused without landing; the full dead-drop chain over
+real ftp (put → list → buy as a *different* account → perms flip → get);
+a stopped marketd refuses connections; the collector buys the cheapest
+player listing on its round; listings, secrets and sale records survive a
+save.
+
+## Verified
+
+`gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
+(279 pass, 0 fail). No new live-verify script: no entry or networking path
+was touched.
+
+## Not implemented on purpose
+
+* **Escrow with disputes**: the swap is atomic, so there is nothing to
+  arbitrate. A confirm-receipt flow would be its own workstream.
+* **Vendor reputation**: sales are attributed and permanent, which is the
+  substrate reputation would be computed from — but no score is computed.
+* **Egress relay as a good**: routing a buyer's traffic out of the
+  bazaar's address would be genuinely valuable (and genuinely traceable),
+  but it needs packet-path changes, not market records.

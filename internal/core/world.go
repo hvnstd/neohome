@@ -50,6 +50,9 @@ type World struct {
 	// §36: an intrusion is state, not an event. Each record is one presence on
 	// one machine, with the artifacts that can be seen and removed one by one.
 	Footholds []*Foothold
+	// Black market (Phase 2): the bazaar's listings and sale records. Shape
+	// owned by market.go; created lazily so an older save stays loadable.
+	Bazaar *MarketState
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int

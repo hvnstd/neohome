@@ -587,6 +587,7 @@ func NewWorld() *World {
 	seedIoT(w)
 	seedSMS(w)
 	seedUSB(w)
+	seedMarket(w)
 	SeedPackageWorld(w)
 
 	// §13: the addresses. Every device gets its v6 addresses once the whole

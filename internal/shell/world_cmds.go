@@ -1383,6 +1383,7 @@ The world layer:
   bank [balance|history|pay]                        household wallet + assistant budget
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   bbs [boards|read <board> [N]|post <board> <sub>]  bbs.neohome.example — the community board answers
+  market [list|info|sell-cred|sell-file|buy]      bazaar.neohome.example — listings, atomic swaps, a fee, evidence
   git clone|status|log|commit|pull|push             real repositories on git.neohome.example, https with push auth
   camera [list|view N]                              front-door clips, recorded from real household events
   lock [status|lock|unlock [PIN]|batteries]         the front door: owner app or PIN; wrong codes are evidence
