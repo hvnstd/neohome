@@ -103,13 +103,13 @@ func TestFailedDiskRefusesWritesWithEIO(t *testing.T) {
 	}
 	// the single gate refuses with EIO, not ENOSPC: removing files is not
 	// the fix and the error must not claim it is
-	if out := run(t, w, nas, "root", "echo hello > /tmp/nope.txt"); !strings.Contains(out, "Input/output error") {
+	if out := run(t, w, nas, "root", "echo hello > /tmp/nope.txt"); !strings.Contains(strings.ToLower(out), "input/output error") {
 		t.Fatalf("writes must fail with EIO, got:\n%s", out)
 	}
 	if nas.FS.Exists("/tmp/nope.txt") {
 		t.Fatal("a refused write must not have landed on disk")
 	}
-	if out := run(t, w, nas, "root", "dd if=/dev/zero of=/tmp/big bs=1M count=1"); !strings.Contains(out, "Input/output error") {
+	if out := run(t, w, nas, "root", "dd if=/dev/zero of=/tmp/big bs=1M count=1"); !strings.Contains(strings.ToLower(out), "input/output error") {
 		t.Fatalf("dd must report EIO, got:\n%s", out)
 	}
 	if out := run(t, w, nas, "root", "df"); !strings.Contains(out, "disk FAILED") {
@@ -197,7 +197,7 @@ func TestFsckRepairsButWearRemains(t *testing.T) {
 	if !nas.DiskFailed() {
 		t.Fatal("past the grace period the same wear must latch FAILED again")
 	}
-	if out := run(t, w, nas, "root", "echo late > /tmp/late.txt"); !strings.Contains(out, "Input/output error") {
+	if out := run(t, w, nas, "root", "echo late > /tmp/late.txt"); !strings.Contains(strings.ToLower(out), "input/output error") {
 		t.Fatalf("writes must fail again after the grace period, got:\n%s", out)
 	}
 }

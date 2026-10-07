@@ -30,6 +30,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 家庭设备与物理层 (WS-1.10) | this commit | §15: the switch as real ports and real PoE, the laptop's lid and battery, the printer's own queue, the backup that needs the NAS | §"家庭设备与物理层 (WS-1.10)" |
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
+| passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
 
 Verification status at tip: full `go test ./...` green (~182 tests, 29 files),
 `go vet` clean, `gofmt -l` empty across the tree (the pre-existing debt in
@@ -1828,3 +1829,99 @@ machine is never in the scanner's target list and so is never owned; and
   state. Until it exists, `chaos`-style "make yourself vulnerable" play is done
   through configuration the world already has (publishing a port, installing no
   sensors), and the credential half is exercised by the tests.
+
+# passwd 与磁盘磨损 (WS-1.14 continued) — closing §36's two open items
+
+WS-1.14 named two things it did not build: wear-driven disk death (thresholds
+on power-on hours, I/O load, age — never a dice roll) and the `passwd` verb
+(what makes the weak-credential half of the conjunction a *choice*). Both are
+built here, each with its recovery half, because a chain without a fix is a
+cutscene, not a system.
+
+## passwd: the credential is a choice now
+
+* `Device.ChangePassword` (`internal/core/devseed.go`, next to
+  `refreshPasswd`) is the one path for password changes: it sets `User.Pass`
+  and rewrites `/etc/passwd` + `/etc/shadow` + `/etc/sudoers`, then logs the
+  `passwd` line. The account and the file can never disagree afterwards.
+* The shell's `passwd [user]` (`internal/shell/game_cmds.go`, beside su/sudo)
+  is setuid-like: changing your own password goes through the state update, so
+  it never needs read access to the 0640 shadow file. Your own password needs
+  the current one; anyone else's needs root; root skips the current check.
+  Mismatch and empty are refused with the password unchanged, and failures are
+  recorded the way su's are. Prompts go through `ReadPasswordLine`, so the
+  live session and `runWithStdin` feed them identically.
+* The two NPC hardening paths (`agents.go` patrol, `case.go` heat reaction)
+  used to assign `u.Pass` by hand, leaving a stale hash in `/etc/shadow` —
+  one credential store disagreeing with the login path. Both now go through
+  `ChangePassword`.
+* `tests/passwd_test.go` (six tests) pins it: own change works end to end
+  (su with the new password succeeds, the old fails, shadow rewritten, syslog
+  line), wrong-current and mismatch refuse without landing, non-root cannot
+  touch another account, root can (including deliberately weak), and the
+  change survives a save.
+
+## wear: 老硬盘 + 高负载 + 长期运行, as counters
+
+* `Rsrc` (`internal/core/resources.go`, which owns that shape) gains the
+  three cumulative drivers — `DiskWrittenB` (fed by the same `NoteDiskWrite`
+  funnel as every real write), `PowerOnTicks`, `HotTicks` (ticks spent
+  powered while CPU demand exceeds capacity) — plus the `DiskFailAt` latch,
+  the one-shot `DiskWarnAt`, and `DiskGraceUntil`. Counters never reset on
+  reboot: `Boot` moves, wear does not. Fresh devices start their counter at
+  the boot offset (36h of ticks), so `smartctl` agrees with `uptime`; a
+  provisioned VPS resets it to zero with its `Boot`.
+* `DiskHealth` derives PASSED/WARNING/FAILED with the reason naming the
+  driver and its numbers (endurance = own size × 300 full-disk writes, warn
+  at 60%; age warn/fail at 12,000/24,000 sim-hours; overload warn/fail at
+  50/200 saturated sim-hours — all exported consts, stated as model limits).
+  The wear tick runs inside `resourceTick`, so §17 still runs last and
+  `engine.go` needed no edit.
+* FAILED latches writes off with EIO at the single gate (`WriteGuest`,
+  checked before ENOSPC because removing files is not the fix), at install
+  time (`InstallFromView` returns the disk's own error in each manager's
+  voice), and in the log path (`Logf` drops and counts like it does when
+  full). Reads keep working — the data is not gone, which is what makes
+  backup the real fix. WARNING is one log line plus an event, and changes
+  nothing.
+* `smartctl [-a|-H] /dev/sda` (`internal/shell/resource_cmds.go`) reads the
+  same counters `DiskHealth` decides from; `fsck [/dev/sda1|/]` is root-only
+  and repairs the latch with a 120-tick grace (`RepairDisk` in core, with the
+  dropped-log reckoning shared with the disk-full path) without healing the
+  wear — the health still fails, so the disk fails again on schedule. `df`,
+  `vmstat` and `htop` surface the health the way they already surface
+  fullness, with the FAILED-verdict and the bare health told apart so a disk
+  inside its fsck grace is not misreported.
+* `tests/diskhealth_test.go` (seven tests) pins the chain: fresh PASSED with
+  sane counters, one-shot WARNING that still takes writes, FAILED refusing
+  `echo`/`dd`/install with EIO while reads work (cause named in
+  `dmesg`/`df`/`smartctl`), the overload driver failing on its own, the
+  fsck permission boundary plus repair-then-relapse past the grace period,
+  and counters plus latch surviving a save.
+
+## A persistence bug found underneath — and fixed
+
+`Device.GobEncode` declared `Rsrc` in its shadow struct and `GobDecode`
+restored it, but the encode literal never assigned it: every save silently
+dropped the whole resource accounting (swap, OOM count, load, and now wear).
+One line (`Rsrc: d.Rsrc`) fixes it, which the wear save/load test pins.
+Same class, NOT fixed (out of scope, different subsystem): `NATed` is in the
+encode shadow but never assigned there and absent from the decode shadow, so
+it does not round-trip either — see `internal/core/world.go:590`.
+
+## Verified
+
+`gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
+(196 tests: 182 existing untouched plus 6 passwd + 7 wear + 1 debug removed).
+No new live-verify script: no entry or networking path was touched
+(`passwd`/`smartctl`/`fsck` ride the existing sessions), so the unit + full
+suite coverage is the verification.
+
+## Not implemented on purpose
+
+* **A new-disk mechanic**: `fsck` buys one sim-hour, it does not replace the
+  platter. The honest long-term fix is backup (reads work) and migrate — a
+  `disk replace` verb with billing, data loss when skipped, and restore would
+  be its own workstream.
+* **RDP as a service**: unchanged from WS-1.14 — no Windows stack to answer
+  it, the chain is identical over ssh.
