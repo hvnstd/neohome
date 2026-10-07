@@ -31,6 +31,8 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
 | 缺口 5a:企业 VLAN | this commit | meridian 分 10/20 两段、网关 allow 规则、包路径双钩子、同 VLAN 不经路由 | §"缺口 5a" |
 | 缺口 3:NPC 记忆 | this commit | 每 handle 事件环+有向 standing 七处钩子、聊天喊话/collector 拒收/`people` 三处读回 | §"缺口 3" |
 | 缺口 4:密钥+配额 | this commit | 公钥文件匹配+ssh-keygen+种子钥匙去重、Assistant Quota 进调度/swap/OOM/显示、suid 不适用结论 | §"缺口 4" |
@@ -2438,3 +2440,32 @@ Meridian 原来是扁平 `/24`：同一子网即同一 LAN，所谓隔离只剩�
  止）。机制（分段+网关规则+默认拒）已齐，加网段只是加 allow 行。
 * **VLAN 内 DHCP 中继细节**：dnsmasq 只在 workstation 段开动态池，
   服务器全静态——够用的诚实子集。
+
+# 缺口 5b:BGP 会话与 RIB（§38）
+
+`wan.go` 早就有 AS、前缀、peer、上游——缺的是让这些事实可坏的协议状
+态。本批加控制面，不加第二套路由：数据面照走设备接口，出发前多查一
+次 RIB。
+
+## 模型
+
+* 会话是推导的，不存：`BGPSessions` 看三样——bird 在 core-gw 上跑着、
+  邻居写在 `/etc/bird.conf` 里（删邻居即永不建连）、对端 SYNCED（BEHIND
+  算 up 但 stale，其余全 down）。无存储=无 tick=无存档格式，世界不可能
+  在这件事上自相矛盾。
+* RIB 是起源最长匹配（`bgpOrigin`，双栈——`inNet` 只认 v4，v6 起源必须
+  走 netip，否则全部公网 v6 读成无主，全量挂三个就是这么来的）：公网
+  地址可达当且仅当其起源 AS 会话建连。直连起源（asCore 自家）不需要会
+  话也为真——连上去的路由不需要 BGP 才成立，测试里停 bird 后 mirror 照
+  通正是这条。
+* `dial`+`Reach` 对公网目的查 RIB（私网/CGNAT/ULA/环回不查：从没被宣
+  告过），撤回即黑洞并点名会话（`prefix withdrawn: AS64520 session
+  down`）。流记录照落（filtered），IDS 照读。
+* `bgp summary`（会话+原因）/`bgp routes [prefix]`（起源+WITHDRAWN 标）；
+  traceroute 每跳带 `[ASn]`（Hop.ASN，Trace 里填）；bird 179 端口见于 ss。
+
+## 测试与验证
+
+五个：建连+RIR 全量；停 bird 全对端撤回（ping/Dial/RIB 同报，mirror
+直连幸存，重启恢复）；单 AS OFFLINE 只死自家前缀；删邻居永不建连；
+traceroute 带 AS。`gofmt` 空、`vet` 干净、全量绿（327 pass，0 fail）。

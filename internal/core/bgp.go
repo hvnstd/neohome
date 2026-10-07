@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -121,17 +122,28 @@ func BGPSessionUp(w *World, asn int) bool {
 }
 
 // bgpOrigin finds the AS whose announced prefix covers ip, longest match.
+// inNet is v4-only, so this matches with netip directly: v6 space would
+// otherwise never find its origin and every public v6 address would read
+// as unannounced.
 func bgpOrigin(w *World, ip string) *AS {
 	if w == nil || w.WAN == nil {
 		return nil
 	}
+	a, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return nil
+	}
 	var best *AS
-	bestLen := -1
+	bestBits := -1
 	consider := func(as *AS, lists ...[]string) {
 		for _, ls := range lists {
 			for _, p := range ls {
-				if inNet(ip, p) && len(p) > bestLen {
-					best, bestLen = as, len(p)
+				pp, err := netip.ParsePrefix(strings.TrimSpace(p))
+				if err != nil || !pp.Contains(a) {
+					continue
+				}
+				if pp.Bits() > bestBits {
+					best, bestBits = as, pp.Bits()
 				}
 			}
 		}
