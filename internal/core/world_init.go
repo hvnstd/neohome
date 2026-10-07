@@ -531,6 +531,34 @@ func NewWorld() *World {
 				"把一份已经披露了订户的案卷推到 law:disclosed,用 abuse act <编号> warrant --note \"依据\" 签令," +
 				"令要送达持有记录的网络。文件撑不住的时候,abuse 会拒绝你——那是设计,不是故障。",
 			Verify: "law-warrant", Done: false},
+		// Staged missions (Phase 2): ordered stages with their own pay, a
+		// prerequisite chain, and the §44 template rendered in `job show`.
+		// Each stage's check is one of the verifiers the world already
+		// speaks — the new part is the order, the gate and the installments.
+		{ID: "J-108", Title: "分部上线:把新办公室带进网络", Client: "meridian-soc", Pay: 5000, Tier: 2, Target: "self",
+			Help: "办公室隔壁租了个小房间做分部。先把 DNS 修好(J-101)再来:分三步交差,每步单独结算," +
+				"用 job advance J-108 一步步交。",
+			Requires: []string{"J-101"},
+			Stages: []MissionStage{
+				{Name: "link", Help: "分部能上网:任一 sshd 回答", Verify: "ssh-up", Pay: 1500},
+				{Name: "serve", Help: "分部能提供 web:任一 nginx 可达", Verify: "web-up", Pay: 2500},
+				{Name: "clean", Help: "收尾干净:家里路由上不留封禁", Verify: "clean", Pay: 1000},
+			},
+			Solutions: []string{"先修 DNS,再逐段验证:ssh 不通查服务,web 不通查防火墙和端口"},
+			Expected:  "sshd 回答、nginx 可达、路由无封禁,三段按顺序成立",
+			Evidence:  "每段交差写银行流水备注,连同世界事件一起可查",
+			Done:      false},
+		{ID: "J-109", Title: "滥用台认证:从报案到值班", Client: "novapanel-abuse", Pay: 5000, Tier: 3, Target: "vps",
+			Help:     "J-103 报过案了,现在考值班:先确认报案记录在案,再亲手裁定两个工单。两段都要亲手做,用 job advance J-109 交。",
+			Requires: []string{"J-103"},
+			Stages: []MissionStage{
+				{Name: "report", Help: "报案记录在案:运营商处有你的工单", Verify: "abuse-report", Pay: 2000},
+				{Name: "shift", Help: "顶一班:亲手裁定两个工单并写理由", Verify: "abuse-triage", Pay: 3000},
+			},
+			Solutions: []string{"abuse evidence 先看记录再 report;abuse queue 看队列再 triage"},
+			Expected:  "新报案工单 + 两次亲手裁定,按顺序成立",
+			Evidence:  "运营商工单、裁定理由、银行流水",
+			Done:      false},
 	}
 
 	w.Prov = &Provider{DeviceID: provider.ID, APIKey: "np_live_9f3c2a",

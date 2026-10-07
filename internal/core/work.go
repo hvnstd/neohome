@@ -31,6 +31,13 @@ func (w *World) AcceptJob(who, id string) error {
 	if j.Accepted != "" && j.Accepted != who {
 		return fmt.Errorf("job %s is already taken by %s", id, j.Accepted)
 	}
+	// prerequisites are checked on accept, not just at payout: taking work
+	// you cannot start yet is the refusal, the way a real dispatcher works
+	for _, req := range j.Requires {
+		if r := w.Job(req); r == nil || !r.Done {
+			return fmt.Errorf("job %s requires %s first", id, req)
+		}
+	}
 	j.Accepted = who
 	w.AddEvent("world", "info", "jobs", "%s accepted %s", who, id)
 	return nil
@@ -231,6 +238,9 @@ func (w *World) PayJob(who, id string) (int64, string, error) {
 	if j.Done {
 		return 0, "", fmt.Errorf("job %s is already paid", id)
 	}
+	if len(j.Stages) > 0 {
+		return 0, "", fmt.Errorf("job %s pays per stage (use: job advance %s)", id, id)
+	}
 	ok, why := w.VerifyJob(j)
 	if !ok {
 		return 0, why, fmt.Errorf("not done yet")
@@ -251,6 +261,80 @@ func (w *World) PayJob(who, id string) (int64, string, error) {
 	return j.Pay, why, nil
 }
 
+// ---- staged missions: ordered predicates, partial pay ----
+
+// verifyStage checks the job's current stage against world state, without
+// moving money. The stage's Verify is one of the same predicates VerifyJob
+// speaks, evaluated on a copy so the job's own finished verifier (if any) is
+// never clobbered.
+func (w *World) verifyStage(j *Job) (bool, string) {
+	if j.StageIdx < 0 || j.StageIdx >= len(j.Stages) {
+		return false, "no current stage"
+	}
+	st := j.Stages[j.StageIdx]
+	cp := *j
+	cp.Verify = st.Verify
+	return w.VerifyJob(&cp)
+}
+
+// payStage moves the current stage's pay and advances. The last stage also
+// completes the job. Shared by the player's `job advance` and the
+// assistant's staged work, so both are paid by the same hand.
+func (w *World) payStage(who string, j *Job) (int64, string) {
+	st := j.Stages[j.StageIdx]
+	acc := w.Bank.Accts[who]
+	if acc == nil {
+		acc = &Account{Owner: who, Name: who, Balance: 0}
+		w.Bank.Accts[who] = acc
+	}
+	acc.Balance += st.Pay
+	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: st.Pay,
+		Memo: "job " + j.ID + " stage " + st.Name, Balance: acc.Balance})
+	j.StageIdx++
+	why := fmt.Sprintf("stage %s done ($%.2f)", st.Name, float64(st.Pay)/100)
+	if j.StageIdx >= len(j.Stages) {
+		j.Done = true
+		why += " — " + j.ID + " complete"
+		w.AddEvent("world", "info", "jobs", "%s completed %s", who, j.ID)
+	}
+	w.BankSMS(who, fmt.Sprintf("neohome bank: +%d.%02d received (%s %s). balance %d.%02d",
+		st.Pay/100, st.Pay%100, j.ID, st.Name, acc.Balance/100, acc.Balance%100))
+	return st.Pay, why
+}
+
+// AdvanceJob completes the job's current stage: verify against world state,
+// then pay that stage. Stages run in order — only the current one is ever
+// checked, so skipping ahead is impossible.
+func (w *World) AdvanceJob(who, id string) (int64, string, error) {
+	j := w.Job(id)
+	if j == nil {
+		return 0, "", fmt.Errorf("no such job: %s", id)
+	}
+	if len(j.Stages) == 0 {
+		return 0, "", fmt.Errorf("job %s is a single-shot job (use: job pay %s)", id, id)
+	}
+	if j.Accepted == "" {
+		return 0, "", fmt.Errorf("job %s has not been accepted (use: job accept %s)", id, id)
+	}
+	if j.Accepted != who {
+		return 0, "", fmt.Errorf("job %s belongs to %s", id, j.Accepted)
+	}
+	if j.Done {
+		return 0, "", fmt.Errorf("job %s is already paid", id)
+	}
+	for _, req := range j.Requires {
+		if r := w.Job(req); r == nil || !r.Done {
+			return 0, "", fmt.Errorf("job %s requires %s first", id, req)
+		}
+	}
+	ok, why := w.verifyStage(j)
+	if !ok {
+		return 0, why, fmt.Errorf("stage %s not done yet", j.Stages[j.StageIdx].Name)
+	}
+	paid, msg := w.payStage(who, j)
+	return paid, msg + ": " + why, nil
+}
+
 // TaskAssistant queues a job for the assistant to work on its own node.
 func (w *World) TaskAssistant(jobID string) error {
 	p := w.PlayerForName(whoOwns(w, jobID))
@@ -267,6 +351,15 @@ func (w *World) TaskAssistant(jobID string) error {
 	j := w.Job(jobID)
 	if j == nil {
 		return fmt.Errorf("no such job: %s", jobID)
+	}
+	// staged delegation is honest about capability: the assistant performs
+	// exactly two fixes (dns-fix, pkg-busybox). A stage it cannot perform
+	// would sit in its queue forever, so delegation refuses up front,
+	// naming the stage.
+	for _, st := range j.Stages {
+		if st.Verify != "dns-fix" && st.Verify != "pkg-busybox" {
+			return fmt.Errorf("assistant cannot do stage %s (%s)", st.Name, st.Verify)
+		}
 	}
 	j.Accepted = "assistant"
 	w.Tasks = append(w.Tasks, &Task{

@@ -30,39 +30,37 @@ func (w *World) AssistantWork() {
 			continue
 		}
 		owner := a.Owner
-		ok := false
-		switch j.Verify {
-		case "dns-fix":
-			ok = !w.FaultDNSActive()
-			if !ok {
-				// assistant fixes it itself: writes a valid resolv-file and restarts dnsmasq
-				r := w.Devices[w.CauseFault.DeviceID]
-				if r != nil {
-					r.FS.Write("/etc/dnsmasq.upstream", "nameserver 10.0.0.2\n", 0644, "root", "root")
-					if data, has := r.FS.Read("/etc/dnsmasq.conf"); has {
-						s := string(data)
-						s = replaceOnce(s, "resolv-file=/var/run/dnsmasq/resolv.conf", "resolv-file=/etc/dnsmasq.upstream")
-						r.FS.Write("/etc/dnsmasq.conf", s, 0644, "root", "root")
+		// Staged missions go through one stage per work cycle, paid by the
+		// same hand as the player's `job advance` — see payStage. Only
+		// stages the assistant can actually perform are ever delegated
+		// (TaskAssistant refuses the rest up front).
+		if len(j.Stages) > 0 {
+			if j.StageIdx >= len(j.Stages) {
+				t.Done = true
+				continue
+			}
+			st := j.Stages[j.StageIdx]
+			if w.assistantAct(a, st.Verify) {
+				if ok, _ := w.verifyStage(j); ok {
+					paid, msg := w.payStage(owner, j)
+					a.Logf("info", "assistant", "job %s stage %s finished, invoiced $%.2f",
+						j.ID, st.Name, float64(paid)/100)
+					w.AddEvent(a.ID, "info", "assistant", "assistant finished %s stage %s", j.ID, st.Name)
+					_ = msg
+					t.Progress = 0
+					if j.Done {
+						w.assistSkills++
+						w.AddEvent(a.ID, "info", "assistant", "assistant finished %s (+skill)", j.Title)
 					}
-					r.RestartService("dnsmasq")
-					w.CauseFault.Active = false
-					ok = true
+					continue
 				}
 			}
-		case "pkg-busybox":
-			// the assistant installs from the catalogue it can reach, and even
-			// it goes through the payload format (InstallRendered)
-			if p := w.FindPkg("busybox"); p != nil {
-				for _, r := range w.Repos {
-					if r.Pkgs[p.Name] != nil && r.Pkgs[p.Name] == p {
-						if _, err := w.InstallRendered(a, r, p); err == nil {
-							ok = true
-						}
-						break
-					}
-				}
-			}
+			t.Done = true
+			t.DoneAt = w.Sim
+			w.AddEvent(a.ID, "warn", "assistant", "assistant gave up on %s stage %s (blocked)", j.ID, st.Name)
+			continue
 		}
+		ok := w.assistantAct(a, j.Verify)
 		t.Done = true
 		t.DoneAt = w.Sim
 		j.Done = ok
@@ -80,6 +78,47 @@ func (w *World) AssistantWork() {
 			w.AddEvent(a.ID, "warn", "assistant", "assistant gave up on %s (blocked)", j.ID)
 		}
 	}
+}
+
+// assistantAct performs one stage the assistant knows how to do: the same
+// two fixes the legacy single-shot path always had. Anything else is not a
+// failure of effort but of capability — TaskAssistant refuses such stages
+// before they are ever delegated.
+func (w *World) assistantAct(a *Device, verify string) bool {
+	ok := false
+	switch verify {
+	case "dns-fix":
+		ok = !w.FaultDNSActive()
+		if !ok {
+			// assistant fixes it itself: writes a valid resolv-file and restarts dnsmasq
+			r := w.Devices[w.CauseFault.DeviceID]
+			if r != nil {
+				r.FS.Write("/etc/dnsmasq.upstream", "nameserver 10.0.0.2\n", 0644, "root", "root")
+				if data, has := r.FS.Read("/etc/dnsmasq.conf"); has {
+					s := string(data)
+					s = replaceOnce(s, "resolv-file=/var/run/dnsmasq/resolv.conf", "resolv-file=/etc/dnsmasq.upstream")
+					r.FS.Write("/etc/dnsmasq.conf", s, 0644, "root", "root")
+				}
+				r.RestartService("dnsmasq")
+				w.CauseFault.Active = false
+				ok = true
+			}
+		}
+	case "pkg-busybox":
+		// the assistant installs from the catalogue it can reach, and even
+		// it goes through the payload format (InstallRendered)
+		if p := w.FindPkg("busybox"); p != nil {
+			for _, r := range w.Repos {
+				if r.Pkgs[p.Name] != nil && r.Pkgs[p.Name] == p {
+					if _, err := w.InstallRendered(a, r, p); err == nil {
+						ok = true
+					}
+					break
+				}
+			}
+		}
+	}
+	return ok
 }
 
 func replaceOnce(s, old, new string) string {

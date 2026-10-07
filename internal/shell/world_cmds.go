@@ -45,6 +45,9 @@ func cmdJob(s *Shell, args []string) int {
 			} else if j.Accepted != "" {
 				status = "taken by " + j.Accepted
 			}
+			if !j.Done && len(j.Stages) > 0 {
+				status += fmt.Sprintf(" (stage %d/%d)", j.StageIdx+1, len(j.Stages))
+			}
 			fmt.Fprintf(s.Out, "%-8s %-42s %-10s %-9s %s\n", j.ID, j.Title, j.Client, fmtMoney(j.Pay), status)
 		}
 		return 0
@@ -66,8 +69,32 @@ func cmdJob(s *Shell, args []string) int {
 		fmt.Fprintf(s.Out, "pay:      %s\n", fmtMoney(j.Pay))
 		fmt.Fprintf(s.Out, "tier:     %d\n", j.Tier)
 		fmt.Fprintf(s.Out, "hint:     %s\n", j.Help)
+		if len(j.Requires) > 0 {
+			fmt.Fprintf(s.Out, "requires: %s\n", strings.Join(j.Requires, ", "))
+		}
 		if j.Verify != "" {
 			fmt.Fprintf(s.Out, "verifier: world-state check (%s)\n", j.Verify)
+		}
+		for i, st := range j.Stages {
+			mark := " "
+			if j.Done || i < j.StageIdx {
+				mark = "x"
+			} else if i == j.StageIdx && j.Accepted != "" {
+				mark = ">"
+			}
+			fmt.Fprintf(s.Out, "stage %d [%s] %s — %s (%s)\n", i+1, mark, st.Name, st.Help, fmtMoney(st.Pay))
+		}
+		if len(j.Solutions) > 0 {
+			fmt.Fprintf(s.Out, "solutions:\n")
+			for _, sol := range j.Solutions {
+				fmt.Fprintf(s.Out, "  - %s\n", sol)
+			}
+		}
+		if j.Expected != "" {
+			fmt.Fprintf(s.Out, "expected: %s\n", j.Expected)
+		}
+		if j.Evidence != "" {
+			fmt.Fprintf(s.Out, "evidence: %s\n", j.Evidence)
 		}
 		return 0
 	case "accept", "take":
@@ -108,8 +135,24 @@ func cmdJob(s *Shell, args []string) int {
 		}
 		fmt.Fprintf(s.Out, "queued %s for the assistant — it works on its own node\n", args[1])
 		return 0
+	case "advance", "next", "stage":
+		if len(args) < 2 {
+			s.errf("usage: job advance ID")
+			return 1
+		}
+		paid, why, err := s.W.AdvanceJob(s.User.Name, args[1])
+		if err != nil {
+			fmt.Fprintf(s.Out, "cannot advance %s: %v\n", args[1], err)
+			if why != "" {
+				fmt.Fprintf(s.Out, "  world state says: %s\n", why)
+			}
+			return 1
+		}
+		fmt.Fprintf(s.Out, "advanced: %s\n", why)
+		fmt.Fprintf(s.Out, "paid %s to your account\n", fmtMoney(paid))
+		return 0
 	}
-	s.errf("usage: job [list|show ID|accept ID|pay ID|delegate ID]")
+	s.errf("usage: job [list|show ID|accept ID|pay ID|advance ID|delegate ID]")
 	return 1
 }
 
@@ -1379,7 +1422,7 @@ System info:              fastfetch uname hostname uptime whoami id env free lsc
 Accounts & disks:         passwd smartctl fsck
 
 The world layer:
-  job [list|show ID|accept ID|pay ID|delegate ID]   job board — pays only against real world state
+  job [list|show ID|accept ID|pay ID|advance ID|delegate ID]   job board — pays only against real world state
   bank [balance|history|pay]                        household wallet + assistant budget
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   bbs [boards|read <board> [N]|post <board> <sub>]  bbs.neohome.example — the community board answers

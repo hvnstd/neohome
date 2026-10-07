@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 复杂任务框架 (Phase 2 + §44) | this commit | Staged missions: ordered Verify predicates with per-stage pay, Requires gates, assistant stage cycles through the same payStage, J-108/J-109 seeded | §"复杂任务框架" |
 | 黑市 (Phase 2) | this commit | Phase 2 opens with the only piece that chains existing systems: `bazaar.neohome.example` with verified credential listings, hash-pinned dead drops, atomic swaps, a 5% fee and `market` evidence | §"黑市 (Phase 2)" |
 | P1 补完 | this commit | Phase 1's three functional gaps: `vm snapshot/snapshots/restore` on hypervisor guests (plus the save-with-a-guest crash), phone battery wired into `Powered()` with cross-machine `phone charge` as the rescue, and cron skipping dark machines | §"P1 补完" |
 
@@ -2075,3 +2076,65 @@ was touched.
 * **Egress relay as a good**: routing a buyer's traffic out of the
   bazaar's address would be genuinely valuable (and genuinely traceable),
   but it needs packet-path changes, not market records.
+
+# 复杂任务框架 (Phase 2 + §44) — staged missions
+
+Phase 2's "more complex tasks" and the §44 Mission template arrive together,
+because they are the same gap: a `Job` was flat (one `Verify` string, one
+payout, no prerequisites), and even the J-106→J-107 chain was held together
+by Help prose rather than state. The ten world-state verifiers stay exactly
+as they are — the new part is order, gates and installments around them.
+
+## The model
+
+`Job` (`internal/core/world.go`) gains the §44 fields, all empty on a legacy
+one-shot job: `Requires` (job IDs that must be `Done` first), `Stages`
+(`MissionStage{Name, Help, Verify, Pay}` — one of the verifiers `VerifyJob`
+already speaks), `StageIdx`, plus `Solutions`/`Expected`/`Evidence`, which
+are the template rendered in `job show`, not a second verifier.
+
+* `AcceptJob` refuses work whose prerequisites are not done, naming the
+  missing one. `PayJob` refuses staged jobs outright (`use: job advance`) —
+  installments are the only way a mission pays.
+* `AdvanceJob` checks only the *current* stage (a copy with its `Verify`,
+  so the job's own finished verifier is never clobbered), then `payStage`
+  moves that stage's pay and advances; the last stage completes the job.
+  Skipping ahead is impossible because only the index is ever checked.
+* The assistant works staged jobs one stage per six-tick cycle through the
+  same `payStage`, after acting through the extracted `assistantAct` (the
+  two fixes it always had: dns-fix, pkg-busybox). `TaskAssistant` refuses a
+  mission containing any other stage kind up front, naming the stage — a
+  task it cannot perform would sit in its queue forever. Skill grows once
+  per finished mission, not per stage.
+* Shell: `job advance ID`, stage progress in `job list` (`stage 2/3`),
+  `[x]/[>]` marks plus requires/solutions/expected/evidence in `job show`.
+* Seeds: J-108 (branch bring-up, requires J-101: ssh-up → web-up → clean,
+  $15/$25/$10) and J-109 (abuse-desk certification, requires J-103:
+  abuse-report → abuse-triage, $20/$30).
+
+## The tests
+
+`tests/mission_test.go` (four tests): the prerequisite gate names J-101 and
+opens after it is really paid, lump-sum pay redirects to advance, and three
+ordered installments land exactly; a planted router ban fails the current
+stage with the world's reason, moves no money, then pays exactly on
+recovery through to completion (legacy double-payout refused); the
+assistant completes a two-stage mission over two work cycles with exact
+total pay, one skill point and a really repaired fault, while an undoable
+stage is refused by name at delegation; stage index and acceptance survive
+a save and the mission finishes afterwards.
+
+## Verified
+
+`gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
+(283 pass, 0 fail). No new live-verify script: no entry or networking path
+was touched.
+
+## Not implemented on purpose
+
+* **New verifier predicates**: every stage reuses the ten the world already
+  speaks. A genuinely new check (mail-ready, backup-done) would be its own
+  verifier, not a stage feature.
+* **Retrofitted chains**: J-106→J-107 stay prose-linked. Bolting `Requires`
+  onto shipped jobs would change payouts players may already be mid-way
+  through; new missions carry the new semantics.

@@ -382,6 +382,28 @@ type Job struct {
 	Target   string
 	Accepted string
 	Done     bool
+	// ---- mission fields (Phase 2 + §44): empty for a legacy one-shot job.
+	// Requires names jobs that must be Done first (checked on accept and on
+	// every advance). Stages are ordered Verify predicates with their own
+	// pay: a staged job pays per stage through AdvanceJob, never through
+	// PayJob. StageIdx is the current stage. Solutions/Expected/Evidence
+	// are the §44 template rendered in `job show`, not a second verifier.
+	Requires  []string
+	Stages    []MissionStage
+	StageIdx  int
+	Solutions []string
+	Expected  string
+	Evidence  string
+}
+
+// MissionStage is one ordered step of a staged job: what to do (Help), how
+// the world checks it (Verify — one of the same predicates VerifyJob
+// already speaks), and what finishing it pays.
+type MissionStage struct {
+	Name   string
+	Help   string
+	Verify string
+	Pay    int64
 }
 
 type Jobs struct {
