@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 1:身份+家 | this commit | useradd/userdel/usermod/groupadd/groups/chpasswd + /etc/group + GID 规则 + Household 一等实体 | §"缺口 1" |
 | P2 剩余:多人/组织/PvP | this commit | Citizens with vouched PCs and bank transfers, orgs with treasuries and escrowed trophy contracts, async PvP proven across two citizens | §"P2 剩余" |
 | 复杂任务框架 (Phase 2 + §44) | this commit | Staged missions: ordered Verify predicates with per-stage pay, Requires gates, assistant stage cycles through the same payStage, J-108/J-109 seeded | §"复杂任务框架" |
 | 黑市 (Phase 2) | this commit | Phase 2 opens with the only piece that chains existing systems: `bazaar.neohome.example` with verified credential listings, hash-pinned dead drops, atomic swaps, a 5% fee and `market` evidence | §"黑市 (Phase 2)" |
@@ -2220,3 +2221,47 @@ independently by design).
   not; crew membership gates money and contracts, not hypervisors.
 * **Reputation/scores**: attribution is permanent and readable; no number
   is computed from it.
+
+# 缺口 1:身份命令 + Household 实体（§4/§46）
+
+账号表一直是真状态，但唯一的入口是 seed 和软件包：没有 useradd，没有
+groupadd，连 `/etc/group` 文件都不存在。本批把 §4 的身份动词和 §46 的家
+一起收尾。
+
+## 账号即文件
+
+* `Device` 加 `GroupIDs`（GID 注册表），`users.go` 拥有全部账号变更：
+  `AddUser`（锁定口令、建家、UID 取 ≥1000 最小空闲）、`DelUser`（UID 0
+  拒绝，`-r` 连家带邮箱，不带则文件留给数字 owner，私组永不随人走）、
+  `AddGroup`（空组也进注册表）、`UsermodGroups`（`-aG` 追加、`-G` 只换
+  次组，主组动不得；phantom 组拒绝——这就是 groupadd 存在的意义）。
+* GID 只有一条规则（`GroupID`，唯一的解释者）：与用户同名的组拿该用户
+  的 UID（Debian 私组），其余分配 ≥1000 且避开所有 UID/GID，持久化后永
+  不漂移。`refreshPasswd` 每次重绘 passwd/shadow/sudoers **和 group**；
+  `id` 经同一规则打印真实 GID，与文件一致。
+* Shell：`useradd [-G] [-s]`、`userdel [-r]`（自己删自己拒绝）、
+  `usermod -aG|-G`、`groupadd`、`groups`、`chpasswd`（管道批量，坏行
+  报告不吞），变更走 root，失败走 sudoers 同款拒绝。`usermod -aG sudo`
+  是真提权：sudoers 重绘后同一口令直接 uid=0。
+* 持久化教训的第二次学费：`GroupIDs` 进 gob shadow 写了类型、字面量、
+  回填三处（Rsrc 当年只写了两处，丢过整表）；外加 `LoadWorld` 给老存档
+  全量重绘 `/etc/group`（幂等）。
+
+## Household 一等实体
+
+`Household{ID, Founder, Members, Router, NAS}`（`players.go`，`World` 持
+map）：`InvitePlayer` 不再手写 router-alex/nas-alex，改从 inviter 所在
+house 继承；成员随邀请进出；创始人 seed；老存档 load 时按 player 表回
+填。LAN 子网仍归 addr.go——家是人和共用设备，不是地址。
+
+## 测试
+
+`tests/users_test.go`（七个）：锁定开户+四文件一致+`passwd` 解锁登录；
+`usermod -aG sudo` 前后 sudo 实测提权；phantom 组拒绝；GID 不撞 UID、
+人不走数不走、空组留文件、`id` 对账；删 root 两层拒绝；`-r` 与不带
+的去留；house seed/继承/成员/过存档；chpasswd 批量两改一跳。
+
+## 验证
+
+`gofmt -l` 空、`go vet ./...` 干净、`go test ./... -count=1` 绿
+（296 pass，0 fail）。无 live 脚本：未碰入口与网络。

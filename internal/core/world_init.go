@@ -617,6 +617,7 @@ func NewWorld() *World {
 	seedUSB(w)
 	seedMarket(w)
 	seedOrgs(w)
+	seedHousehold(w)
 	SeedPackageWorld(w)
 
 	// §13: the addresses. Every device gets its v6 addresses once the whole

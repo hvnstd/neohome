@@ -316,6 +316,9 @@ func refreshPasswd(d *Device) {
 		}
 	}
 	d.FS.Write("/etc/sudoers", sd, 0440, "root", "root")
+	// /etc/group: the group file real tools read, rendered from the same
+	// table (see users.go) so it can never disagree with the accounts.
+	renderGroup(d)
 }
 
 func hasGroup(u *User, g string) bool {

@@ -23,7 +23,7 @@
 | 一 | 核心体验 | 部分 | 四循环可玩（观察→验证、IT 排障、黑客链、防守反制）；反制停在“Assistant 取证+追踪+玩家手动反制”，无自动反制执行体 |
 | 二 | 设计原则 | 已完成 | `TestNoDecorativeCommands` 机械锁死“无装饰命令”；WS-1.5 耦合补丁 |
 | 三 | 世界模型 | 已完成 | `Device` 统一抽象，PC/路由/NAS/手机/VPS/VM/IoT 皆 Profile（`world.go`） |
-| 四 | Linux 沉浸感 | 部分 | 主流命令齐，`passwd` 已补；缺 `useradd/userdel/groupadd/groups/chpasswd`（账号只能 seed/装包带来） |
+| 四 | Linux 沉浸感 | 已完成 | 身份动词齐（useradd/userdel/usermod/groupadd/groups/chpasswd/passwd/su/sudo），四文件一致 |
 | 五 | BusyBox | 已完成 | 38-applet 门控（`shell.go:394` + `APPLETS.txt`），ash 设备隔离 |
 | 六 | fastfetch | 已完成 | 全读真实状态，区分设备 |
 | 七 | 虚拟软件/架构 | 已完成 | Virtual Package/Binary，安装落文件/用户/服务/进程/端口 |
@@ -65,7 +65,7 @@
 | 四十三 | PvP | 已完成 | 规格只要异步：双公民实证（入侵→取证→溯源→反杀，tick 间隔即 async） |
 | 四十四 | 内容生产 | 部分 | Household/NPC/Package/Job/Mission 皆有模板结构；**缺世界生成器/任务编辑器/社区格式** |
 | 四十五 | 技术架构 | 部分 | Go ✓ SSH ✓ 状态机 ✓；Web（xterm.js）✗；数据是 gob 存档而非 SQLite |
-| 四十六 | 数据模型 | 部分 | 37 项基本齐；**Household 无一等实体**（仅 `HouseKey` 字符串） |
+| 四十六 | 数据模型 | 已完成 | Household 一等实体（成员+共用 infra），其余 36 项早齐 |
 | 四十七 | MVP | 已完成 | 见阶段表 |
 | 四十八 | Phase 1 | 已完成 | 见阶段表 |
 | 四十九 | Phase 2 | 已完成 | 见阶段表 |
@@ -76,7 +76,7 @@
 
 ## 缺口清单（按依赖排序，做完即 Phase 3 之前无欠账）
 
-1. `useradd/userdel/groupadd` + Household 一等实体（§4/§46，同一批：身份与家的建模收尾）
+1. ~~`useradd/userdel/groupadd` + Household 一等实体~~ done（本批）
 2. Game Bytecode VM（§8，独立大件：受控运行时+capability API）
 3. NPC 记忆与关系（§20/§21，事件记忆+关系图+LLM 唤醒调度）
 4. Assistant 配额 + suid/keys 提权收尾（§24/§30，中件）

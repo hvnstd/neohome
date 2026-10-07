@@ -15,6 +15,8 @@ func init() {
 		fn   Cmd
 	}{
 		{"su", cmdSu}, {"sudo", cmdSudo}, {"passwd", cmdPasswd},
+		{"useradd", cmdUseradd}, {"userdel", cmdUserdel}, {"usermod", cmdUsermod},
+		{"groupadd", cmdGroupadd}, {"groups", cmdGroups}, {"chpasswd", cmdChpasswd},
 		{"fastfetch", cmdFastfetch}, {"neofetch", cmdFastfetch},
 		{"who", cmdWho}, {"w", cmdWho}, {"clear", cmdClear}, {"history", cmdHistory},
 		{"exit", cmdExit}, {"logout", cmdExit},
@@ -111,6 +113,234 @@ func (s *Shell) hasSudo() bool {
 		}
 	}
 	return false
+}
+
+// Account management: useradd/userdel/usermod/groupadd/groups. All mutating
+// verbs need root; the state moves through the Device mutators (users.go) so
+// the table and /etc/passwd+/etc/shadow+/etc/sudoers+/etc/group move
+// together. New accounts arrive locked (no password) and are unlocked with
+// `passwd` — the same two-step as a real box. Home directories always come
+// along, the way this world's seeds have always behaved (useradd -m).
+func cmdUseradd(s *Shell, args []string) int {
+	if s.User.UID != 0 {
+		s.errf("useradd: Permission denied (must be root)")
+		return 1
+	}
+	var extra []string
+	shell := ""
+	var names []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-G", "--groups":
+			if i+1 >= len(args) {
+				s.errf("usage: useradd [-G GROUPS] [-s SHELL] USER")
+				return 1
+			}
+			i++
+			extra = append(extra, splitCSV(args[i])...)
+		case "-s", "--shell":
+			if i+1 >= len(args) {
+				s.errf("usage: useradd [-G GROUPS] [-s SHELL] USER")
+				return 1
+			}
+			i++
+			shell = args[i]
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				s.errf("useradd: unknown option '%s'", args[i])
+				return 1
+			}
+			names = append(names, args[i])
+		}
+	}
+	if len(names) != 1 {
+		s.errf("usage: useradd [-G GROUPS] [-s SHELL] USER")
+		return 1
+	}
+	u, err := s.Dev.AddUser(names[0], extra, shell)
+	if err != nil {
+		s.errf("useradd: %v", err)
+		return 1
+	}
+	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+		"useradd: created account "+u.Name, 1)
+	fmt.Fprintf(s.Out, "useradd: created %s (UID %d, locked — set a password with passwd %s)\n",
+		u.Name, u.UID, u.Name)
+	return 0
+}
+
+func cmdUserdel(s *Shell, args []string) int {
+	if s.User.UID != 0 {
+		s.errf("userdel: Permission denied (must be root)")
+		return 1
+	}
+	removeHome := false
+	var names []string
+	for _, a := range args {
+		switch a {
+		case "-r", "--remove":
+			removeHome = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				s.errf("userdel: unknown option '%s'", a)
+				return 1
+			}
+			names = append(names, a)
+		}
+	}
+	if len(names) != 1 {
+		s.errf("usage: userdel [-r] USER")
+		return 1
+	}
+	if names[0] == s.User.Name {
+		s.errf("userdel: cannot remove your own account while logged into it")
+		return 1
+	}
+	if err := s.Dev.DelUser(names[0], removeHome); err != nil {
+		s.errf("userdel: %v", err)
+		return 1
+	}
+	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+		"userdel: removed account "+names[0], 2)
+	fmt.Fprintf(s.Out, "userdel: removed %s\n", names[0])
+	return 0
+}
+
+func cmdGroupadd(s *Shell, args []string) int {
+	if s.User.UID != 0 {
+		s.errf("groupadd: Permission denied (must be root)")
+		return 1
+	}
+	if len(args) != 1 {
+		s.errf("usage: groupadd GROUP")
+		return 1
+	}
+	if err := s.Dev.AddGroup(args[0]); err != nil {
+		s.errf("groupadd: %v", err)
+		return 1
+	}
+	fmt.Fprintf(s.Out, "groupadd: created %s (GID %d)\n", args[0], s.Dev.GroupID(args[0]))
+	return 0
+}
+
+func cmdGroups(s *Shell, args []string) int {
+	target := s.User
+	if len(args) > 1 {
+		s.errf("usage: groups [USER]")
+		return 1
+	}
+	if len(args) == 1 {
+		u := s.Dev.FindUser(args[0])
+		if u == nil {
+			s.errf("groups: %s: no such user", args[0])
+			return 1
+		}
+		target = u
+	}
+	fmt.Fprintf(s.Out, "%s : %s\n", target.Name, strings.Join(target.Groups, " "))
+	return 0
+}
+
+func cmdUsermod(s *Shell, args []string) int {
+	if s.User.UID != 0 {
+		s.errf("usermod: Permission denied (must be root)")
+		return 1
+	}
+	appendMode := false
+	var groups []string
+	var names []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-aG":
+			appendMode = true
+			if i+1 >= len(args) {
+				s.errf("usage: usermod -aG GROUP USER | usermod -G G1,G2 USER")
+				return 1
+			}
+			i++
+			groups = append(groups, splitCSV(args[i])...)
+		case "-G":
+			if i+1 >= len(args) {
+				s.errf("usage: usermod -aG GROUP USER | usermod -G G1,G2 USER")
+				return 1
+			}
+			i++
+			groups = append(groups, splitCSV(args[i])...)
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				s.errf("usermod: unknown option '%s' (only -aG and -G change groups here)", args[i])
+				return 1
+			}
+			names = append(names, args[i])
+		}
+	}
+	if len(groups) == 0 || len(names) != 1 {
+		s.errf("usage: usermod -aG GROUP USER | usermod -G G1,G2 USER")
+		return 1
+	}
+	if err := s.Dev.UsermodGroups(names[0], groups, appendMode); err != nil {
+		s.errf("usermod: %v", err)
+		return 1
+	}
+	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+		"usermod: groups of "+names[0], 2)
+	fmt.Fprintf(s.Out, "usermod: groups of %s now: %s\n", names[0], strings.Join(s.Dev.FindUser(names[0]).Groups, " "))
+	return 0
+}
+
+func splitCSV(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// chpasswd sets passwords in batch from a pipeline (`echo 'u:p' | chpasswd
+// user`). Root-only like everything else that writes the shadow file; each
+// line moves through ChangePassword, so the files agree afterwards. Skipped
+// lines are reported, not silently dropped.
+func cmdChpasswd(s *Shell, args []string) int {
+	if s.User.UID != 0 {
+		s.errf("chpasswd: Permission denied (must be root)")
+		return 1
+	}
+	if len(args) > 0 {
+		s.errf("usage: echo 'user:password' | chpasswd")
+		return 1
+	}
+	if strings.TrimSpace(s.Stdin) == "" {
+		s.errf("chpasswd: no input (pipe user:password lines in)")
+		return 1
+	}
+	changed, skipped := 0, 0
+	for _, line := range strings.Split(s.Stdin, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		u, pw, ok := strings.Cut(line, ":")
+		u, pw = strings.TrimSpace(u), strings.TrimSpace(pw)
+		if !ok || u == "" || pw == "" {
+			skipped++
+			continue
+		}
+		if err := s.Dev.ChangePassword(u, pw); err != nil {
+			s.errf("chpasswd: %v", err)
+			skipped++
+			continue
+		}
+		changed++
+	}
+	s.W.Record("auth", s.User.Name, s.Dev.SourceIPFor(s.Dev), s.Dev.ID,
+		fmt.Sprintf("chpasswd: changed %d password(s), skipped %d", changed, skipped), 1)
+	fmt.Fprintf(s.Out, "chpasswd: changed %d password(s), skipped %d line(s)\n", changed, skipped)
+	if changed == 0 {
+		return 1
+	}
+	return 0
 }
 
 // passwd changes an account's password for real: the account record and

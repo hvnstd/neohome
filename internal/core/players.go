@@ -4,10 +4,59 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
-// Multiplayer citizens (Phase 2) — roommates, not guests
+// Households (§46) — the home as a first-class entity
+//
+// A household is the founder's house plus whoever was vouched into it: the
+// roster, and the shared infrastructure (router, NAS) every citizen inherits
+// instead of carrying literals. `Player.HouseKey` points here. LAN subnets
+// stay owned by addr.go — a household is people and shared boxes, never
+// addresses.
+// ---------------------------------------------------------------------------
+
+// Household is one home: founder, citizens, shared boxes.
+type Household struct {
+	ID      string // "house:<founder>", the same string Player.HouseKey carries
+	Founder string
+	Members []string
+	Router  string // device id of the shared router
+	NAS     string // device id of the shared NAS
+	Created time.Time
+}
+
+// householdOf resolves the inviter's household, backfilling the founder's
+// for saves written before households existed.
+func (w *World) householdOf(inviter string) *Household {
+	if w.Households == nil {
+		w.Households = map[string]*Household{}
+	}
+	if p := w.Players[inviter]; p != nil {
+		if h, ok := w.Households[p.HouseKey]; ok {
+			return h
+		}
+	}
+	for _, h := range w.Households {
+		return h
+	}
+	return nil
+}
+
+// seedHousehold registers the founder's house. Members and infra are facts
+// here, not literals scattered across the invite path.
+func seedHousehold(w *World) {
+	if w.Households == nil {
+		w.Households = map[string]*Household{}
+	}
+	if _, ok := w.Households["house:alex"]; ok {
+		return
+	}
+	w.Households["house:alex"] = &Household{ID: "house:alex", Founder: "alex",
+		Members: []string{"alex"}, Router: "router-alex", NAS: "nas-alex", Created: w.Sim}
+}
+
 //
 // The transport was always multi-user (concurrent ssh/telnet sessions on one
 // shared world, one lock); what was missing was a second human with their
@@ -59,6 +108,15 @@ func (w *World) InvitePlayer(inviter, name, pass string) (*Player, error) {
 	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: -playerSetupFee,
 		Memo: "vouched citizen " + name, Balance: acc.Balance})
 
+	// the citizen inherits the household's shared boxes — the router whose
+	// hosts file learns their name, the NAS they share — instead of every
+	// invite carrying literals for them
+	hh := w.householdOf(inviter)
+	routerID, nasID, houseID := "router-alex", "nas-alex", "house:"+name
+	if hh != nil {
+		routerID, nasID, houseID = hh.Router, hh.NAS, hh.ID
+	}
+
 	id := "pc-" + name
 	d := w.addDevice(id, name+"-pc", "pc", name,
 		OSInfo{"NeoOS", "13.2", "6.12.9", "x86_64", "bash"},
@@ -76,7 +134,7 @@ func (w *World) InvitePlayer(inviter, name, pass string) (*Player, error) {
 	refreshPasswd(d)
 	// the LAN resolver knows the newcomer: dnsmasq reads /etc/hosts, and
 	// this line is the same fact the packet path will use
-	if r := w.Devices["router-alex"]; r != nil {
+	if r := w.Devices[routerID]; r != nil {
 		if data, ok := r.FS.Read("/etc/hosts"); ok {
 			line := address + " " + name + "-pc " + name + "-pc.lan\n"
 			if !containsLine(string(data), name+"-pc") {
@@ -85,9 +143,12 @@ func (w *World) InvitePlayer(inviter, name, pass string) (*Player, error) {
 		}
 	}
 	w.Bank.Accts[name] = &Account{Owner: name, Name: name}
-	p := &Player{Name: name, Pass: pass, PC: d.ID, Router: "router-alex",
-		NAS: "nas-alex", HouseKey: "house:" + name, Created: w.Sim}
+	p := &Player{Name: name, Pass: pass, PC: d.ID, Router: routerID,
+		NAS: nasID, HouseKey: houseID, Created: w.Sim}
 	w.Players[name] = p
+	if hh != nil {
+		hh.Members = append(hh.Members, name)
+	}
 	d.Logf("info", "player", "citizen %s vouched by %s (setup $20.00)", name, inviter)
 	w.AddEvent(d.ID, "info", "player", "%s joined the household, vouched by %s", name, inviter)
 	return p, nil

@@ -213,6 +213,13 @@ func LoadWorld(path string) (*World, error) {
 	for _, id := range w.Order {
 		w.Devices[id].W = w
 	}
+	// saves from before /etc/group existed: re-render it everywhere. The
+	// content is derived from the account tables, so this is idempotent.
+	for _, id := range w.Order {
+		if d := w.Devices[id]; d != nil && d.FS != nil {
+			renderGroup(d)
+		}
+	}
 	// guests carry Host/W pointers that gob drops by design (see VM.GobEncode:
 	// encoding them would drag the whole world into every guest, which is
 	// what made a world with a guest unsaveable). Re-link them here, the same
@@ -271,6 +278,24 @@ func LoadWorld(path string) (*World, error) {
 		}
 		if w.Prov.Nodes == nil {
 			w.Prov.Nodes = map[string]*NodeRecord{}
+		}
+	}
+	if len(w.Households) == 0 {
+		// saves from before households existed: the founder's house, with
+		// whoever the player map says lives in it
+		seedHousehold(w)
+		if h := w.Households["house:alex"]; h != nil {
+			for name := range w.Players {
+				found := false
+				for _, m := range h.Members {
+					if m == name {
+						found = true
+					}
+				}
+				if !found {
+					h.Members = append(h.Members, name)
+				}
+			}
 		}
 	}
 	return w, nil

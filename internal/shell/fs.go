@@ -621,14 +621,16 @@ func cmdId(s *Shell, args []string) int {
 	if len(u.Groups) > 0 {
 		gname = u.Groups[0]
 	}
-	fmt.Fprintf(s.Out, "uid=%d(%s) gid=%d(%s)", u.UID, u.Name, u.UID, gname)
+	// GIDs come from the same rule as /etc/group (see core.GroupID), so `id`
+	// and the file agree instead of both repeating the UID.
+	fmt.Fprintf(s.Out, "uid=%d(%s) gid=%d(%s)", u.UID, u.Name, s.Dev.GroupID(gname), gname)
 	if len(u.Groups) > 1 {
-		fmt.Fprintf(s.Out, " groups=%d(%s)", u.UID, gname)
+		fmt.Fprintf(s.Out, " groups=%d(%s)", s.Dev.GroupID(gname), gname)
 		for _, g := range u.Groups[1:] {
-			fmt.Fprintf(s.Out, ",%d(%s)", u.UID, g)
+			fmt.Fprintf(s.Out, ",%d(%s)", s.Dev.GroupID(g), g)
 		}
 	} else {
-		fmt.Fprintf(s.Out, " groups=%d(%s)", u.UID, gname)
+		fmt.Fprintf(s.Out, " groups=%d(%s)", s.Dev.GroupID(gname), gname)
 	}
 	fmt.Fprintln(s.Out)
 	return 0

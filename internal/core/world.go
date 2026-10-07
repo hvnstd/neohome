@@ -56,6 +56,9 @@ type World struct {
 	// Orgs / clans (Phase 2): crews with rosters, treasuries and escrowed
 	// contracts. Shape owned by org.go; created lazily like everything else.
 	Clans map[string]*Org
+	// Households (§46): people and shared boxes per home. Shape owned by
+	// players.go; seeded for the founder, backfilled for older saves.
+	Households map[string]*Household
 
 	BusyDay   []string // trace of what the NPC world did today, for the news feed
 	nextPID   int
@@ -127,15 +130,18 @@ type Player struct {
 }
 
 type Device struct {
-	W            *World
-	ID           string
-	Hostname     string
-	Profile      string // pc|router|nas|vps|infra|core
-	Owner        string
-	OS           OSInfo
-	HW           Hardware
-	FS           *VFS
-	Users        map[string]*User
+	W        *World
+	ID       string
+	Hostname string
+	Profile  string // pc|router|nas|vps|infra|core
+	Owner    string
+	OS       OSInfo
+	HW       Hardware
+	FS       *VFS
+	Users    map[string]*User
+	// GroupIDs pins GIDs for groups named after nobody (see users.go): the
+	// login table owns membership, this owns number stability.
+	GroupIDs     map[string]int
 	Procs        []*Proc
 	Services     map[string]*Service
 	Ifaces       []*Iface
@@ -604,6 +610,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		HW                           Hardware
 		FS                           *VFS
 		Users                        map[string]*User
+		GroupIDs                     map[string]int
 		Procs                        []*Proc
 		Services                     map[string]*Service
 		Ifaces                       []*Iface
@@ -638,7 +645,7 @@ func (d *Device) GobEncode() ([]byte, error) {
 		Security                     *SecState
 	}{
 		ID: d.ID, Hostname: d.Hostname, Profile: d.Profile, Owner: d.Owner,
-		OS: d.OS, HW: d.HW, FS: d.FS, Users: d.Users, Procs: d.Procs, Services: d.Services,
+		OS: d.OS, HW: d.HW, FS: d.FS, Users: d.Users, GroupIDs: d.GroupIDs, Procs: d.Procs, Services: d.Services,
 		Ifaces: d.Ifaces, Boot: d.Boot, PowerOK: d.PowerOK, MeterKWh: d.MeterKWh, BillDue: d.BillDue,
 		NetUp: d.NetUp, MainsDropped: d.MainsDropped, UPS: d.UPS, BootSet: d.BootSet,
 		Switch: d.Switch, Uplink: d.Uplink, UplinkPort: d.UplinkPort,
@@ -663,6 +670,7 @@ func (d *Device) GobDecode(b []byte) error {
 		HW                           Hardware
 		FS                           *VFS
 		Users                        map[string]*User
+		GroupIDs                     map[string]int
 		Procs                        []*Proc
 		Services                     map[string]*Service
 		Ifaces                       []*Iface
@@ -700,6 +708,7 @@ func (d *Device) GobDecode(b []byte) error {
 	}
 	d.ID, d.Hostname, d.Profile, d.Owner = shadow.ID, shadow.Hostname, shadow.Profile, shadow.Owner
 	d.OS, d.HW, d.FS, d.Users, d.Procs, d.Services = shadow.OS, shadow.HW, shadow.FS, shadow.Users, shadow.Procs, shadow.Services
+	d.GroupIDs = shadow.GroupIDs
 	d.Ifaces, d.Boot, d.PowerOK, d.MeterKWh, d.BillDue = shadow.Ifaces, shadow.Boot, shadow.PowerOK, shadow.MeterKWh, shadow.BillDue
 	d.Dmesg, d.DHCPL, d.Notes = shadow.Dmesg, shadow.DHCPL, shadow.Notes
 	d.Purposes, d.Installed, d.Mounts, d.Sessions = shadow.Purposes, shadow.Installed, shadow.Mounts, shadow.Sessions
