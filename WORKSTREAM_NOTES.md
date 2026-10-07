@@ -1912,7 +1912,7 @@ it does not round-trip either — see `internal/core/world.go:590`.
 ## Verified
 
 `gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
-(196 tests: 182 existing untouched plus 6 passwd + 7 wear + 1 debug removed).
+(266 pass, 0 fail — the 13 new tests included).
 No new live-verify script: no entry or networking path was touched
 (`passwd`/`smartctl`/`fsck` ride the existing sessions), so the unit + full
 suite coverage is the verification.
