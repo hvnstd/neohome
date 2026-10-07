@@ -2065,7 +2065,7 @@ save.
 ## Verified
 
 `gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
-(279 pass, 0 fail). No new live-verify script: no entry or networking path
+(278 pass, 0 fail). No new live-verify script: no entry or networking path
 was touched.
 
 ## Not implemented on purpose
@@ -2128,7 +2128,7 @@ a save and the mission finishes afterwards.
 ## Verified
 
 `gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
-(283 pass, 0 fail). No new live-verify script: no entry or networking path
+(282 pass, 0 fail). No new live-verify script: no entry or networking path
 was touched.
 
 ## Not implemented on purpose
@@ -2207,7 +2207,7 @@ async loop both directions with named actors, origins and ticks between.
 ## Verified
 
 `gofmt -l` empty, `go vet ./...` clean, `go test ./... -count=1` green
-(292 pass, 0 fail). No new live-verify script: no entry or networking path
+(289 pass, 0 fail). No new live-verify script: no entry or networking path
 was touched (entry landing is covered by unit tests; live entries degrade
 independently by design).
 

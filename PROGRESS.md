@@ -4,7 +4,7 @@
 测试和 `WORKSTREAM_NOTES.md`。状态只有三种：**已完成**（有实现+测试+验证）、
 **部分**（能用但有明确缺口，缺口写出来）、**未开始**。
 
-验证基线：`go build` ✓、`go vet ./...` ✓、`go test ./...` 292 pass 0 fail、
+验证基线：`go build` ✓、`go vet ./...` ✓、`go test ./...` 289 pass 0 fail、
 `gofmt -l` 空。Live 端口 `:2024`/`:2222`，存档默认 `world.gob`。
 
 ## 阶段
