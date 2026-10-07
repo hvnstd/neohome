@@ -283,6 +283,10 @@ type Iface struct {
 	Up    bool
 	Link  string // device id directly connected
 	Mode  string // static|dhcp
+	// VLAN is the 802.1Q tag of this interface (0 = untagged). Two tagged
+	// devices on different VLANs only talk through a gateway that routes
+	// between them and only where its config allows (§31) — see vlan.go.
+	VLAN int
 }
 
 type User struct {

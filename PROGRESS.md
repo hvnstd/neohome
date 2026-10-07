@@ -50,7 +50,7 @@
 | 二十八 | 攻击面 | 已完成 | 全来自真实配置（转发/DMZ/UPnP/弱口令/暴露 IoT/防火墙） |
 | 二十九 | 漏洞利用 | 部分 | 框架完整（条件/后果/检测度/证据），但仅 3 个虚拟漏洞 |
 | 三十 | 权限提升 | 已完成 | 公钥双向文件匹配+ssh-keygen+分发链；suid 经查不适用（无用户态 exec 语义，chmod 04000 落不到 FileMode） |
-| 三十一 | 横向移动 | 部分 | 企业网+DMZ 语义（`WPort==0`）齐；**无 VLAN 划分**（Server/Admin/Backup/Guest） |
+| 三十一 | 横向移动 | 已完成 | Server(10)/Workstation(20) 两段+网关 allow+默认拒+反向禁行；Admin/Backup/Guest 无设备可装（空 VLAN 是装饰） |
 | 三十二 | Heat/Trace/Evidence | 已完成 | 证据图+权重+衰减+溯源（到运营商止） |
 | 三十三 | 防守软件 | 已完成 | 防火墙/IDS/HIDS/审计/杀毒/fail2ban/完整性/集中日志/备份/监控（WS-1.12） |
 | 三十四 | 取证/网管/ISP | 已完成 | 注册/NOC/Abuse 台/DC/企业网管+案件流（WS-1.13） |

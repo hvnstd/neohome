@@ -274,8 +274,15 @@ func seedDesks(w *World) {
 	mh := mk("meridian-hq", "gw.meridian.example", DeskEnterprise, "Meridian Systems", asPeer,
 		Hardware{"Edge Router", 2, 1800, 2048, 8192, 500, false, false}, OSInfo{"NeoWRT", "24.10", "5.15.160", "mips", "ash"})
 	mh.Notes = "Meridian Systems office gateway. NAT for the office LAN, no inbound services published."
-	mh.Ifaces = append(mh.Ifaces, &Iface{Name: "eth1", IP: "10.90.0.1", CIDR: "10.90.0.0/24", MAC: macFor("meridian-lan"), Zone: "lan", Up: true})
-	w.IPMap["10.90.0.1"] = "meridian-hq"
+	// §31: the office is segmented — servers on VLAN 10, workstations on
+	// VLAN 20, routed here and only where /etc/config/network allows. The
+	// old flat 10.90.0.0/24 is gone: same-subnet tags would be a lie about
+	// L2, so each VLAN is its own /24 with its own gateway address.
+	mh.Ifaces = append(mh.Ifaces,
+		&Iface{Name: "eth1.10", IP: "10.90.10.1", CIDR: "10.90.10.0/24", MAC: macFor("meridian-v10"), Zone: "lan", Up: true, VLAN: 10},
+		&Iface{Name: "eth1.20", IP: "10.90.20.1", CIDR: "10.90.20.0/24", MAC: macFor("meridian-v20"), Zone: "lan", Up: true, VLAN: 20})
+	w.IPMap["10.90.10.1"] = "meridian-hq"
+	w.IPMap["10.90.20.1"] = "meridian-hq"
 	mh.Services["dnsmasq"] = &Service{Name: "dnsmasq", Desc: "DHCP+DNS", Port: 53, Proto: "udp+tcp",
 		Scope: "lan", State: "running", Handler: "dns-forward", Conf: "/etc/dnsmasq.conf"}
 	mh.Services["dropbear"] = &Service{Name: "dropbear", Desc: "SSH", Port: 22, Proto: "tcp",
@@ -283,25 +290,38 @@ func seedDesks(w *World) {
 	mh.Services["smtpd"] = &Service{Name: "smtpd", Desc: "SMTP mail transfer agent", Port: 25, Proto: "tcp",
 		Scope: "wan", State: "running", Handler: "smtpd", Banner: "220 mail.meridian.example ESMTP ready"}
 	host(mh, map[string]*User{"admin": {Name: "admin", UID: 1000, Pass: "meridian-admin", Groups: []string{"admin", "sudo"}, Home: "/home/admin", Shell: "/bin/ash"}})
-	mh.FS.Write("/etc/dnsmasq.conf", "interface=eth1\ndhcp-range=10.90.0.100,10.90.0.200,12h\ndomain=meridian.example\n", 0644, "root", "root")
+	mh.FS.Write("/etc/dnsmasq.conf", "interface=eth1.10\ninterface=eth1.20\ndhcp-range=10.90.20.100,10.90.20.200,12h\ndomain=meridian.example\n", 0644, "root", "root")
 	mh.FS.Write("/etc/config/firewall", RenderUCIFirewall(&FirewallState{WANInput: "REJECT", ForwardPolicy: "REJECT", LogDrops: true}), 0644, "root", "root")
+	// the inter-VLAN policy, re-read on every packet: workstations may reach
+	// the servers' file sharing and ssh; servers initiate nothing back.
+	// That asymmetry is the whole lateral-movement lesson.
+	mh.FS.Write("/etc/config/network",
+		"config interface 'lan10'\n\toption proto 'static'\n\toption ipaddr '10.90.10.1'\n\toption netmask '255.255.255.0'\n\toption vlan '10'\n\n"+
+			"config interface 'lan20'\n\toption proto 'static'\n\toption ipaddr '10.90.20.1'\n\toption netmask '255.255.255.0'\n\toption vlan '20'\n\n"+
+			"config switch_vlan 'v10'\n\toption id '10'\n\toption ports 'meridian-dc meridian-fs'\n\n"+
+			"config switch_vlan 'v20'\n\toption id '20'\n\toption ports 'meridian-ws'\n\n"+
+			"config allow 'ws-to-srv-smb'\n\toption src '20'\n\toption dest '10'\n\toption proto 'tcp'\n\toption dest_port '445'\n\n"+
+			"config allow 'ws-to-srv-ssh'\n\toption src '20'\n\toption dest '10'\n\toption proto 'tcp'\n\toption dest_port '22'\n",
+		0644, "root", "root")
 
 	for _, ent := range []struct {
 		id, hostname string
 		ip           string
+		vlan         int
+		gw           string
 		hw           Hardware
 		os           OSInfo
 		services     map[string]*Service
 	}{
-		{"meridian-dc", "dc.meridian.example", "10.90.0.10", Hardware{"Server", 8, 3000, 16384, 204800, 500, false, false},
+		{"meridian-dc", "dc.meridian.example", "10.90.10.10", 10, "10.90.10.1", Hardware{"Server", 8, 3000, 16384, 204800, 500, false, false},
 			OSInfo{"Windows Server", "2022", "-", "x86_64", "cmd"},
 			map[string]*Service{"ldap": {Name: "ldap", Desc: "directory service", Port: 389, Proto: "tcp", Scope: "lan", State: "running", Handler: "ldap"},
 				"sshd": {Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.4"}}},
-		{"meridian-fs", "fs.meridian.example", "10.90.0.20", Hardware{"Server", 4, 2400, 8192, 409600, 500, false, false},
+		{"meridian-fs", "fs.meridian.example", "10.90.10.20", 10, "10.90.10.1", Hardware{"Server", 4, 2400, 8192, 409600, 500, false, false},
 			OSInfo{"Debian", "12", "6.1.0", "x86_64", "bash"},
 			map[string]*Service{"smbd": {Name: "smbd", Desc: "Samba file shares", Port: 445, Proto: "tcp", Scope: "lan", State: "running", Handler: "smb", Conf: "/etc/samba/smb.conf"},
 				"sshd": {Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.2"}}},
-		{"meridian-ws", "ws-07.meridian.example", "10.90.0.31", Hardware{"Workstation", 4, 3200, 8192, 102400, 500, false, false},
+		{"meridian-ws", "ws-07.meridian.example", "10.90.20.31", 20, "10.90.20.1", Hardware{"Workstation", 4, 3200, 8192, 102400, 500, false, false},
 			OSInfo{"Windows", "11", "-", "x86_64", "cmd"},
 			map[string]*Service{"sshd": {Name: "sshd", Desc: "OpenSSH", Port: 22, Proto: "tcp", Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.4"}}},
 	} {
@@ -312,7 +332,8 @@ func seedDesks(w *World) {
 		for _, svc := range ent.services {
 			d.Services[svc.Name] = svc
 		}
-		d.Ifaces[0].GW = "10.90.0.1"
+		d.Ifaces[0].GW = ent.gw
+		d.Ifaces[0].VLAN = ent.vlan
 		d.Installed["sshd"] = &VPkg{Name: "sshd", Version: "9.4"}
 		d.Notes = "Meridian Systems office host. The security team watches this segment."
 		lanHost(d, map[string]*User{
@@ -323,6 +344,7 @@ func seedDesks(w *World) {
 			{Name: "lan-smb", Proto: "tcp", Port: 445, Target: "ACCEPT", Src: "lan"},
 			{Name: "lan-ldap", Proto: "tcp", Port: 389, Target: "ACCEPT", Src: "lan"},
 		})
+		d.FS.Write("/etc/resolv.conf", "nameserver "+ent.gw+"\nsearch meridian.example\n", 0644, "root", "root")
 	}
 	w.Devices["meridian-fs"].FS.Write("/etc/samba/smb.conf",
 		"[global]\n   workgroup = MERIDIAN\n   server string = Meridian file server\n   security = user\n\n[projects]\n   path = /srv/projects\n   valid users = @staff\n   read only = no\n   browseable = yes\n", 0644, "root", "root")
@@ -382,8 +404,8 @@ func seedDesks(w *World) {
 		DNSRecord{Name: "soc.meridian.example", IP: wanIP(soc)},
 		DNSRecord{Name: "gw.meridian.example", IP: wanIP(mh)},
 		DNSRecord{Name: "cnu.gov.example", IP: wanIP(le)},
-		DNSRecord{Name: "dc.meridian.example", IP: "10.90.0.10"},
-		DNSRecord{Name: "fs.meridian.example", IP: "10.90.0.20"},
+		DNSRecord{Name: "dc.meridian.example", IP: "10.90.10.10"},
+		DNSRecord{Name: "fs.meridian.example", IP: "10.90.10.20"},
 	)
 }
 

@@ -435,6 +435,23 @@ func Reach(src *Device, dstIP string) (string, bool) {
 	}
 
 	sameLAN := src.onLink(dstIP)
+	if !sameLAN && !IsV6(dstIP) {
+		// §31 for pings too: a denied VLAN pair is unreachable with the
+		// gateway's name on it, an allowed one proceeds LAN-side
+		if dstID, ok := src.W.IPMap[dstIP]; ok {
+			if dst2 := src.W.Devices[dstID]; dst2 != nil {
+				if applies, allow, gw, sv, dv := vlanVerdict(src.W, src, dst2, dstIP, 0, "icmp"); applies {
+					if !allow {
+						if gw == nil {
+							return fmt.Sprintf("No route to host (VLAN %d and %d are not routed)", sv, dv), false
+						}
+						return fmt.Sprintf("Destination Host Unreachable (filtered by %s: VLAN %d to %d denied)", gw.Hostname, sv, dv), false
+					}
+					sameLAN = true
+				}
+			}
+		}
+	}
 	if !sameLAN {
 		if src.IsV6Only() {
 			return "Network is unreachable (no IPv4 address: this host is IPv6-only)", false
@@ -620,6 +637,26 @@ func dial(src *Device, dstIP string, port int) (*Service, *Device, string) {
 	}
 
 	fromWAN := !sameLAN
+
+	// §31 inter-VLAN traffic is gateway-routed, never LAN-direct: two
+	// tagged devices on different VLANs are not on-link with each other.
+	// Allowed traffic arrives on the target's LAN side (tagged), so the rest
+	// of the path judges it like LAN traffic; denied traffic stops here
+	// naming both VLANs. v6 keeps its existing publication rules.
+	if fromWAN && !IsV6(dstIP) {
+		if applies, allow, gw, sv, dv := vlanVerdict(src.W, src, dst, dstIP, port, "tcp"); applies {
+			if !allow {
+				if gw == nil {
+					return nil, dst, fmt.Sprintf("No route to host (VLAN %d and %d are not routed)", sv, dv)
+				}
+				if !gw.Powered() {
+					return nil, dst, fmt.Sprintf("Connection timed out (%s is down: VLAN %d to %d has no router)", gw.Hostname, sv, dv)
+				}
+				return nil, dst, fmt.Sprintf("Connection timed out (filtered by %s: VLAN %d to %d denied)", gw.Hostname, sv, dv)
+			}
+			fromWAN = false
+		}
+	}
 
 	// §13: IPv6 does not translate. Nothing is DNATed, so the whole NAT half
 	// of the v4 path below does not apply; what decides is a rule on the

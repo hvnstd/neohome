@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| 缺口 5a:企业 VLAN | this commit | meridian 分 10/20 两段、网关 allow 规则、包路径双钩子、同 VLAN 不经路由 | §"缺口 5a" |
 | 缺口 3:NPC 记忆 | this commit | 每 handle 事件环+有向 standing 七处钩子、聊天喊话/collector 拒收/`people` 三处读回 | §"缺口 3" |
 | 缺口 4:密钥+配额 | this commit | 公钥文件匹配+ssh-keygen+种子钥匙去重、Assistant Quota 进调度/swap/OOM/显示、suid 不适用结论 | §"缺口 4" |
 | 缺口 6:四小件 | this commit | sftp -r 双向树、bbs mail/inbox、私信0600、git 分支+FF合并、imaps:993 证书握手 | §"缺口 6" |
@@ -2400,3 +2401,40 @@ log、`people [NAME]`（名册+对方对你的分+对方最后一条记忆）。
 拒收并记 log（顺带证明 seeded M-1/M-2 的清空买单不算数）；-30 及线喊
 话、无仇恨沉默；`people` 双向与图例；记忆与分过存档。`gofmt` 空、
 `vet` 干净、全量绿（317 pass，0 fail）。
+
+# 缺口 5a:企业 VLAN（§31）
+
+Meridian 原来是扁平 `/24`：同一子网即同一 LAN，所谓隔离只剩主机防火
+墙。现在服务器在 VLAN 10（10.90.10.0/24），工作站在 VLAN 20
+（10.90.20.0/24），网关各持一足（eth1.10/eth1.20），跨 VLAN 只走网关、
+只按 `/etc/config/network` 的 allow 放行。
+
+## 模型
+
+* `Iface.VLAN`（0=untagged，全世界其余部分不受影响）；成员是拓扑
+  （seed 定），策略是文件（网关上 UCI，每包重读，uci 可改）。
+* 默认拒绝：`config allow` 写明 src/dest/proto/port 才开（seed：20→10
+  的 445/22；10→20 一条没有——服务器主动连工作站即横向移动，在此被
+  毙）。重 numbered 而非同子网打 tag：同子网不同 tag 是对 L2 撒谎。
+* 包路径（`dial`+`Reach` 共用 `vlanVerdict`）：不同 tag 即非 on-link；
+  放行走网关后按 LAN 侧继续（目标 lan-scope 服务与 lan accept 照常判）；
+  拒绝在网关点名双 VLAN（+LogDrops 记线）；网关自己收发绕行（管理面走
+  自己的防火墙）；网关黑了报黑（同 VLAN 交换不受影响——这是 L2 和 L3
+  的区别，测试锁死）。v6 走原 publication 规则，不动。
+* `ip addr` 打印 `vlan N` 行；`scan`/`exploit`/`traceroute` 自动跟随
+  （全经 Dial/Reach）。
+
+## 测试与验证
+
+五个：规则开/默认拒/反向拒/同 VLAN 直通；删规则即关、恢复即开（无缓
+存证明）；网关黑了跨 VLAN 报修、同 VLAN 照通、恢复照走；ping 对等
+（同 VLAN 通、跨 VLAN 报过滤名）；tag 过存档且 segmentation 照 work。
+既有 abuse/law/smb 全过（ws→fs 的 ssh/smb 正是 J-105 的路）。`gofmt`
+空、`vet` 干净、全量绿（322 pass，0 fail）。
+
+## Not implemented on purpose
+
+* **Admin/Backup/Guest VLAN**：没有设备可装的空 VLAN 是装饰（规格禁
+ 止）。机制（分段+网关规则+默认拒）已齐，加网段只是加 allow 行。
+* **VLAN 内 DHCP 中继细节**：dnsmasq 只在 workstation 段开动态池，
+  服务器全静态——够用的诚实子集。

@@ -94,6 +94,9 @@ func cmdIp(s *Shell, args []string) int {
 			fmt.Fprintf(s.Out, "%d: %s: <%s> mtu 1500 qdisc pfifo_fast state %s\n",
 				n+1, i.Name, updown(i.Up), updown(i.Up))
 			fmt.Fprintf(s.Out, "    link/ether %s brd ff:ff:ff:ff:ff:ff\n", i.MAC)
+			if i.VLAN != 0 {
+				fmt.Fprintf(s.Out, "    vlan %d\n", i.VLAN)
+			}
 		}
 	case "addr", "address":
 		for n, i := range append([]*core.Iface{lo}, s.Dev.Ifaces...) {
@@ -103,6 +106,9 @@ func cmdIp(s *Shell, args []string) int {
 			fmt.Fprintf(s.Out, "%d: %s: <%s> mtu 1500 qdisc pfifo_fast state %s qlen 1000\n",
 				n+1, i.Name, updown(i.Up), updown(i.Up))
 			fmt.Fprintf(s.Out, "    link/ether %s brd ff:ff:ff:ff:ff:ff\n", i.MAC)
+			if i.VLAN != 0 {
+				fmt.Fprintf(s.Out, "    vlan %d\n", i.VLAN)
+			}
 			isLo := i.Zone == "lo"
 			if i.IP != "" && family != 6 {
 				// a DHCP address is dynamic and carries a lease: §13's
