@@ -2264,4 +2264,4 @@ house 继承；成员随邀请进出；创始人 seed；老存档 load 时按 pl
 ## 验证
 
 `gofmt -l` 空、`go vet ./...` 干净、`go test ./... -count=1` 绿
-（296 pass，0 fail）。无 live 脚本：未碰入口与网络。
+（297 pass，0 fail）。无 live 脚本：未碰入口与网络。
