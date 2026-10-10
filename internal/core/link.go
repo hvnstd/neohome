@@ -628,3 +628,26 @@ func (w *World) LinkPath(d *Device) string {
 	}
 	return strings.Join(parts, " → ")
 }
+
+// LinkParent reports the device and port a box hangs off, whichever it is
+// wired to (a direct cable, a switch port, or nothing at all). The topology
+// map and any other question phrased as "what is this plugged into" read
+// this instead of re-deriving the two shapes.
+func (w *World) LinkParent(d *Device) (string, int) {
+	if d.Uplink != "" {
+		return d.Uplink, d.UplinkPort
+	}
+	if sw, port := w.SwitchOf(d); sw != nil && port != nil {
+		return sw.ID, port.Num
+	}
+	// a switch is wired through its own uplink port: whoever sits on that
+	// port is the parent, which is what makes the map a tree
+	if d.Switch != nil {
+		for _, p := range d.Switch.Ports {
+			if p.Uplink && p.Peer != "" {
+				return p.Peer, p.Num
+			}
+		}
+	}
+	return "", 0
+}

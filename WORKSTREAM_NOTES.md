@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| P3e:拓扑图 | this commit | topo/map 按真实走线画树+交换机端口表+LinkParent 补 switch 上行 | §"P3e" |
 | P3d:Assistant 多实例 | this commit | clone/nodes/status+task路由最闲节点 | §"P3d" |
 | P3c:资源调度 | this commit | quota 动词全household化+全家算力表 | §"P3c" |
 | P3b:builders | this commit | server build 四角色+回滚、backup init 五步+重入认旧仓 | §"P3b" |
@@ -41,6 +42,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| P3e:拓扑图 | this commit | topo/map 按真实走线画树+交换机端口表+LinkParent 补 switch 上行 | §"P3e" |
 | P3d:Assistant 多实例 | this commit | clone/nodes/status+task路由最闲节点 | §"P3d" |
 | P3c:资源调度 | this commit | quota 动词全household化+全家算力表 | §"P3c" |
 | P3b:builders | this commit | server build 四角色+回滚、backup init 五步+重入认旧仓 | §"P3b" |
@@ -2714,3 +2716,24 @@ EffRAMMB 进调度/swap/OOM/显示），缺的只是动词：`quota [HOST]
 真注释：seed 前 primary 就有六个服务进程，clone 是零，所以"第一条落主"从
 没平过，改成断言 lightest 语义+打满后回流。技能/预算仍是 household 资
 产（本来的模型），克隆的是机器不是灵魂。`gofmt` 空、`vet` 干净、全量绿（359 pass，0 fail）。
+
+# P3e:可视化拓扑（topo/map）
+
+终端即 xterm.js 能显示的全部——图形要靠前端，但家里这张图现在按真实
+走线画：`topo`（别名 `map`）以你背后的路由器为根，顺着
+`core.LinkParent` 走线（直连/交换机口/交换机上行口三类），交换机另附
+端口表（对端、admin 状态、速率、PoE）。图的每条边都是 L2 状态，所以
+`switchctl port 3 down` 之后图、包路径、报告三者一致。`gofmt` 空、`vet` 干净、全量绿（361 pass，0 fail）。
+
+## 模型与踩坑
+
+* `LinkParent` 放 `core/link.go`（shell 不能给 core 加方法，第一次写
+  在 shell 里编译不过才搬）。顺便补了"交换机自身挂在它上行口的人身
+  上"——之前 Walk 到交换机就断，因为 switch 没有 Uplink 字段，它是用
+  Ports[].Uplink 表达的。
+* 递归画树，seen 防环；usb 不画（不是 LAN 设备）；断电标 `[dark]`。
+
+## 测试与验证
+
+两个：种子线网全出现（laptop/cam/PoE）+别名；拔端口→图显
+admin-down+包路径同判，恢复即消。`gofmt` 空、`vet` 干净、全量绿。
