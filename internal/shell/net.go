@@ -646,6 +646,8 @@ func serveHTTP(s *Shell, svc *core.Service, host, ip, urlPath string) string {
 		return "jobs.hiring.example — open positions\n"
 	case "http-nas":
 		return "<html><body>NAS admin console (login required)</body></html>\n"
+	case "http-terminal":
+		return s.W.WebLanding()
 	case "http-user":
 		return "<html><body><h1>Welcome to nginx!</h1></body></html>\n"
 	case "smtpd":

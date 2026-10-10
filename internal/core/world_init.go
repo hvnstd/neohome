@@ -430,6 +430,12 @@ func NewWorld() *World {
 		Scope: "lan", State: "running", Handler: "syslog", Conf: "/etc/rsyslog.conf"}
 	pc.Services["rsyslog"] = &Service{Name: "rsyslog", Desc: "system logging", Port: 0, Proto: "udp", Scope: "any", State: "running", Handler: "syslog"}
 	asst.Services["syslogd"] = &Service{Name: "syslogd", Desc: "BusyBox syslogd", Port: 0, Proto: "udp", Scope: "lan", State: "running", Handler: "syslog"}
+	// the web terminal (§50): a browser is one-shot HTTP, so this is a real
+	// service on a real port with the accounts ssh uses — not a second
+	// shell protocol pretending to be persistent
+	asst.Services["webd"] = &Service{Name: "webd", Desc: "web terminal (xterm.js)", Port: 8080, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "http-terminal", Banner: "NeoHome web terminal", Conf: "/etc/webd.conf"}
+	asst.FS.Write("/etc/webd.conf", "listen 8080\nbind 0.0.0.0\nbanner NeoHome web terminal\n", 0644, "root", "root")
 	mirror.Services["rsyslog"] = &Service{Name: "rsyslog", Desc: "system logging", Port: 0, Proto: "udp", Scope: "any", State: "running", Handler: "syslog"}
 	// the package serving hosts: the archive publishes what upstream signs,
 	// the mirror republishes it, the CDN publishes a third-party tree

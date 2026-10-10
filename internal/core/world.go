@@ -66,6 +66,9 @@ type World struct {
 	// Bytecode background states (§8): pid-keyed resumable programs. Shape
 	// owned by bytecode.go; plain data round-trips through gob.
 	BCStates map[int]*BCState
+	// Web terminal sessions (§50): browser logins with the same evidence as
+	// ssh. Shape owned by webtty.go; plain data, saved with the world.
+	WebSessions map[string]*WebSession
 	// World generator (§44): development counter plus generated household
 	// names. Plain data; the households themselves are ordinary devices.
 	GenSeq   int
