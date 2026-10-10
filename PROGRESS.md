@@ -1,10 +1,10 @@
-# NeoHome — 进度状态（2026-10-07，分支 `arena/01a10c9c-neohome`）
+# NeoHome — 进度状态（2026-10-10，分支 `arena/01a10c9c-neohome`）
 
 `PROJECT.md` 是规格唯一权威来源；本文件只回答“每节做到哪了”，依据是代码、
 测试和 `WORKSTREAM_NOTES.md`。状态只有三种：**已完成**（有实现+测试+验证）、
 **部分**（能用但有明确缺口，缺口写出来）、**未开始**。
 
-验证基线：`go build` ✓、`go vet ./...` ✓、`go test ./...` 289 pass 0 fail、
+验证基线：`go build` ✓、`go vet ./...` ✓、`go test ./...` 366 pass 0 fail、
 `gofmt -l` 空。Live 端口 `:2024`/`:2222`，存档默认 `world.gob`。
 
 ## 阶段
@@ -14,7 +14,7 @@
 | MVP / Phase 0（§47） | 已完成 | 单玩家+Assistant+PC/路由/NAS+DNS 故障闭环：登录→排障→修网→赚钱→Assistant 自主赚钱 |
 | Phase 1（§48） | 已完成 | 25 项全部有实现和测试；最后一批缺口（VM 快照、手机电源、cron 认电）已补 |
 | Phase 2（§49） | 已完成 | 企业网/ISP/DC/Provider/Abuse/Trace/Evidence/执法（§34/§35）+ 黑市 + 复杂任务 + 多人/组织/异步 PvP |
-| Phase 3（§50） | 未开始 | Web 客户端、可视化拓扑、Assistant 多实例、资源调度、社区包/任务、世界生成器、任务编辑器、Mirror/Server Builder，全无 |
+| Phase 3（§50） | 已完成（服务端） | 社区包/任务/Mirror+Server+Backup Builder/资源调度/多实例/拓扑图/webd+browse 全部落地；**半成品**：无真浏览器 WS/PTY 前端，`browse` 是一次性 HTTP 客户端 |
 
 ## 分节状态
 
@@ -63,25 +63,36 @@
 | 四十一 | 地下室离线 | 已完成 | 离线 server+大盘+摆渡 routine；软件靠摆渡带（无包管理，注明） |
 | 四十二 | 物理层 | 已完成 | 门/锁/摄像头/机柜/交换机/电源/UPS+数字绑定（断线/复位/物理访问） |
 | 四十三 | PvP | 已完成 | 规格只要异步：双公民实证（入侵→取证→溯源→反杀，tick 间隔即 async） |
-| 四十四 | 内容生产 | 部分 | Household/NPC/Package/Job/Mission 皆有模板结构；**缺世界生成器/任务编辑器/社区格式** |
-| 四十五 | 技术架构 | 部分 | Go ✓ SSH ✓ 状态机 ✓；Web（xterm.js）✗；数据是 gob 存档而非 SQLite |
+| 四十四 | 内容生产 | 已完成 | 编辑器=`job new`、社区格式=mission 文本、世界生成器=`worldgen household`；Package/Mission/Household 模板都在代码里 |
+| 四十五 | 技术架构 | 部分 | Go ✓ SSH/telnet ✓ 状态机 ✓ **webd 服务端 ✓ 无浏览器前端**（`browse` 是一次性 HTTP 客户端，非 xterm.js/WS/PTY）；数据是 gob 存档而非 SQLite |
 | 四十六 | 数据模型 | 已完成 | Household 一等实体（成员+共用 infra），其余 36 项早齐 |
 | 四十七 | MVP | 已完成 | 见阶段表 |
 | 四十八 | Phase 1 | 已完成 | 见阶段表 |
 | 四十九 | Phase 2 | 已完成 | 见阶段表 |
-| 五十 | Phase 3 | 已完成 | 社区包/任务/Builder/调度/多实例/拓扑图/webd/Mirror Builder；剩真浏览器 WS/PTY 前端（规格指 Web 后续） | 见阶段表 |
+| 五十 | Phase 3 | 已完成（服务端） | 社区包/任务/Mirror+Server+Backup Builder/调度/多实例/拓扑图/webd 全落地；剩真浏览器前端（规格原文即“Web 后续”） |
 | 五十一 | 不做事项 | 遵守中 | 无真执行/无容器/无等待墙/无随机灾害/无点击 exploit（vet+测试+评审共同保证） |
 | 五十二 | 最终目标 | 部分 | 数字生活+攻防大循环已闭环；缺数据库运维、网站运营深度、Assistant 训练深度 |
 | 附 | 体验补充 | 部分 | `assist guide`+help 入口+低权限报错可诊断齐；引导链（DNS 故障教学流）靠 IRC/NPC 提示，无强制新手流（符合“可选可跳过”） |
 
-## 缺口清单（按依赖排序，做完即 Phase 3 之前无欠账）
+## 缺口清单（半成品快照，2026-10-10）
 
-1. ~~`useradd/userdel/groupadd` + Household 一等实体~~ done（本批）
-2. ~~Game Bytecode VM~~ done（本批）
-3. ~~NPC 记忆与关系~~ done（本批；§21 的 LLM 唤醒调度仍无，规则层即 agent 层）
-4. ~~Assistant 配额 + suid/keys~~ done（本批）
-5. ~~VLAN + BGP 过程 + 数据库~~ done（本批三件；GRANT/JOIN/复制不做）
-6. ~~BBS 私信 / git 分支合并 / sftp -r / IMAPS~~ done（本批；真 3-way 合并仍不做）
-7. ~~地下室 vault~~ done（本批）
-8. ~~内容工具链~~ done（生成器 routine 民宅确定生成；编辑器=job new；格式=mission 文本）
-9. Phase 3：Web 客户端/可视化/多实例/调度（§50，大件）
+原 8 批缺口已全部关闭（每批记录在 `WORKSTREAM_NOTES.md`）。迭代停在
+半成品状态：**服务端已完整，未接浏览器前端**。按依赖排序的剩余项：
+
+1. **真浏览器前端（§45 原文“Web 后续”）**——现在是 `browse`（一次性
+   HTTP，无 PTY、无 WS、无 xterm.js）。要做真前端需要：`webd` 的
+   WS/PTY 升级、长连接会话、按键转发。这是全项目唯一还剩的大件。
+2. **数据库高级语义**——`GRANT`/多用户权限、`JOIN`、事务、主从复制
+   （现为 all-TEXT 表+MySQL 报错码）。
+3. **真 3-way git merge**（分叉历史；现为 FF-only+拒绝并命名）。
+4. **`.py` 前端**（bytecode 的脚本语法糖；PostInst 已改诚实文案）。
+5. **§21 的 LLM 唤醒调度**（规则层即 agent 层，MCP 只是透传）。
+6. **§29 更多虚拟漏洞**（现 3 个：vsftpd-anon-upload / ftp-cred-file /
+   dropbear-default-pass）。
+7. **随机内容生长**：生成器只出住宅（4 lot 封顶），无企业/组织/城市
+   拓扑生成。
+8. **多机信任细化**：第二公民同 LAN（子网由 addr.go 管），多家庭子网
+   需 LAN 规划变更。
+
+另外明确记录的两个不适用项（成本>收益，勿重开）：suid 建模、SQLite
+后端（gob 存档已验证）。
