@@ -31,6 +31,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 系统状态 / 资源管理 (WS-1.11) | this commit | §17: CPU sharing, RAM → swap → OOM, a full disk that really fails writes, throughput that decides how long bulk work takes, a finite process table | §"系统状态 / 资源管理 (WS-1.11)" |
 | 防守和安全软件 (WS-1.12) | this commit | §33: fail2ban, suricata, aide, clamav, monit, auditd, central logs, restic backup, rkhunter host monitoring, a real firewall posture — every one installed software, configured by a file, acting on real state, and the shell's printf/quoting made honest so a config file can be edited with it | §"防守和安全软件 (WS-1.12)" |
 | passwd + 磁盘磨损 (WS-1.14 cont.) | this commit | §36's two open items closed: `passwd` makes the weak credential a choice, and wear-driven disk death runs on power-on/lifetime-writes/overload thresholds with `smartctl` to read it and `fsck` to buy time | §"passwd 与磁盘磨损 (WS-1.14 continued)" |
+| P3g:Mirror Builder | this commit | mirror-sync build 采纳树重指+真同步 | §"P3g" |
 | P3f:webd/browse | this commit | 真服务+换票协议+执行钩子反向依赖+browse 客户端 | §"P3f" |
 | P3e:拓扑图 | this commit | topo/map 按真实走线画树+交换机端口表+LinkParent 补 switch 上行 | §"P3e" |
 | P3d:Assistant 多实例 | this commit | clone/nodes/status+task路由最闲节点 | §"P3d" |
@@ -43,6 +44,7 @@ ownership there before touching cross-cutting files (`world.go` pointers,
 | 缺口 2:Bytecode | this commit | ISA+组装+brun+SPAWN后台分片+nohup+文件/socket权限耦合 | §"缺口 2" |
 | 缺口 5c:MariaDB | this commit | mariadb 包+SQL子集+文件表+设备账号权限+远端TCP+shell引号双修 | §"缺口 5c" |
 | 缺口 5b:BGP 会话 | this commit | 推导会话+RIR最长匹配+dial/Reach 双查+traceroute AS号 | §"缺口 5b" |
+| P3g:Mirror Builder | this commit | mirror-sync build 采纳树重指+真同步 | §"P3g" |
 | P3f:webd/browse | this commit | 真服务+换票协议+执行钩子反向依赖+browse 客户端 | §"P3f" |
 | P3e:拓扑图 | this commit | topo/map 按真实走线画树+交换机端口表+LinkParent 补 switch 上行 | §"P3e" |
 | P3d:Assistant 多实例 | this commit | clone/nodes/status+task路由最闲节点 | §"P3d" |
@@ -2763,3 +2765,13 @@ admin-down+包路径同判，恢复即消。`gofmt` 空、`vet` 干净、全量�
 
 四个：会话开/跑/关+证据；坏口令/停服/非 webd 端口三类拒绝；过期按世界
 时间；过存档。`gofmt` 空、`vet` 干净、全量绿（365 pass，0 fail）。
+
+# P3g:Mirror Builder
+
+一树一主机是这个世界既有的服务模型（`Repo.DeviceID`），所以"再搭一个镜
+像"在这个模型里只能是换一台机器服务这棵树。`mirror-sync build TREE`
+= 把树重指到本机（archive 为上游）+提示去跑真同步；没有 invent 第二份
+树、第二个信任域、假 catalogue。已经别家服务的树点名拒绝（测试锁），
+没 web 服务器的机器拒绝并说要装什么（`no web server — install nginx
+first`）。不做的写进笔记：把 PC 变成额外 origin 需要 per-device
+catalogue，是模型变更不是动词。`gofmt` 空、`vet` 干净、全量绿（366 pass，0 fail）。

@@ -707,6 +707,12 @@ func cmdOpkg(s *Shell, args []string) int {
 // player can run by hand after fixing the schedule. It is a real operation on
 // real bytes, not a nudge to a background job.
 func cmdMirrorSync(s *Shell, args []string) int {
+	if len(args) >= 1 && args[0] == "build" {
+		if _, rc := cmdMirrorBuild(s, args[1:]); rc != 0 {
+			return rc
+		}
+		return 0
+	}
 	if s.User.UID != 0 {
 		s.errf("mirror-sync: must be run as root")
 		return 1
