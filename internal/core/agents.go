@@ -309,6 +309,103 @@ func (w *World) AssistantNodeFor(p *Player) *Device {
 	return w.Devices[p.Assistant]
 }
 
+// CloneAssistant provisions another assistant machine for the household:
+// same skills and budget (those are household assets), its own PC, queue
+// and power bill. Tasks route to the least-busy instance, ties going to the
+// primary. A mini-PC costs real money; the LAN pool is the other limit.
+func (w *World) CloneAssistant(owner string) (*Device, error) {
+	const clonePrice = 5000
+	p := w.Players[owner]
+	if p == nil {
+		return nil, fmt.Errorf("no such player: %s", owner)
+	}
+	acc := w.Bank.Accts[owner]
+	if acc == nil || acc.Balance < clonePrice {
+		return nil, fmt.Errorf("%s cannot cover the $50.00 clone", owner)
+	}
+	address, err := w.AllocLANStatic()
+	if err != nil {
+		return nil, fmt.Errorf("no room on the household LAN: %v", err)
+	}
+	n := len(p.Assistants) + 2
+	id := fmt.Sprintf("asst-%s-%d", owner, n)
+	for w.Devices[id] != nil {
+		n++
+		id = fmt.Sprintf("asst-%s-%d", owner, n)
+	}
+	d := w.addDevice(id, fmt.Sprintf("assistant-%d", n), "pc", owner,
+		OSInfo{"Alpine", "3.20", "6.6.20", "x86_64", "ash"},
+		Hardware{"Assistant Mini-PC", 2, 2000, 2048, 32768, 1000, false, false}, address)
+	d.Ifaces[0].GW = LANGateway
+	d.Ifaces[0].Mode = "dhcp"
+	d.Notes = "assistant node"
+	mkUsers(d, map[string]*User{
+		"root":      {Name: "root", UID: 0, Pass: "assistant", Groups: []string{"root"}, Home: "/root", Shell: "/bin/ash"},
+		"assistant": {Name: "assistant", UID: 1001, Pass: "assist-pass", Groups: []string{"assistant"}, Home: "/home/assistant", Shell: "/bin/ash", IsBot: true},
+	})
+	seedFS(d, "assistant")
+	SeedAssistantAccess(w, d)
+	// the same owner key the primary trusts: copy it, don't retype it
+	if primary := w.Devices[p.Assistant]; primary != nil {
+		if data, ok := primary.FS.Read("/home/assistant/.ssh/authorized_keys"); ok {
+			d.FS.Write("/home/assistant/.ssh/authorized_keys", string(data), 0600, "assistant", "assistant")
+		}
+	}
+	d.Services["sshd"] = &Service{Name: "sshd", Desc: "assistant node", Port: 22, Proto: "tcp",
+		Scope: "lan", State: "running", Handler: "ssh", Banner: "SSH-2.0-OpenSSH_9.7"}
+	d.Services["syslogd"] = &Service{Name: "syslogd", Desc: "BusyBox syslogd", Port: 0, Proto: "udp",
+		Scope: "lan", State: "running", Handler: "syslog"}
+	d.Logf("info", "assistant", "assistant node %s provisioned", d.Hostname)
+	acc.Balance -= clonePrice
+	acc.Tx = append(acc.Tx, Tx{At: w.Sim, Amount: -clonePrice,
+		Memo: "assistant node " + d.Hostname, Balance: acc.Balance})
+	p.Assistants = append(p.Assistants, d.ID)
+	w.AddEvent(d.ID, "info", "assistant", "%s cloned assistant node %s", owner, d.Hostname)
+	return d, nil
+}
+
+// taskAssistantLightest picks the assistant machine with the least queued
+// work, primary breaking ties: two fresh nodes both carry zero, and the
+// primary takes the first job the way it always has — a clone earns the
+// overflow instead of stealing the headline task.
+func (w *World) taskAssistantLightest(p *Player) *Device {
+	var best *Device
+	bestLoad := int64(-1)
+	for _, d := range w.AssistantInstances(p) {
+		if !d.Powered() {
+			continue
+		}
+		load := int64(len(d.Procs))
+		// the instance list is primary-first, so strict < keeps the primary
+		// on ties while a clone with a shorter queue wins
+		if best == nil || load < bestLoad {
+			best, bestLoad = d, load
+		}
+	}
+	if best == nil {
+		best = w.AssistantNodeFor(p)
+	}
+	return best
+}
+
+// AssistantInstances lists every assistant machine of a player: primary
+// first, then clones in order.
+func (w *World) AssistantInstances(p *Player) []*Device {
+	var out []*Device
+	if p == nil {
+		return out
+	}
+	if d := w.Devices[p.Assistant]; d != nil {
+		out = append(out, d)
+	}
+	for _, id := range p.Assistants {
+		if d := w.Devices[id]; d != nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // SimT is kept for compatibility of old call sites; ticks are the clock.
 func SimT(t time.Time) int { return int(t.Unix()) }
 

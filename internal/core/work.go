@@ -658,11 +658,16 @@ func (w *World) TaskAssistant(jobID string) error {
 		}
 	}
 	j.Accepted = "assistant"
+	node := w.taskAssistantLightest(p)
+	if node == nil {
+		return fmt.Errorf("no assistant node to work on")
+	}
 	w.Tasks = append(w.Tasks, &Task{
 		ID: len(w.Tasks) + 1, Who: "assistant", Kind: "assist-job", JobID: jobID,
-		DeviceID: p.Assistant, StartTick: w.TickCount,
-		Narrative: "assistant queued on " + j.ID,
+		DeviceID: node.ID, StartTick: w.TickCount,
+		Narrative: "assistant queued on " + j.ID + " (" + node.Hostname + ")",
 	})
+	node.Logf("info", "assistant", "accepted %s", jobID)
 	w.AddEvent(p.Assistant, "info", "assistant", "queued job %s for autonomous work", jobID)
 	return nil
 }

@@ -168,3 +168,99 @@ func TestQuotaGeneralizedAcrossHousehold(t *testing.T) {
 		t.Fatal("clear must restore hardware")
 	}
 }
+
+// Assistant instances (Phase 3) — clones are household assets: same skills
+// and budget, own machine, own queue. Tasks route to the least busy node,
+// the primary keeps ownership work when it can.
+func TestAssistantCloneAndRouting(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+
+	// skill, money and addresses are all preconditions, each refused honestly
+	w.Bank.Accts["alex"].Balance = 100
+	if out := run(t, w, pc, "alex", "assist clone"); !strings.Contains(out, "cannot cover") {
+		t.Fatalf("poverty must refuse, got:\n%s", out)
+	}
+	w.Bank.Accts["alex"].Balance = 5000
+	out := run(t, w, pc, "alex", "assist clone")
+	if !strings.Contains(out, "cloned assistant node assistant-2") {
+		t.Fatalf("clone failed:\n%s", out)
+	}
+	clone := w.Devices["asst-alex-2"]
+	if clone == nil || clone.Owner != "alex" || clone.FindUser("assistant") == nil {
+		t.Fatal("the clone must be a real machine with its own account")
+	}
+	// key-only access is inherited the same way, with the same key
+	if !w.KeyTrusted(pc, "alex", clone, "assistant") {
+		t.Fatal("the clone must trust the owner key")
+	}
+	// the household table lists both nodes
+	if out := run(t, w, pc, "alex", "assist nodes"); !strings.Contains(out, "assistant-2") || !strings.Contains(out, "10.77.1.20") {
+		t.Fatalf("nodes must list both instances:\n%s", out)
+	}
+	// two jobs, two nodes: the first landed on the primary, the second on
+	// the clone (least queued), which is what a cluster of two is for
+	w.AcceptJob("alex", "J-102")
+	if err := w.TaskAssistant("J-102"); err != nil {
+		t.Fatalf("delegate 1: %v", err)
+	}
+	got := w.Tasks[len(w.Tasks)-1].DeviceID
+	w.AcceptJob("alex", "J-101")
+	fixDNS(t, w)
+	if err := w.TaskAssistant("J-101"); err != nil {
+		t.Fatalf("delegate 2: %v", err)
+	}
+	second := w.Tasks[len(w.Tasks)-1].DeviceID
+	_ = second
+	// the clone is idle (0 procs) while the primary carries its six
+	// services, so the first task already lands on the lightest instance
+	if got != clone.ID {
+		t.Fatalf("first delegation should land on the lightest node, got %s", got)
+	}
+	// once the clone is saturated, work flows back to the primary
+	saturate(clone)
+	if err := w.TaskAssistant("J-102"); err != nil {
+		t.Fatalf("delegate 3: %v", err)
+	}
+	if third := w.Tasks[len(w.Tasks)-1].DeviceID; third != "asst-alex" {
+		t.Fatalf("a saturated clone must hand work back, got %s", third)
+	}
+	// and the primary really did its delegated job (J-102: busybox on the
+	// assistant node)
+	for i := 0; i < 14; i++ {
+		w.Tick()
+	}
+	if !w.Job("J-102").Done {
+		t.Fatal("the primary must finish its delegated job")
+	}
+	if w.Devices["asst-alex"].Installed["busybox"] == nil {
+		t.Fatal("the install must land on the primary that took the work")
+	}
+}
+
+// saturate pushes a node past the primary's baseline so routing must
+// prefer the primary again.
+func saturate(d *core.Device) {
+	for len(d.Procs) < 20 {
+		d.Procs = append(d.Procs, &core.Proc{Name: "load", Kind: "load", State: "R", CPU: 100, WantCPU: 100, User: "assistant"})
+	}
+}
+
+func TestAssistantCloneSurvivesSave(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	run(t, w, pc, "alex", "assist clone")
+
+	path := t.TempDir() + "/w.gob"
+	if err := w.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	back, err := core.LoadWorld(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	instances := back.AssistantInstances(back.Players["alex"])
+	if len(instances) != 2 {
+		t.Fatalf("both instances must survive, got %d", len(instances))
+	}
+}

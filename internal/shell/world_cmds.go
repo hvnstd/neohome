@@ -486,11 +486,24 @@ func cmdAssist(s *Shell, args []string) int {
 	case "", "status":
 		a := s.W.AssistantNodeFor(s.W.Players[s.User.Name])
 		fmt.Fprintf(s.Out, "assistant — skill level %d\n", s.W.AssistantSkill())
-		if a != nil {
-			fmt.Fprintf(s.Out, "node:     %s (%s, %d MiB RAM, %s uptime)\n", a.Hostname, a.ID, a.HW.RAMMB, a.Uptime().Round(1e9))
-			fmt.Fprintf(s.Out, "load:     %d processes, %d MiB used\n", len(a.Procs), a.MemUsed())
-			if data, ok := a.FS.Read("/home/assistant/tasks.md"); ok {
-				fmt.Fprintf(s.Out, "notes:\n%s", string(data))
+		nodes := s.W.AssistantInstances(s.W.Players[s.User.Name])
+		if len(nodes) == 0 && a != nil {
+			nodes = []*core.Device{a}
+		}
+		for _, n := range nodes {
+			q := 0
+			for _, t := range s.W.Tasks {
+				if !t.Done && t.Kind == "assist-job" && t.DeviceID == n.ID {
+					q++
+				}
+			}
+			fmt.Fprintf(s.Out, "node:     %s (%s, %d MiB RAM, %s uptime) — %d queued\n",
+				n.Hostname, n.ID, n.HW.RAMMB, n.Uptime().Round(1e9), q)
+			if n == a {
+				fmt.Fprintf(s.Out, "load:     %d processes, %d MiB used\n", len(n.Procs), n.MemUsed())
+				if data, ok := n.FS.Read("/home/assistant/tasks.md"); ok {
+					fmt.Fprintf(s.Out, "notes:\n%s", string(data))
+				}
 			}
 		}
 		if len(s.W.AssistantTracksLearned()) > 0 {
@@ -534,8 +547,37 @@ func cmdAssist(s *Shell, args []string) int {
 		return 0
 	case "quota":
 		return assistQuota(s, args[1:])
+	case "clone":
+		d, err := s.W.CloneAssistant(s.User.Name)
+		if err != nil {
+			s.errf("assist: %v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "cloned assistant node %s ($50) — tasks route to the least busy instance\n", d.Hostname)
+		return 0
+	case "nodes":
+		instances := s.W.AssistantInstances(s.W.Players[s.User.Name])
+		if len(instances) == 0 {
+			fmt.Fprintln(s.Out, "no assistant nodes")
+			return 0
+		}
+		fmt.Fprintf(s.Out, "%-14s %-10s %-8s %-14s %s\n", "NODE", "STATE", "RAM", "QUEUED", "IP")
+		for _, n := range instances {
+			q := 0
+			for _, t := range s.W.Tasks {
+				if !t.Done && t.Kind == "assist-job" && t.DeviceID == n.ID {
+					q++
+				}
+			}
+			state := "down"
+			if n.Powered() {
+				state = "up"
+			}
+			fmt.Fprintf(s.Out, "%-14s %-10s %-8s %-14d %s\n", n.Hostname, state, fmt.Sprintf("%dMiB", n.HW.RAMMB), q, n.FirstLANIP())
+		}
+		return 0
 	}
-	s.errf("usage: assist [status|guide|tasks|train TRACK|quota [--cpu N] [--mem MB]|quota clear]")
+	s.errf("usage: assist [status|guide|tasks|train TRACK|quota [--cpu N] [--mem MB]|quota clear|clone|nodes]")
 	return 1
 }
 

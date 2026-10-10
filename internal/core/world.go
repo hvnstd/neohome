@@ -136,8 +136,11 @@ type Player struct {
 	Router    string
 	NAS       string
 	Assistant string
-	HouseKey  string
-	Created   time.Time
+	// Assistants holds extra assistant nodes beyond the primary: same
+	// skills and budget (household assets), own machines and task queues.
+	Assistants []string
+	HouseKey   string
+	Created    time.Time
 }
 
 type Device struct {
