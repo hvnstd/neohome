@@ -64,19 +64,33 @@ func main() {
 
 	// Each entry binds independently: a taken telnet port must not stop the SSH
 	// door (or the reverse), and neither may take the world down.
+	live := 0
 	telnetLn, terr := net.Listen("tcp", ":2024")
 	if terr != nil {
 		log.Println("telnet entry unavailable:", terr)
 	} else {
 		log.Println("neohome telnet entry listening on :2024")
 		go acceptLoop(telnetLn, func(c net.Conn) { handle(c, w) })
+		live++
 	}
 	if err := sshEntry(w, ":2222"); err != nil {
 		log.Println("ssh entry unavailable:", err)
+	} else {
+		live++
 	}
-	// Both entries are down (or in use): keep the world running headless so the
+	// the browser front: the same world, the same accounts, over HTTP+WebSocket
+	if addr := webAddr(); addr != "" {
+		if err := startWeb(w, addr); err != nil {
+			log.Println("web terminal unavailable:", err)
+		} else {
+			live++
+		}
+	}
+	// Every entry is down (or in use): keep the world running headless so the
 	// engine still ticks and state still persists.
-	log.Println("no live entry; world continues headless")
+	if live == 0 {
+		log.Println("no live entry; world continues headless")
+	}
 
 	select {}
 }
@@ -110,18 +124,14 @@ func handle(conn net.Conn, w *core.World) {
 		return
 	}
 	w.Lock()
-	pc := w.Devices[p.PC]
+	pc, u, note, err := w.LandPlayer(login)
 	w.Unlock()
-	if pc == nil {
-		fmt.Fprintln(conn, "no device")
+	if err != nil {
+		fmt.Fprintf(conn, "%v\r\n", err)
 		return
 	}
-	u := pc.FindUser(login)
-	if u == nil {
-		u = pc.FindUser("alex")
-	}
-	if u == nil {
-		u = &core.User{Name: "alex", UID: 1000, Home: "/home/alex", Shell: "/bin/bash"}
+	if note != "" {
+		fmt.Fprintf(conn, "%s\r\n", note)
 	}
 	fmt.Fprintf(conn, "Welcome, %s. Type `help` or just start typing.\r\n", login)
 	fmt.Fprintf(conn, "Your DNS is %s — try `dig mirror.neohome.example`.\r\n",

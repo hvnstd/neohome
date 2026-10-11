@@ -3,10 +3,10 @@
 # saved world snapshots
 world.gob
 *.gob
-# scratch helper scripts used to run the checks before a commit
-tools/_commit.sh
-tools/_sum.sh
-tools/_chk.sh
+# scratch helper scripts used to run the checks before a commit; the leading
+# underscore is the convention for anything under tools/ that must never be
+# committed (build bootstrap, one-off probes)
+tools/_*
 # agent scratch: plans and notes kept out of the project history
 .hermes/
 .zcode/

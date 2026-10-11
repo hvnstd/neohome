@@ -49,6 +49,9 @@ func NewShell(w *core.World, d *core.Device, u *core.User, out io.Writer, srcIP,
 			"HOME": u.Home, "USER": u.Name, "SHELL": u.Shell, "TERM": "xterm-256color",
 			"PATH":     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 			"HOSTNAME": d.Hostname, "LANG": "C.UTF-8", "PWD": u.Home,
+			// the size of the terminal at the other end: 80x24 until a door
+			// says otherwise, which is what a fresh tty reports anywhere
+			"COLUMNS": "80", "LINES": "24",
 		},
 	}
 }
@@ -397,6 +400,7 @@ var bbApplets = []string{
 	"top", "ip", "route", "ifconfig", "nslookup", "wget", "dmesg", "grep", "head", "tail",
 	"wc", "df", "free", "uname", "hostname", "uptime", "whoami", "id", "env", "sort",
 	"uniq", "date", "logread", "logger", "ping", "traceroute", "udhcpc",
+	"stty", "tty",
 }
 
 var bbSet = map[string]bool{}

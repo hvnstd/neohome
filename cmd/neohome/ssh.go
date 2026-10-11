@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/x509"
 	"fmt"
 	"io"
@@ -80,7 +79,10 @@ func sshEntry(w *core.World, addr string) error {
 		return err
 	}
 	log.Printf("neohome ssh entry listening on %s", addr)
-	acceptLoop(ln, func(c net.Conn) { serveSSH(c, w, cfg) })
+	// accept in the background: the entries are independent, and a blocking
+	// accept here would stop the ones started after this one from ever
+	// binding (which is exactly what happened to the browser front)
+	go acceptLoop(ln, func(c net.Conn) { serveSSH(c, w, cfg) })
 	return nil
 }
 
@@ -130,52 +132,22 @@ func serveSSH(nConn net.Conn, w *core.World, cfg *ssh.ServerConfig) {
 }
 
 // runPlayerSession starts the virtual shell for an authenticated player, over
-// any transport (ssh channel or telnet conn).
+// any transport (ssh channel, telnet conn, web terminal). Where the session
+// lands — the player's own machine, or the out-of-band controller when the
+// house is dark — is decided in one place in the world (core.LandPlayer), so
+// the three doors cannot land the same player in different places.
 func runPlayerSession(w *core.World, who, ip string, out io.Writer, in io.Reader) {
 	w.Lock()
-	p := w.Players[who]
-	var pc *core.Device
-	if p != nil {
-		pc = w.Devices[p.PC]
-	}
+	pc, u, note, err := w.LandPlayer(who)
 	w.Unlock()
-	if pc == nil {
-		fmt.Fprintf(out, "no device for %s\r\n", who)
+	if err != nil {
+		fmt.Fprintf(out, "%v\r\n", err)
 		return
 	}
-
-	// If the household PC has no power, the operator still has a way in: the
-	// management controller is on its own battery and cellular backhaul. Without
-	// this, `power cut` would be a one-way door and a dead battery would brick
-	// the player's own game.
-	landed := ""
-	if !pc.Powered() {
-		bmc := w.OutOfBand()
-		if bmc != nil && bmc.Powered() {
-			fmt.Fprintf(out, "%s is down (%s) — connecting to %s over out-of-band management\r\n",
-				pc.Hostname, pc.UnavailableReason(), bmc.Hostname)
-			pc = bmc
-			landed = "bmc"
-		}
+	if note != "" {
+		fmt.Fprintf(out, "%s\r\n", note)
 	}
-
 	fmt.Fprintf(out, "Welcome, %s. NeoHome over ssh.\r\n", who)
-	_ = bufio.NewReader(in)
-	// land as the player's own account on their own machine — the second
-	// citizen lands on their own PC, not alex's (see InvitePlayer)
-	u := pc.FindUser(who)
-	if u == nil {
-		u = pc.FindUser("alex")
-	}
-	if u == nil {
-		u = &core.User{Name: "alex", UID: 1000, Home: "/home/alex", Shell: "/bin/bash"}
-	}
-	// on the controller the player lands as the controller's own operator
-	if landed == "bmc" {
-		if bu := pc.FindUser("admin"); bu != nil {
-			u = bu
-		}
-	}
 	s := shell.NewShell(w, pc, u, out, ip, "xterm-256color")
 	s.RunLoop(in)
 }

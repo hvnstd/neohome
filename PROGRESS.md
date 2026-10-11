@@ -64,24 +64,26 @@
 | 四十二 | 物理层 | 已完成 | 门/锁/摄像头/机柜/交换机/电源/UPS+数字绑定（断线/复位/物理访问） |
 | 四十三 | PvP | 已完成 | 规格只要异步：双公民实证（入侵→取证→溯源→反杀，tick 间隔即 async） |
 | 四十四 | 内容生产 | 已完成 | 编辑器=`job new`、社区格式=mission 文本、世界生成器=`worldgen household`；Package/Mission/Household 模板都在代码里 |
-| 四十五 | 技术架构 | 部分 | Go ✓ SSH/telnet ✓ 状态机 ✓ **webd 服务端 ✓ 无浏览器前端**（`browse` 是一次性 HTTP 客户端，非 xterm.js/WS/PTY）；数据是 gob 存档而非 SQLite |
+| 四十五 | 技术架构 | 已完成 | Go ✓ SSH/telnet ✓ 状态机 ✓ **真浏览器前端 ✓**（`internal/webtty`：手写 RFC 6455 + 终端引擎 + 第三入口 :8080；`browse`/`webd` 仍是世界内的网站服务，两者不同层）；数据是 gob 存档而非 SQLite（已记录为不适用，勿重开） |
 | 四十六 | 数据模型 | 已完成 | Household 一等实体（成员+共用 infra），其余 36 项早齐 |
 | 四十七 | MVP | 已完成 | 见阶段表 |
 | 四十八 | Phase 1 | 已完成 | 见阶段表 |
 | 四十九 | Phase 2 | 已完成 | 见阶段表 |
-| 五十 | Phase 3 | 已完成（服务端） | 社区包/任务/Mirror+Server+Backup Builder/调度/多实例/拓扑图/webd 全落地；剩真浏览器前端（规格原文即“Web 后续”） |
+| 五十 | Phase 3 | 已完成 | 社区包/任务/Mirror+Server+Backup Builder/调度/多实例/拓扑图/webd 全落地，浏览器前端也已落地（`NEOHOME_WEB_ADDR`，活体验证见 `tools/_live_web_proof.mjs`） |
 | 五十一 | 不做事项 | 遵守中 | 无真执行/无容器/无等待墙/无随机灾害/无点击 exploit（vet+测试+评审共同保证） |
 | 五十二 | 最终目标 | 部分 | 数字生活+攻防大循环已闭环；缺数据库运维、网站运营深度、Assistant 训练深度 |
 | 附 | 体验补充 | 部分 | `assist guide`+help 入口+低权限报错可诊断齐；引导链（DNS 故障教学流）靠 IRC/NPC 提示，无强制新手流（符合“可选可跳过”） |
 
-## 缺口清单（半成品快照，2026-10-10）
+## 缺口清单（2026-10-11 更新）
 
-原 8 批缺口已全部关闭（每批记录在 `WORKSTREAM_NOTES.md`）。迭代停在
-半成品状态：**服务端已完整，未接浏览器前端**。按依赖排序的剩余项：
+原 8 批缺口全部关闭，浏览器前端也已完成（记录见 `WORKSTREAM_NOTES.md`
+的 P4a 段；`tests/webtty_test.go` + `tools/_live_web_proof.mjs` 锁死）。
+剩余的按依赖排序如下，逐项关闭：
 
-1. **真浏览器前端（§45 原文“Web 后续”）**——现在是 `browse`（一次性
-   HTTP，无 PTY、无 WS、无 xterm.js）。要做真前端需要：`webd` 的
-   WS/PTY 升级、长连接会话、按键转发。这是全项目唯一还剩的大件。
+1. ~~**真浏览器前端（§45 原文“Web 后续”）**~~ **已完成**——第三入口
+   （HTTP+WebSocket 终端）在 `internal/webtty`，与 telnet/ssh 共用
+   `core.LandPlayer`/`BeginSession`，会话进 `who`/syslog/证据；`resize`
+   经新内建 `stty`/`tty` 可读。接下来从第 2 项继续。
 2. **数据库高级语义**——`GRANT`/多用户权限、`JOIN`、事务、主从复制
    （现为 all-TEXT 表+MySQL 报错码）。
 3. **真 3-way git merge**（分叉历史；现为 FF-only+拒绝并命名）。

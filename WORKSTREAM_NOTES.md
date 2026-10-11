@@ -2775,3 +2775,63 @@ admin-down+包路径同判，恢复即消。`gofmt` 空、`vet` 干净、全量�
 没 web 服务器的机器拒绝并说要装什么（`no web server — install nginx
 first`）。不做的写进笔记：把 PC 变成额外 origin 需要 per-device
 catalogue，是模型变更不是动词。`gofmt` 空、`vet` 干净、全量绿（366 pass，0 fail）。
+
+# P4a:真浏览器前端（第三个门：WebSocket 终端）
+
+缺口清单第 1 项（§45 原文"Web 后续"，全项目最后一件大件）。做成了
+**第三个入口**，和 telnet :2024、ssh :2222 并列：HTTP + WebSocket 的
+终端，浏览器打开 `http://HOST:8080/` 就是一台真终端。它和世界里那个
+`webd` 服务（P3f，assistant 节点上的软件）是两件事：那个是游戏里的
+网站，这个是进游戏的门。
+
+## 模型
+
+* 依赖不能加（本地 GOPROXY 只有 crypto/sys），所以 RFC 6455 手写：
+  `internal/webtty/ws.go` 的 `Upgrade`/`Conn`（掩码校验、控制帧、分片、
+  ping/pong、close code、空闲超时）。`CheckUpgrade` 把"协议层的答复"
+  （版本、头、key）与"授权"分开：没票的 13 版握手给 401，8 版握手给
+  426，无论有没有票——而且校验不过的请求不消耗票。
+* 信封是文本 JSON：`{"t":"in|out|secret|resize|exit"}`。不本地回显、
+  不本地行编辑：世界的 shell 自己逐字节回显、自己处理 BS/^C/^D/^L，
+  所以按键原样转发（每个键一帧），屏幕上看到的就是机器真的写出来的
+  东西。`secret` 由**服务端**判定（`wsOutput` 看提示行是否以
+  `password:/passphrase:/passcode:` 之类结尾）——密码掩码是机器的信号，
+  不是客户端的猜测。
+* `resize` 落到 shell 的 `COLUMNS`/`LINES`，读回来靠新内建 `stty`/
+  `tty`（`stty size` 打 `rows cols`）。telnet/ssh 的会话默认 80x24，
+  浏览器报自己的真实窗口。这是这个世界唯一的 PTY 状态，放在会话自己
+  的环境里。
+* 登录复用**世界自己的账号**（和 ssh 同一份 player 记录），失败走
+  `d.NoteAuthFail` + `w.Record("auth"…)`：浏览器上打错密码，目标机的
+  auth-fail 计数、syslog、§34 证据全都看见。票据是单次、60 秒、绑定
+  客户端地址与 origin（出示即消耗，含出示错的地址——被偷的票对谁都
+  没用）。传输层另有节流：同地址 5 次错/60 秒 → 等 60 秒。
+* `core.LandPlayer` 是唯一的"落在哪台机器"决策：玩家自己的机器，房子
+  黑了就走带外管理控制器（BMC，自带电池）。telnet、ssh、浏览器三个门
+  共用它，不可能各落各的。`core.BeginSession/EndSession/SessionsAt`
+  同理共用——一次登录 = 一条 Login 记录 + syslog 两行 + 一个事件，
+  关上即撤（closer 幂等）。
+* 页面自带一切（无 CDN、无外链）：`TermJS()` 是 DOM-free 的终端引擎
+  （ANSI CSI 子集 + SGR + 覆盖写 + 密码圆点 + 历史行上限），所以能在
+  node 里直接测；`PageJS()` 是浏览器那半（表单、WebSocket、按键、粘贴、
+  rAF 重绘、断线回登录页）。方向键不转发——世界里没有箭头，上下键走的
+  是客户端自己的历史（回放退格重打），这和一个真终端上的 shell 历史
+  是同一个东西。
+* 入口各自独立绑定：`sshEntry` 原来是阻塞 accept，第三个门永远起不来
+  ——现在 `go acceptLoop`，三个门谁也不挡谁（这是活体验证抓到的真 bug）。
+
+## 测试与验证
+
+* `tests/webtty_test.go`：手写 WebSocket 客户端（真握手、真掩码）、
+  逐键输入、秘密输入（`sudo` 提示 → secret on；输入真口令仍能通过
+  sudo，口令绝不出现在回程流里；提示结束 → secret off）、`who`/syslog
+  里的会话、关标签页即注销、未掩码帧 → 1002、拔电 → "Connection to
+  host lost" + 会话结束、票据过期/重放/换地址/换 origin、代理场景的
+  origin 判定、节流、带外落地、`stty` 语义。
+* node 22 跑 `TermJS()`：CR 覆盖写（`50%\r100%`→`100%`，`abcdef\rxy`
+  →`xycdef`）、退格、^L 清屏、SGR 分段、跨帧转义、密码圆点与退格、
+  屏幕上限。
+* 活体：`tools/_live_web_proof.mjs` 打真服务（node 自带 WebSocket，另一
+  套实现，交叉验证协议）——页面→登录→升级→打字→`stty size`→`sudo`
+  掩码→**从 telnet 门看 `who` 里有这条 webterm 会话**→关标签页→再看
+  已消失。`gofmt` 空、`vet` 干净、全量绿（228.8 s，0 fail）。
