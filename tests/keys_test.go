@@ -110,3 +110,44 @@ func TestKeygenGeneratesUsableKeys(t *testing.T) {
 		t.Fatalf("sftp must ride the key without eating the first line:\n%s", out)
 	}
 }
+
+// Password auth is the fallback when no key matches, and it behaves like a
+// real sshd: a bad password re-prompts (NumberOfPasswordPrompts 3), each miss
+// is a real failed-auth event on the target, and only the third one closes the
+// connection. The old one-shot prompt printed "please try again" and then
+// returned to the caller's shell anyway.
+func TestSSHPasswordRepromptsThreeTimes(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	nas := w.Devices["nas-alex"]
+	// guest holds no key to the NAS, so the password path is what runs
+	failsBefore := len(nas.Sec().Fails)
+	out := runWithStdin(t, w, pc, "guest", "ssh alex@nas", "bad1", "bad2", "bad3")
+	if got := strings.Count(out, "'s password: "); got != 3 {
+		t.Fatalf("three wrong passwords should prompt three times, got %d:\n%s", got, out)
+	}
+	if !strings.Contains(out, "Permission denied, please try again.") {
+		t.Fatalf("each miss should say try again:\n%s", out)
+	}
+	if got := len(nas.Sec().Fails); got != failsBefore+3 {
+		t.Fatalf("three bad passwords are three recorded failures, got %d want %d", got, failsBefore+3)
+	}
+}
+
+// The right password on a later prompt still logs in; a single scripted wrong
+// password is exactly one recorded failure, because the loop stops when the
+// input stream runs dry instead of asking three times into the void.
+func TestSSHPasswordRetryAndScriptedSingle(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	nas := w.Devices["nas-alex"]
+	out := runWithStdin(t, w, pc, "guest", "ssh alex@nas whoami", "nope", "alex123")
+	if !strings.Contains(out, "alex") {
+		t.Fatalf("a correct password on the retry must log in:\n%s", out)
+	}
+	failsBefore := len(nas.Sec().Fails)
+	runWithStdin(t, w, pc, "guest", "ssh alex@nas echo no", "wrong")
+	if got := len(nas.Sec().Fails); got != failsBefore+1 {
+		t.Fatalf("one piped wrong password is one failure, got %d want %d", got, failsBefore+1)
+	}
+}

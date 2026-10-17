@@ -755,7 +755,13 @@ func cmdAssistGuide(s *Shell) int {
 		router := s.W.RouterForPlayer(s.User.Name)
 		if router != nil {
 			fmt.Fprintf(s.Out, "Compare `ping %s` with `dig %s` to separate connectivity from name resolution.\n", router.FirstLANIP(), host)
-			fmt.Fprintf(s.Out, "Then inspect the router: `ssh root@%s` and `cat /etc/dnsmasq.conf`.\n", router.FirstLANIP())
+			// it's the player's own router, so the guide names the login it seeded
+			// — the old line said `ssh root@` and left the password a guess.
+			cred := ""
+			if ru := router.FindUser("root"); ru != nil && ru.Pass != "" {
+				cred = fmt.Sprintf(" (its root password is %q)", ru.Pass)
+			}
+			fmt.Fprintf(s.Out, "Then inspect the router: `ssh root@%s`%s and `cat /etc/dnsmasq.conf`.\n", router.FirstLANIP(), cred)
 		} else {
 			fmt.Fprintf(s.Out, "Check `ip route` and `dig %s` to separate connectivity from name resolution.\n", host)
 		}

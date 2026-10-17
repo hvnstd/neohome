@@ -19,6 +19,11 @@ func TestAssistantGuideFollowsDNSAndJobState(t *testing.T) {
 			t.Fatalf("initial guide should explain the observed failure and next checks; missing %q:\n%s", want, out)
 		}
 	}
+	// the guide names the player's own router login, not just "ssh root@" —
+	// leaving the password a guess was the onboarding gap.
+	if pw := router.FindUser("root").Pass; pw == "" || !strings.Contains(out, `"`+pw+`"`) {
+		t.Fatalf("the guide should name the router's root password, got:\n%s", out)
+	}
 	if w.Job("J-101").Accepted != "" || w.Job("J-101").Done {
 		t.Fatal("guide must not accept or complete work for the player")
 	}

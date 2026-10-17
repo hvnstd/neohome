@@ -722,18 +722,27 @@ func (s *Shell) printf(format string, a ...any) {
 
 // ReadPasswordLine reads silently-ish from the session input.
 func (s *Shell) ReadPasswordLine(prompt string) string {
+	line, _ := s.readPasswordLine(prompt)
+	return line
+}
+
+// readPasswordLine additionally reports whether the read ended because the
+// input stream ran out (EOF) rather than the user pressing Enter. A re-prompt
+// loop (ssh's three tries) uses it to stop asking once a scripted stream is
+// dry, so one piped password records one failure instead of three phantom ones.
+func (s *Shell) readPasswordLine(prompt string) (line string, eof bool) {
 	fmt.Fprint(s.Out, prompt)
 	// A scripted/non-interactive session (cron, `ssh host cmd` from a probe, a
 	// bot) may have no input stream at all. Never nil-deref on that.
 	if s.bufrd == nil {
 		fmt.Fprintln(s.Out)
-		return ""
+		return "", true
 	}
 	var b []byte
 	for {
 		c, err := s.bufrd.ReadByte()
 		if err != nil {
-			return string(b)
+			return string(b), true
 		}
 		// same CRLF pairing as readLine: the leftover \n from "user\r\n" must
 		// never be mistaken for an empty password
@@ -746,11 +755,11 @@ func (s *Shell) ReadPasswordLine(prompt string) string {
 		if c == '\r' {
 			s.pendingLF = true
 			fmt.Fprint(s.Out, "\r\n")
-			return string(b)
+			return string(b), false
 		}
 		if c == '\n' {
 			fmt.Fprint(s.Out, "\r\n")
-			return string(b)
+			return string(b), false
 		}
 		if c == 127 || c == 8 {
 			if len(b) > 0 {

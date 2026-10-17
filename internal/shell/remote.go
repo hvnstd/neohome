@@ -59,11 +59,20 @@ func cmdSsh(s *Shell, args []string) int {
 	// (its own jail configuration), never the client's.
 	u := dst.FindUser(user)
 	if u == nil {
-		// never leak whether the account exists — real sshd does not
-		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
-		s.ReadPasswordLine("")
-		dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "ssh password for "+user)
-		fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
+		// never leak whether the account exists — real sshd re-prompts the full
+		// three times for a name it does not have, then closes. Each knock is
+		// recorded on the target; a scripted stream that runs dry stops early.
+		for tries := 0; tries < 3; tries++ {
+			fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
+			if _, eof := s.readPasswordLine(""); eof {
+				break
+			}
+			dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "ssh password for "+user)
+			if tries < 2 {
+				fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
+			}
+		}
+		fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: Permission denied (publickey,password)\n", host)
 		return 1
 	}
 	// auth order, like a real client with keys loaded: publickey first, then
@@ -84,11 +93,29 @@ func cmdSsh(s *Shell, args []string) int {
 	}
 	if allowPass {
 		fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: %s\n", host, svc.Banner)
-		fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
-		pass := s.ReadPasswordLine("")
-		if !u.CheckPassword(pass) {
+		// like a real sshd (NumberOfPasswordPrompts 3): each bad password is a
+		// real failed-auth event for the target's fail2ban/IDS and the prompt is
+		// re-issued; only the third miss closes the connection. A scripted input
+		// stream that runs dry stops the loop, so one piped password records one
+		// failure instead of three.
+		authenticated := false
+		for tries := 0; tries < 3; tries++ {
+			fmt.Fprintf(s.Out, "%s@%s's password: ", user, host)
+			pass, eof := s.readPasswordLine("")
+			if eof {
+				break
+			}
+			if u.CheckPassword(pass) {
+				authenticated = true
+				break
+			}
 			dst.NoteAuthFail(s.Dev.SourceIPFor(dst), s.Dev.Hostname, "ssh password for "+user)
-			fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
+			if tries < 2 {
+				fmt.Fprintf(s.Out, "Permission denied, please try again.\n")
+			}
+		}
+		if !authenticated {
+			fmt.Fprintf(s.Out, "ssh: connect to host %s port 22: Permission denied (publickey,password)\n", host)
 			return 1
 		}
 	} else {

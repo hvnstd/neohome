@@ -56,7 +56,7 @@ header .state.bad { background: #2c1a1a; color: #e08a8a; }
 button { font: inherit; font-size: 12px; color: #cfd8dc; background: #1a2227;
   border: 1px solid #2b3941; border-radius: 4px; padding: 3px 10px; cursor: pointer; }
 button:hover { background: #22303a; }
-#screen { position: relative; flex: 1; overflow: hidden; padding: 10px 12px; }
+#screen { position: relative; flex: 1; overflow-x: hidden; overflow-y: auto; padding: 10px 12px; }
 #rows { white-space: pre; overflow: hidden; }
 #rows .b { font-weight: 700; }
 #rows .d { opacity: .6; }
@@ -344,6 +344,7 @@ const pageJS = `
   "use strict";
   var term = new NeohomeTerm(80, 24);
   var rowsEl = document.getElementById("rows");
+  var screenEl = document.getElementById("screen");
   var stateEl = document.getElementById("state");
   var whoEl = document.getElementById("who");
   var loginEl = document.getElementById("login");
@@ -364,6 +365,11 @@ const pageJS = `
   }
   function render() {
     raf = null;
+    // the terminal lives in a fixed-height scrolling #screen: the page itself
+    // never overflows, so the old window.scrollTo did nothing and new lines
+    // were clipped below the fold. Follow the output only while the user is
+    // already at the bottom; if they scrolled up into scrollback, keep place.
+    var atBottom = screenEl.scrollTop + screenEl.clientHeight >= screenEl.scrollHeight - 30;
     var all = term.rowsOut(400);
     var html = [];
     for (var i = 0; i < all.length; i++) {
@@ -386,7 +392,7 @@ const pageJS = `
       html.push(line);
     }
     rowsEl.innerHTML = html.join("\n");
-    window.scrollTo(0, document.body.scrollHeight);
+    if (atBottom) screenEl.scrollTop = screenEl.scrollHeight;
   }
   function schedule() { if (!raf) raf = window.requestAnimationFrame(render); }
 

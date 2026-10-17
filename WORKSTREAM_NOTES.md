@@ -3019,7 +3019,29 @@ Ownership: `internal/shell/shell.go`（`CRLF` ONLCR writer）、
 - 2 个测试：`TestCRLFWriterNormalizesLineEndings`（裸\n/已有\r\n/跨写拆分）、
   `TestHelpOutputCarriesCRLFOverATerminal`（`help` 输出无裸 `\n` 残留）。
 
+## 可用性修复（web 自动滚动 / ssh 三次重试 / 教程网关密码）
+
+Ownership: `internal/webtty/page.go`（滚动）、`internal/shell/remote.go`（ssh
+重试）、`internal/shell/shell.go`（`readPasswordLine` 带 EOF）、
+`internal/shell/world_cmds.go`（guide 报密码）、`tests/keys_test.go`（+2）、
+`tests/assistant_guide_test.go`（+断言）。传输/shell 层，不动 core/gob/tick。
+
+- web 终端不自动滚动：页面是 `height:100%` 的 flex 布局，`#screen` 之前
+  `overflow:hidden`，正文从不溢出，`render()` 里那句 `window.scrollTo` 因此
+  是空操作——新行全被截在视口下沿，看起来就像 `&&`/`|`“用不了”（实为输出被
+  裁掉；Node WS 实测 `cat /etc/os-release && echo`、`id | grep uid` 输出正确，
+  排除了解析层）。修复：`#screen` 改 `overflow-y:auto`，`render()` 只在用户
+  本就在底部时把 `#screen` 滚到底（翻上去看历史时不拽回来）。
+- ssh 密码只给一次就弹回 alex 会话：旧代码输错一次打印 “please try again”
+  却直接 return。修复：按真实 sshd（NumberOfPasswordPrompts 3）重试三次，
+  每次错误都是目标机上一次真实 auth-fail（fail2ban/IDS 照算），第三次才挂断；
+  `readPasswordLine` 带 EOF 标志，脚本流喂完即停——管道喂一个错密码仍只记
+  一次失败。未知账号同样三次、不泄露账号是否存在。
+- 教程第一步网关没给默认密码：`assist guide` 现在把自己网关的 root 密码读
+  出来直接报给玩家（`RouterForPlayer` 限定本人路由器，读真实 `u.Pass`，不写
+  死 "admin"）。
+
 ## 验证
 
-全量 `go test ./... -count=1` **433 pass / 0 fail**（~303s，`-timeout 1500s`），gofmt/vet
+全量 `go test ./... -count=1` **435 pass / 0 fail**（~310s，`-timeout 1500s`），gofmt/vet
 干净。
