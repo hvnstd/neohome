@@ -754,14 +754,39 @@ func cmdAssistGuide(s *Shell) int {
 		fmt.Fprintf(s.Out, "I checked %s from %s: %s.\n", host, pc.Hostname, detail)
 		router := s.W.RouterForPlayer(s.User.Name)
 		if router != nil {
-			fmt.Fprintf(s.Out, "Compare `ping %s` with `dig %s` to separate connectivity from name resolution.\n", router.FirstLANIP(), host)
-			// it's the player's own router, so the guide names the login it seeded
-			// — the old line said `ssh root@` and left the password a guess.
+			gw := router.FirstLANIP()
+			fmt.Fprintf(s.Out, "Compare `ping %s` with `dig %s` to separate connectivity from name resolution.\n", gw, host)
+
+			// 手把手: read the router's REAL config so the steps name the exact
+			// line to change, the seeded login, and the real upstream resolver —
+			// never a guess. It only prints commands; the player runs them, so
+			// the freedom (and the consequence) stays theirs.
+			resolv := ""
+			if data, ok := router.FS.Read("/etc/dnsmasq.conf"); ok {
+				for _, ln := range strings.Split(string(data), "\n") {
+					ln = strings.TrimSpace(ln)
+					if strings.HasPrefix(ln, "resolv-file=") {
+						resolv = strings.TrimPrefix(ln, "resolv-file=")
+					}
+				}
+			}
+			if resolv == "" {
+				resolv = "/var/run/dnsmasq/resolv.conf"
+			}
 			cred := ""
 			if ru := router.FindUser("root"); ru != nil && ru.Pass != "" {
-				cred = fmt.Sprintf(" (its root password is %q)", ru.Pass)
+				cred = fmt.Sprintf("  (password %q)", ru.Pass)
 			}
-			fmt.Fprintf(s.Out, "Then inspect the router: `ssh root@%s`%s and `cat /etc/dnsmasq.conf`.\n", router.FirstLANIP(), cred)
+			fmt.Fprintln(s.Out, "Fix it step by step (run these yourself):")
+			fmt.Fprintf(s.Out, "  1. ssh root@%s%s\n", gw, cred)
+			fmt.Fprintf(s.Out, "  2. printf 'nameserver %s\\n' > /etc/dnsmasq.upstream\n", core.PublicResolver)
+			fmt.Fprintf(s.Out, "  3. sed -i 's|resolv-file=%s|resolv-file=/etc/dnsmasq.upstream|' /etc/dnsmasq.conf\n", resolv)
+			fmt.Fprintln(s.Out, "  4. service dnsmasq restart")
+			fmt.Fprintln(s.Out, "  5. exit    (back to your PC)")
+			fmt.Fprintf(s.Out, "  6. dig %s    (should resolve now)\n", host)
+			if j := s.W.Job("J-101"); j != nil && !j.Done {
+				fmt.Fprintf(s.Out, "  7. job accept J-101 && job pay J-101    (+%s)\n", fmtMoney(j.Pay))
+			}
 		} else {
 			fmt.Fprintf(s.Out, "Check `ip route` and `dig %s` to separate connectivity from name resolution.\n", host)
 		}

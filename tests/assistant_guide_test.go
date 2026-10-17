@@ -24,6 +24,13 @@ func TestAssistantGuideFollowsDNSAndJobState(t *testing.T) {
 	if pw := router.FindUser("root").Pass; pw == "" || !strings.Contains(out, `"`+pw+`"`) {
 		t.Fatalf("the guide should name the router's root password, got:\n%s", out)
 	}
+	// 手把手: the guide prints the exact repair, built from the router's real
+	// resolv-file line and the real upstream resolver — not a vague "go look".
+	for _, want := range []string{"nameserver " + core.PublicResolver, "resolv-file=/etc/dnsmasq.upstream", "service dnsmasq restart", "job pay J-101"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the hand-holding guide should print the exact repair step %q:\n%s", want, out)
+		}
+	}
 	if w.Job("J-101").Accepted != "" || w.Job("J-101").Done {
 		t.Fatal("guide must not accept or complete work for the player")
 	}
