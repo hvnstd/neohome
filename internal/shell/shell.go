@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strings"
 
 	"neohome/internal/core"
@@ -177,7 +178,7 @@ func (s *Shell) showIntro() {
 	}
 	fmt.Fprintf(s.Out, "NeoHome — you are %s@%s (%s)\n", s.User.Name, s.Dev.Hostname, s.Dev.FirstLANIP())
 	fmt.Fprintf(s.Out, "World time: %s\n", s.W.Now().Format("2006-01-02 15:04 MST"))
-	fmt.Fprintf(s.Out, "New here? `assist guide` reads the current situation; `help` lists commands, `help <cmd>` details one; `motd` replays this.\n")
+	fmt.Fprintf(s.Out, "New here? `tutorial` shows your first five moves; `assist guide` reads the current situation; `help` lists commands, `help <cmd>` details one; `motd` replays this.\n")
 	if data, ok := s.Dev.FS.Read("/etc/motd"); ok {
 		fmt.Fprint(s.Out, string(data))
 	}
@@ -319,7 +320,7 @@ func (s *Shell) execOne(cmd string) bool {
 		return true
 	}
 
-	toks := tokenize(rest)
+	toks := s.expandGlobs(lexTokenize(rest))
 	if len(toks) == 0 {
 		return true
 	}
@@ -654,10 +655,27 @@ func (s *Shell) ResolveVFS(p string) (*core.VFS, string, string) {
 // character is data (a backslash included — `printf '%s\n'` must reach printf
 // with its backslash intact), inside double quotes only $ ` " \ and a newline
 // lose theirs, and outside quotes a backslash escapes whatever follows.
-func tokenize(cmd string) []string {
-	var out []string
+// lexToken is one shell word plus whether it may be pathname-expanded: a word
+// only globs when its * ? [ appeared outside quotes and unescaped — a quoted or
+// backslashed metacharacter is literal text, so `echo '*'` still prints a star.
+type lexToken struct {
+	text string
+	glob bool
+}
+
+// lexTokenize is tokenize that also marks which words are glob candidates.
+func lexTokenize(cmd string) []lexToken {
+	var out []lexToken
 	var cur []byte
 	var q byte
+	glob := false
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, lexToken{text: string(cur), glob: glob})
+			cur = cur[:0]
+			glob = false
+		}
+	}
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
 		switch {
@@ -698,18 +716,123 @@ func tokenize(cmd string) []string {
 		case c == '"' || c == '\'':
 			q = c
 		case c == ' ' || c == '\t':
-			if len(cur) > 0 {
-				out = append(out, string(cur))
-				cur = cur[:0]
-			}
+			flush()
 		default:
+			if c == '*' || c == '?' || c == '[' {
+				glob = true
+			}
 			cur = append(cur, c)
 		}
 	}
-	if len(cur) > 0 {
-		out = append(out, string(cur))
+	flush()
+	return out
+}
+
+func tokenize(cmd string) []string {
+	lt := lexTokenize(cmd)
+	out := make([]string, len(lt))
+	for i, t := range lt {
+		out[i] = t.text
 	}
 	return out
+}
+
+// expandGlobs is pathname expansion: each glob word is matched against the VFS
+// (relative to the cwd), an unmatched pattern is left as the literal word the
+// way bash leaves it, and a matched word becomes the sorted list of paths.
+func (s *Shell) expandGlobs(lt []lexToken) []string {
+	var out []string
+	for _, t := range lt {
+		if !t.glob {
+			out = append(out, t.text)
+			continue
+		}
+		if m := s.globMatch(t.text); len(m) > 0 {
+			out = append(out, m...)
+		} else {
+			out = append(out, t.text)
+		}
+	}
+	return out
+}
+
+// globMatch walks the VFS for one glob word and returns the matches, made
+// relative to the cwd when the word was relative — the way bash prints them.
+func (s *Shell) globMatch(word string) []string {
+	abs := strings.HasPrefix(word, "/")
+	var segs []string
+	for _, p := range strings.Split(word, "/") {
+		if p == "" || p == "." {
+			continue
+		}
+		segs = append(segs, p)
+	}
+	if len(segs) == 0 {
+		return nil
+	}
+	base := s.CWD
+	if abs {
+		base = "/"
+	}
+	dirs := []string{base}
+	for _, seg := range segs {
+		meta := strings.ContainsAny(seg, "*?[")
+		var next []string
+		for _, d := range dirs {
+			if !meta {
+				if p := path.Join(d, seg); s.Dev.FS.Exists(p) {
+					next = append(next, p)
+				}
+				continue
+			}
+			for _, child := range s.Dev.FS.List(d) {
+				b := path.Base(child)
+				// like bash: a pattern that does not start with . skips dotfiles
+				if strings.HasPrefix(b, ".") && !strings.HasPrefix(seg, ".") {
+					continue
+				}
+				if ok, _ := path.Match(seg, b); ok {
+					next = append(next, child)
+				}
+			}
+		}
+		dirs = next
+		if len(dirs) == 0 {
+			return nil
+		}
+	}
+	out := make([]string, 0, len(dirs))
+	for _, m := range dirs {
+		if !abs {
+			m = relGlob(base, m)
+		}
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// relGlob makes an absolute match relative to the walk base (a relative word),
+// climbing with .. when the match is not under the base.
+func relGlob(base, target string) string {
+	if base == "/" {
+		return strings.TrimPrefix(target, "/")
+	}
+	if base == target {
+		return path.Base(target)
+	}
+	bp := strings.Split(strings.TrimPrefix(base, "/"), "/")
+	tp := strings.Split(strings.TrimPrefix(target, "/"), "/")
+	i := 0
+	for i < len(bp) && i < len(tp) && bp[i] == tp[i] {
+		i++
+	}
+	parts := make([]string, 0, len(bp)-i+len(tp)-i)
+	for j := i; j < len(bp); j++ {
+		parts = append(parts, "..")
+	}
+	parts = append(parts, tp[i:]...)
+	return strings.Join(parts, "/")
 }
 
 func (s *Shell) errf(format string, a ...any) {

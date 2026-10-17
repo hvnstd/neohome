@@ -20,7 +20,7 @@ func init() {
 		{"exploit", cmdExploit}, {"mount", cmdMount}, {"umount", cmdUmount},
 		{"recon", cmdRecon}, {"trace", cmdTrace}, {"evidence", cmdEvidence},
 		{"vps", cmdVps}, {"help", cmdHelp}, {"motd", cmdMotd},
-		{"nmap", cmdScan}, {"hydra", cmdExploit},
+		{"nmap", cmdScan}, {"hydra", cmdExploit}, {"tutorial", cmdTutorial},
 		{"balance", cmdBank}, {"wallet", cmdBank},
 	} {
 		builtinTable[e.name] = e.fn
@@ -821,13 +821,87 @@ func (s *Shell) guideNextSteps() {
 	}
 	// 2. the assistant's own capability gap
 	if s.W.AssistantSkill() == 0 {
-		fmt.Fprintln(s.Out, "The assistant has no trained skill yet. `assist train recon` (or `security`) unlocks real capabilities on its node.")
+		fmt.Fprintln(s.Out, "The assistant has no trained skill yet. `assist train sysadmin` (or `security`) unlocks real capabilities on its node.")
 		return
 	}
 	// 3. explore and find more work
 	fmt.Fprintf(s.Out, "Explore your LAN: `scan %s0/24` lists reachable hosts (it is logged on the target), `ip addr` shows your own address.\n", core.LANSubnet)
 	fmt.Fprintln(s.Out, "Looking for work? `job list` shows open tasks; `recon <host>` reports what is reachable and vulnerable.")
 	fmt.Fprintln(s.Out, "Want detail on any command? `help <cmd>` explains purpose, usage and permissions.")
+}
+
+// cmdTutorial is the onboarding quest log (教程引导): a short ordered list of
+// milestones that teach the core loop, each checked off from REAL world state —
+// no hidden flags, and nothing here blocks the sandbox. The world stays open
+// the whole time; the log only ever names the next concrete command, it never
+// runs one for you. That is the balance 保留自由程度但也要保证是一个游戏 asks for:
+// structure to learn by, freedom to ignore it.
+func cmdTutorial(s *Shell, args []string) int {
+	if s.User == nil {
+		return 1
+	}
+	who := s.User.Name
+
+	dnsFixed := false
+	if _, ok, _ := core.DNSAnswer(s.Dev, "mirror.neohome.example"); ok {
+		dnsFixed = true
+	}
+	j101 := s.W.Job("J-101")
+	firstPaid := j101 != nil && j101.Done
+	trained := s.W.AssistantSkill() > 0
+	boardAccepted, boardDone := false, false
+	for _, j := range s.W.Jobs.List {
+		if j.ID == "J-101" {
+			continue
+		}
+		if j.Done || j.Accepted == who {
+			boardAccepted = true
+		}
+		if j.Done {
+			boardDone = true
+		}
+	}
+	pay := int64(4500)
+	if j101 != nil {
+		pay = j101.Pay
+	}
+
+	steps := []struct {
+		goal string
+		how  string
+		done bool
+	}{
+		{"Fix the home network (DNS is SERVFAIL right now)", "assist guide walks the repair step by step", dnsFixed},
+		{"Deliver J-101 and claim your first pay (" + fmtMoney(pay) + ")", "job accept J-101, finish the repair, then job pay J-101", firstPaid},
+		{"Train your assistant a real skill", "assist train sysadmin  (or: security, networking, dns-troubleshoot)", trained},
+		{"Take a fresh job off the board", "job list — IT, forensics and law-enforcement tracks", boardAccepted},
+		{"Finish a job on your own, start to payout", "job show <id> for the brief; job pay <id> to collect", boardDone},
+	}
+
+	done, next := 0, -1
+	for i, st := range steps {
+		if st.done {
+			done++
+		} else if next < 0 {
+			next = i
+		}
+	}
+	fmt.Fprintf(s.Out, "== NeoHome tutorial — %d/%d ==\n", done, len(steps))
+	fmt.Fprintln(s.Out, "An open world: this only teaches the core loop. Any order, all optional; every step has a real consequence.")
+	for i, st := range steps {
+		mark := " "
+		if st.done {
+			mark = "x"
+		}
+		fmt.Fprintf(s.Out, "  [%s] %d. %s\n", mark, i+1, st.goal)
+		fmt.Fprintf(s.Out, "        %s\n", st.how)
+	}
+	if next < 0 {
+		fmt.Fprintln(s.Out, "All five done — the world is fully open: the bazaar, orgs, PvP, running your own servers. `help` lists everything.")
+	} else {
+		fmt.Fprintf(s.Out, "\nNext: step %d. `assist guide` gives state-aware hints; `help <cmd>` details one command.\n", next+1)
+	}
+	return 0
 }
 
 // ---- recon ----
@@ -1990,6 +2064,7 @@ var helpEntries = map[string]cmdHelpEntry{
 	"evidence":  {"the evidence graph behind your heat", "evidence", "any user"},
 	"trace":     {"walk evidence back to a provider (not a person)", "trace IP", "any user"},
 	"motd":      {"replay the welcome banner", "motd", "any user"},
+	"tutorial":  {"the onboarding quest log — your first five moves", "tutorial", "any player"},
 	"help":      {"list commands or detail one", "help [CMD]", "any user"},
 }
 
@@ -1997,7 +2072,7 @@ func cmdHelp(s *Shell, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(s.Out, `NeoHome — a world that keeps running whether you are watching or not.
 
-Start here:                assist guide (state-aware help)   job list
+Start here:                tutorial (first five moves)   assist guide (state-aware help)   job list
 Work on the machine:      ls cd cat cp mv rm mkdir touch echo find grep head tail
                           sort uniq wc du df chmod chown stat file which ln
 Processes:                ps top htop kill pkill nice

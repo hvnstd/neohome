@@ -162,3 +162,52 @@ func TestAssistGuideSuggestsNextSteps(t *testing.T) {
 		t.Fatalf("guide should suggest training the assistant next:\n%s", got)
 	}
 }
+
+// The tutorial quest log (教程引导) reads real world state to check off each
+// milestone — it teaches the core loop while the sandbox stays open. A fresh
+// world starts at 0/5; fixing DNS, claiming J-101 and training the assistant
+// each flip their own box.
+func TestTutorialTracksRealProgress(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	router := w.Devices["router-alex"]
+
+	out := run(t, w, pc, "alex", "tutorial")
+	if !strings.Contains(out, "0/5") || !strings.Contains(out, "[ ] 1. Fix the home network") {
+		t.Fatalf("a fresh world should open at step 1 with 0/5:\n%s", out)
+	}
+
+	// fix DNS exactly the way the guide describes, and the first box checks itself
+	data, ok := router.FS.Read("/etc/dnsmasq.conf")
+	if !ok {
+		t.Fatal("router dnsmasq config is missing")
+	}
+	router.FS.Write("/etc/dnsmasq.upstream", "nameserver 10.0.0.2\n", 0644, "root", "root")
+	fixed := strings.Replace(string(data), "resolv-file=/var/run/dnsmasq/resolv.conf", "resolv-file=/etc/dnsmasq.upstream", 1)
+	router.FS.Write("/etc/dnsmasq.conf", fixed, 0644, "root", "root")
+	if _, err := router.RestartService("dnsmasq"); err != nil {
+		t.Fatalf("restart dnsmasq: %v", err)
+	}
+	if out = run(t, w, pc, "alex", "tutorial"); !strings.Contains(out, "[x] 1.") {
+		t.Fatalf("fixing DNS should check off step 1:\n%s", out)
+	}
+
+	// accept, deliver and pay J-101 — the second box
+	if out = run(t, w, pc, "alex", "job accept J-101"); !strings.Contains(out, "accepted") {
+		t.Fatalf("accept J-101: %s", out)
+	}
+	if _, _, err := w.PayJob("alex", "J-101"); err != nil {
+		t.Fatalf("pay J-101: %v", err)
+	}
+	if out = run(t, w, pc, "alex", "tutorial"); !strings.Contains(out, "[x] 2.") {
+		t.Fatalf("paying J-101 should check off step 2:\n%s", out)
+	}
+
+	// train the assistant — the third box
+	if _, err := w.TrainAssistant("alex", "security"); err != nil {
+		t.Fatalf("train assistant: %v", err)
+	}
+	if out = run(t, w, pc, "alex", "tutorial"); !strings.Contains(out, "[x] 3.") || !strings.Contains(out, "3/5") {
+		t.Fatalf("training the assistant should check off step 3 (3/5):\n%s", out)
+	}
+}

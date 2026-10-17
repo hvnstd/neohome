@@ -3041,7 +3041,30 @@ Ownership: `internal/webtty/page.go`（滚动）、`internal/shell/remote.go`（
   出来直接报给玩家（`RouterForPlayer` 限定本人路由器，读真实 `u.Pass`，不写
   死 "admin"）。
 
+## 通配符 + 教程引导（glob & tutorial）
+
+Ownership: `internal/shell/shell.go`（`lexTokenize`/`tokenize` 重写 +
+`expandGlobs`/`globMatch`/`relGlob`，execOne 挂接）、
+`internal/shell/world_cmds.go`（`cmdTutorial` + 注册 + help 条 + help 总览 +
+guideNextSteps 修正无效 track）、`tests/glob_test.go`（新）、
+`tests/onboarding_test.go`（+tutorial 测试）。shell 层，不动 core/gob/tick。
+
+- 通配符（路径名展开）：`lexTokenize` 在分词时标记哪些词含**未加引号/未转义**
+  的 `* ? [`（引号内/反斜杠后的是字面量，`echo '*'` 仍打印星号）；
+  `expandGlobs` 对每个 glob 词走 VFS（相对词相对 cwd，绝对词从根），逐段
+  `path.Match`，裸 `*` 不匹配点文件（同 bash），未命中的模式按 bash 原样留下。
+  相对词的匹配结果转回相对路径（`relGlob`，会爬 `..`）。与管道/重定向天然
+  兼容（glob 不会产生 `|`）。实测 `cd /etc; echo *.conf`→resolv.conf、
+  `echo *`→全部可见项、`echo "*.conf"`→字面。
+- 教程引导（保留自由度但是个游戏）：`tutorial` 命令显示五步任务清单，每步的
+  勾选都读**真实世界状态**（DNS 是否解析 / J-101 是否交付 / 助手是否有 track /
+  悬赏板是否接过活 / 是否独立完成过单），无隐藏标志、不阻塞沙盒，只给下一步的
+  具体命令。欢迎横幅与 `help` 总览都指向它。五步：修 DNS → 领 J-101 报酬 →
+  训练助手 → 从悬赏板接活 → 独立完成一单（毕业，世界全开）。
+- 顺手修了真 bug：`guideNextSteps` 原来建议 `assist train recon`，但 `recon`
+  不是合法 track（合法的是 sysadmin/security/networking/dns-troubleshoot）。
+
 ## 验证
 
-全量 `go test ./... -count=1` **435 pass / 0 fail**（~310s，`-timeout 1500s`），gofmt/vet
+全量 `go test ./... -count=1` **438 pass / 0 fail**（~310s，`-timeout 1500s`），gofmt/vet
 干净。
