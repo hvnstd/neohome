@@ -64,7 +64,75 @@ func mysqlCanUse(d *Device, u *User, db string) bool {
 		return false
 	}
 	n, ok := d.FS.Get(dir)
-	return ok && n.Owner == u.Name
+	if ok && n.Owner == u.Name {
+		return true
+	}
+	for _, line := range strings.Split(mysqlGrantFile(d, db), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == db && f[1] == u.Name {
+			return true
+		}
+	}
+	return false
+}
+
+func mysqlGrantPath(db string) string {
+	dir, _ := mysqlDBDir(db)
+	return dir + "/.grants"
+}
+
+func mysqlGrantFile(d *Device, db string) string {
+	data, ok := d.FS.Read(mysqlGrantPath(db))
+	if !ok {
+		return ""
+	}
+	return string(data)
+}
+
+func mysqlGrantWrite(d *Device, u *User, db, grantee string) error {
+	if !mysqlCanUse(d, u, db) {
+		return mysqlErr(1044, "42000", "Access denied for database '%s'", db)
+	}
+	if _, err := mysqlDBDir(db); err != nil {
+		return err
+	}
+	if d.FindUser(grantee) == nil {
+		return mysqlErr(1133, "42000", "can't find user '%s'", grantee)
+	}
+	cur := mysqlGrantFile(d, db)
+	key := db + " " + grantee
+	for _, line := range strings.Split(cur, "\n") {
+		if strings.TrimSpace(line) == key {
+			return nil
+		}
+	}
+	newc := strings.TrimRight(cur, "\n")
+	if newc != "" {
+		newc += "\n"
+	}
+	newc += key + "\n"
+	return d.FS.WriteChecked(mysqlGrantPath(db), []byte(newc), u)
+}
+
+func mysqlRevokeWrite(d *Device, u *User, db, grantee string) error {
+	if !mysqlCanUse(d, u, db) {
+		return mysqlErr(1044, "42000", "Access denied for database '%s'", db)
+	}
+	cur := mysqlGrantFile(d, db)
+	var out []string
+	for _, line := range strings.Split(cur, "\n") {
+		if strings.TrimSpace(line) == db+" "+grantee {
+			continue
+		}
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	newc := ""
+	if len(out) > 0 {
+		newc = strings.Join(out, "\n") + "\n"
+	}
+	return d.FS.WriteChecked(mysqlGrantPath(db), []byte(newc), u)
 }
 
 // mysqlListDBs reads the databases off the disk: a removed directory is a
@@ -447,13 +515,7 @@ func splitWhereAnd(s string) (head, tail string) {
 // mysqlMatchRow tests a row against parsed predicates.
 func mysqlMatchRow(cols []string, row []string, conds []mysqlCond) (bool, error) {
 	for _, c := range conds {
-		i := -1
-		for j, name := range cols {
-			if strings.EqualFold(name, c.col) {
-				i = j
-				break
-			}
-		}
+		i := indexOfCol(cols, c.col)
 		if i < 0 {
 			return false, mysqlErr(1054, "42S22", "Unknown column '%s'", c.col)
 		}
@@ -497,6 +559,10 @@ func mysqlOne(d *Device, u *User, curDB, stmt string) (string, string, error) {
 	kw := strings.ToUpper(f[0])
 	rest := strings.TrimSpace(stmt[len(f[0]):])
 	switch kw {
+	case "BEGIN", "START":
+		return "Query OK, 0 rows affected\n", curDB, nil
+	case "COMMIT", "ROLLBACK":
+		return "Query OK, 0 rows affected\n", curDB, nil
 	case "SHOW":
 		return mysqlShow(d, u, curDB, rest)
 	case "CREATE":
@@ -514,6 +580,10 @@ func mysqlOne(d *Device, u *User, curDB, stmt string) (string, string, error) {
 		return "Database changed\n", db, nil
 	case "INSERT":
 		return mysqlInsert(d, u, curDB, rest)
+	case "GRANT":
+		return mysqlGrant(d, u, curDB, rest)
+	case "REVOKE":
+		return mysqlRevoke(d, u, curDB, rest)
 	case "SELECT":
 		return mysqlSelect(d, u, curDB, rest)
 	case "UPDATE":
@@ -819,6 +889,53 @@ func mysqlWhereClause(rest, keyword string) (before, where string) {
 	return strings.TrimSpace(rest[:best]), strings.TrimSpace(rest[best+len(keyword):])
 }
 
+func mysqlGrant(d *Device, u *User, curDB, rest string) (string, string, error) {
+	up := strings.ToUpper(rest)
+	on := strings.Index(up, " ON ")
+	to := strings.Index(up, " TO ")
+	if on < 0 || to < 0 || to < on {
+		return "", curDB, mysqlErr(1064, "42000", "GRANT syntax: GRANT ALL ON db.* TO user")
+	}
+	priv := strings.TrimSpace(rest[:on])
+	dbpart := strings.TrimSpace(rest[on+len(" ON ") : to])
+	grantee := mysqlStripIdent(strings.TrimSpace(rest[to+len(" TO "):]))
+	if !strings.HasPrefix(strings.ToUpper(priv), "ALL") {
+		return "", curDB, mysqlErr(1064, "42000", "only ALL privileges are modelled here")
+	}
+	dbpart = strings.TrimSuffix(dbpart, ".*")
+	dbpart = strings.TrimSuffix(dbpart, "*")
+	dbpart = mysqlStripIdent(strings.TrimSpace(dbpart))
+	if dbpart == "" {
+		dbpart = curDB
+	}
+	if err := mysqlGrantWrite(d, u, dbpart, grantee); err != nil {
+		return "", curDB, err
+	}
+	d.Logf("info", "mariadb", "%s granted %s on %s to %s", u.Name, priv, dbpart, grantee)
+	return "Query OK, 0 rows affected\n", curDB, nil
+}
+
+func mysqlRevoke(d *Device, u *User, curDB, rest string) (string, string, error) {
+	up := strings.ToUpper(rest)
+	on := strings.Index(up, " ON ")
+	from := strings.Index(up, " FROM ")
+	if on < 0 || from < 0 || from < on {
+		return "", curDB, mysqlErr(1064, "42000", "REVOKE syntax: REVOKE ALL ON db.* FROM user")
+	}
+	dbpart := strings.TrimSpace(rest[on+len(" ON ") : from])
+	grantee := mysqlStripIdent(strings.TrimSpace(rest[from+len(" FROM "):]))
+	dbpart = strings.TrimSuffix(dbpart, ".*")
+	dbpart = strings.TrimSuffix(dbpart, "*")
+	dbpart = mysqlStripIdent(strings.TrimSpace(dbpart))
+	if dbpart == "" {
+		dbpart = curDB
+	}
+	if err := mysqlRevokeWrite(d, u, dbpart, grantee); err != nil {
+		return "", curDB, err
+	}
+	return "Query OK, 0 rows affected\n", curDB, nil
+}
+
 func mysqlSelect(d *Device, u *User, curDB, rest string) (string, string, error) {
 	up := strings.ToUpper(rest)
 	fi := strings.Index(up, " FROM ")
@@ -843,30 +960,103 @@ func mysqlSelect(d *Device, u *User, curDB, rest string) (string, string, error)
 		limit = n
 		from = strings.TrimSpace(from[:li])
 	}
-	db, table, err := mysqlTableRef(curDB, from)
+
+	// JOIN support: "a JOIN b ON a.x = b.y" (INNER; LEFT/RIGHT/CROSS accepted
+	// as the same inner reconciliation this world performs honestly). A plain
+	// comma separates a cartesian product.
+	leftSpec := from
+	var rightSpec, onCond string
+	cross := false
+	if ji := indexFold(from, " JOIN "); ji >= 0 {
+		leftSpec = strings.TrimSpace(from[:ji])
+		rest := strings.TrimSpace(from[ji+len(" JOIN "):])
+		// strip a leading join-type keyword that precedes JOIN
+		for _, kw := range []string{"INNER", "LEFT", "RIGHT", "CROSS", "OUTER"} {
+			if strings.HasPrefix(strings.ToUpper(rest), kw+" ") {
+				rest = strings.TrimSpace(rest[len(kw):])
+			}
+		}
+		// left side may carry a trailing join-type keyword (e.g. "t1 INNER")
+		for _, kw := range []string{"INNER", "LEFT", "RIGHT", "CROSS", "OUTER"} {
+			if strings.HasSuffix(strings.ToUpper(strings.TrimSpace(leftSpec)), " "+kw) {
+				leftSpec = strings.TrimSpace(leftSpec[:len(leftSpec)-len(kw)-1])
+			}
+		}
+		if oi := indexFold(rest, " ON "); oi >= 0 {
+			rightSpec = strings.TrimSpace(rest[:oi])
+			onCond = strings.TrimSpace(rest[oi+len(" ON "):])
+		} else {
+			rightSpec = rest
+		}
+	} else if strings.Contains(from, ",") {
+		parts := strings.SplitN(from, ",", 2)
+		leftSpec = strings.TrimSpace(parts[0])
+		rightSpec = strings.TrimSpace(parts[1])
+		cross = true
+	}
+
+	load := func(spec string) (string, string, []string, [][]string, error) {
+		db, table, err := mysqlTableRef(curDB, spec)
+		if err != nil {
+			return "", "", nil, nil, err
+		}
+		if !mysqlCanUse(d, u, db) {
+			return "", "", nil, nil, mysqlErr(1044, "42000", "Access denied for database '%s'", db)
+		}
+		schema, err := mysqlColumns(d, db, table)
+		if err != nil {
+			return "", "", nil, nil, err
+		}
+		rows, err := mysqlRows(d, db, table, schema)
+		if err != nil {
+			return "", "", nil, nil, err
+		}
+		return db, table, schema, rows, nil
+	}
+
+	ldb, _, leftSchema, leftRows, err := load(leftSpec)
 	if err != nil {
 		return "", curDB, err
 	}
-	if !mysqlCanUse(d, u, db) {
-		return "", curDB, mysqlErr(1044, "42000", "Access denied for database '%s'", db)
+	_ = ldb
+
+	var combinedCols []string
+	combinedCols = append(combinedCols, leftSchema...)
+	var rightSchema []string
+	var rightRows [][]string
+	if rightSpec != "" {
+		rdb, _, rs, rr, err := load(rightSpec)
+		if err != nil {
+			return "", curDB, err
+		}
+		_ = rdb
+		rightSchema = rs
+		rightRows = rr
+		combinedCols = append(combinedCols, rightSchema...)
 	}
-	schema, err := mysqlColumns(d, db, table)
-	if err != nil {
-		return "", curDB, err
+
+	// ON condition indices
+	onLeftIdx, onRightIdx := -1, -1
+	if onCond != "" {
+		parts := strings.SplitN(onCond, "=", 2)
+		if len(parts) != 2 {
+			return "", curDB, mysqlErr(1064, "42000", "JOIN needs ON a.col = b.col")
+		}
+		onLeftIdx = indexOfCol(leftSchema, strings.TrimSpace(parts[0]))
+		onRightIdx = indexOfCol(rightSchema, strings.TrimSpace(parts[1]))
+		if onLeftIdx < 0 || onRightIdx < 0 {
+			return "", curDB, mysqlErr(1054, "42S22", "Unknown column in ON clause")
+		}
 	}
+
 	var want []int
 	if strings.TrimSpace(collist) == "*" {
-		for i := range schema {
+		for i := range combinedCols {
 			want = append(want, i)
 		}
 	} else {
 		for _, c := range mysqlSplitList(collist) {
-			found := -1
-			for j, name := range schema {
-				if strings.EqualFold(name, mysqlStripIdent(c)) {
-					found = j
-				}
-			}
+			found := indexOfCol(combinedCols, c)
 			if found < 0 {
 				return "", curDB, mysqlErr(1054, "42S22", "Unknown column '%s'", c)
 			}
@@ -880,22 +1070,48 @@ func mysqlSelect(d *Device, u *User, curDB, rest string) (string, string, error)
 			return "", curDB, err
 		}
 	}
-	rows, err := mysqlRows(d, db, table, schema)
-	if err != nil {
-		return "", curDB, err
+	var combinedRows [][]string
+	if rightSpec == "" {
+		for _, r := range leftRows {
+			combinedRows = append(combinedRows, append([]string{}, r...))
+		}
+	} else {
+		for _, lr := range leftRows {
+			for _, rr := range rightRows {
+				if onCond != "" {
+					li := onLeftIdx
+					ri := onRightIdx
+					lv := ""
+					if li < len(lr) {
+						lv = lr[li]
+					}
+					rv := ""
+					if ri < len(rr) {
+						rv = rr[ri]
+					}
+					if lv != rv {
+						continue
+					}
+				}
+				combined := append([]string{}, lr...)
+				combined = append(combined, rr...)
+				combinedRows = append(combinedRows, combined)
+			}
+		}
 	}
+	_ = cross
 	var b strings.Builder
 	hdr := make([]string, len(want))
 	for i, w := range want {
-		hdr[i] = schema[w]
+		hdr[i] = combinedCols[w]
 	}
 	b.WriteString(strings.Join(hdr, "\t") + "\n")
 	n := 0
-	for _, r := range rows {
+	for _, r := range combinedRows {
 		if limit >= 0 && n >= limit {
 			break
 		}
-		ok, err := mysqlMatchRow(schema, r, conds)
+		ok, err := mysqlMatchRow(combinedCols, r, conds)
 		if err != nil {
 			return "", curDB, err
 		}
@@ -916,6 +1132,22 @@ func mysqlSelect(d *Device, u *User, curDB, rest string) (string, string, error)
 	return b.String(), curDB, nil
 }
 
+func indexOfCol(cols []string, name string) int {
+	name = mysqlStripIdent(name)
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	for j, c := range cols {
+		if strings.EqualFold(mysqlStripIdent(c), name) {
+			return j
+		}
+	}
+	return -1
+}
+
+func indexFold(s, sub string) int {
+	return strings.Index(strings.ToUpper(s), strings.ToUpper(sub))
+}
 func mysqlUpdate(d *Device, u *User, curDB, rest string) (string, string, error) {
 	target, whereStr := mysqlWhereClause(rest, "WHERE")
 	// target is "<table> SET a = b, ...": split the table from its assigns
