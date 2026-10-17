@@ -204,8 +204,8 @@ func mustRead(t *testing.T, d *core.Device, p string) string {
 }
 
 // Branches are ref files plus a symref HEAD: create, switch, diverge, merge
-// fast-forward. A diverged pair is refused — true merges are out of scope,
-// and the refusal says so instead of inventing a conflicted tree.
+// fast-forward. A diverged pair is reconciled with a real three-way merge
+// commit carrying both parents.
 func TestGitBranchAndFastForwardMerge(t *testing.T) {
 	w := core.NewWorld()
 	repairDNS(t, w)
@@ -243,12 +243,15 @@ func TestGitBranchAndFastForwardMerge(t *testing.T) {
 	g.exec("echo master > master.txt")
 	g.exec("git commit -m 'master work'")
 	out := g.exec("git merge side")
-	if !strings.Contains(out, "diverged") {
-		t.Fatalf("a diverged merge must be refused honestly, got:\n%s", out)
+	if !strings.Contains(out, "Merge") {
+		t.Fatalf("a diverged merge must now merge honestly, got:\n%s", out)
 	}
-	// ...and the refused merge changed nothing
-	if _, ok := w.Devices["pc-alex"].FS.Read("/home/alex/work/side.txt"); ok {
-		t.Fatal("a refused merge must not materialise the other side")
+	// ...and the merged tree carries both sides
+	if _, ok := w.Devices["pc-alex"].FS.Read("/home/alex/work/side.txt"); !ok {
+		t.Fatal("the merged tree must materialise the other side")
+	}
+	if _, ok := w.Devices["pc-alex"].FS.Read("/home/alex/work/master.txt"); !ok {
+		t.Fatal("the merged tree must keep this side")
 	}
 }
 

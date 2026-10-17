@@ -30,7 +30,8 @@ type GitEntry struct {
 // GitCommitInfo is a commit object's metadata.
 type GitCommitInfo struct {
 	ID      string
-	Parent  string // "" for the root commit
+	Parent  string // first parent ("" for the root commit)
+	Parent2 string // second parent for a merge commit
 	Author  string
 	Date    string
 	Message string
@@ -117,8 +118,15 @@ func writeGitCommit(d *Device, base string, c GitCommitInfo, owner string, u *Us
 	if parent == "" {
 		parent = "none"
 	}
-	raw := fmt.Sprintf("tree %s\nparent %s\nauthor %s\ndate %s\nmessage %s\n",
-		c.Tree, parent, c.Author, c.Date, c.Message)
+	var b strings.Builder
+	fmt.Fprintf(&b, "tree %s\n", c.Tree)
+	fmt.Fprintf(&b, "parent %s\n", parent)
+	if c.Parent2 != "" {
+		fmt.Fprintf(&b, "parent %s\n", c.Parent2)
+	}
+	fmt.Fprintf(&b, "author %s\ndate %s\nmessage %s\n",
+		c.Author, c.Date, c.Message)
+	raw := b.String()
 	sha := gitHash(raw)
 	if _, exists := gitReadFile(d, base, "objects/commit/"+sha); exists {
 		return sha, nil
@@ -138,7 +146,11 @@ func readGitCommit(d *Device, base, sha string) (GitCommitInfo, bool) {
 			c.Tree = strings.TrimPrefix(line, "tree ")
 		case strings.HasPrefix(line, "parent "):
 			if p := strings.TrimPrefix(line, "parent "); p != "none" {
-				c.Parent = p
+				if c.Parent == "" {
+					c.Parent = p
+				} else if c.Parent2 == "" {
+					c.Parent2 = p
+				}
 			}
 		case strings.HasPrefix(line, "author "):
 			c.Author = strings.TrimPrefix(line, "author ")
@@ -506,9 +518,11 @@ func (w *World) GitDeleteBranch(d *Device, dir, name string, force bool, u *User
 	return nil
 }
 
-// GitMerge fast-forwards the current branch to the named one. Equal tips are
-// already up to date; a diverged pair is refused outright — this world does
-// true merges nowhere, and saying so beats inventing a conflicted tree.
+// GitMerge merges the named branch into the current one. A fast-forward is
+// used when possible; a diverged pair is reconciled with a real three-way
+// merge (base = common ancestor) and a merge commit carrying both parents.
+// Non-overlapping changes combine automatically; a path changed differently
+// on both sides is a conflict and the merge is refused without moving HEAD.
 func (w *World) GitMerge(d *Device, dir, name string, u *User) (string, error) {
 	if err := gitCheckBranch(name); err != nil {
 		return "", err
@@ -532,6 +546,7 @@ func (w *World) GitMerge(d *Device, dir, name string, u *User) (string, error) {
 	case mine == other:
 		return "Already up to date.", nil
 	case gitAncestor(d, base, mine, other):
+		// fast-forward
 		deltas, err := w.GitStatus(d, repo, u)
 		if err != nil {
 			return "", err
@@ -558,7 +573,192 @@ func (w *World) GitMerge(d *Device, dir, name string, u *User) (string, error) {
 	case gitAncestor(d, base, other, mine):
 		return "Already up to date.", nil
 	}
-	return "", fmt.Errorf("fatal: %s and %s diverged — true merges are not implemented (delete one side with: git branch -D <name>)", cur, name)
+
+	// diverged: three-way merge.
+	deltas, err := w.GitStatus(d, repo, u)
+	if err != nil {
+		return "", err
+	}
+	if len(deltas) > 0 {
+		return "", fmt.Errorf("error: your local changes would be overwritten by merge; commit them first")
+	}
+	mineCommit, ok1 := readGitCommit(d, base, mine)
+	otherCommit, ok2 := readGitCommit(d, base, other)
+	if !ok1 || !ok2 {
+		return "", fmt.Errorf("fatal: branch %q points nowhere", name)
+	}
+	baseID := mergeBase(d, base, mine, other)
+	baseManifest := map[string]string{}
+	if baseID != "" {
+		if bc, ok := readGitCommit(d, base, baseID); ok {
+			baseManifest = gitTreeManifest(d, base, bc.Tree)
+		}
+	}
+	oursManifest := gitTreeManifest(d, base, mineCommit.Tree)
+	theirsManifest := gitTreeManifest(d, base, otherCommit.Tree)
+
+	merged := map[string]string{}
+	var conflicts []string
+	pathSet := map[string]bool{}
+	for p := range baseManifest {
+		pathSet[p] = true
+	}
+	for p := range oursManifest {
+		pathSet[p] = true
+	}
+	for p := range theirsManifest {
+		pathSet[p] = true
+	}
+	paths := make([]string, 0, len(pathSet))
+	for p := range pathSet {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		b, bok := baseManifest[p]
+		o, ook := oursManifest[p]
+		tt, tok := theirsManifest[p]
+		switch {
+		case !ook && !tok:
+			// deleted on both sides
+		case ook && !tok:
+			if bok {
+				if b != o {
+					conflicts = append(conflicts, p)
+				}
+				// else deleted by theirs, unchanged by ours -> delete
+			} else {
+				// added on ours only -> keep
+				merged[p] = o
+			}
+		case !ook && tok:
+			if bok {
+				if b != tt {
+					conflicts = append(conflicts, p)
+				}
+			} else {
+				merged[p] = tt
+			}
+		case ook && tok:
+			if o == tt {
+				merged[p] = o
+			} else if bok && b == o {
+				merged[p] = tt
+			} else if bok && b == tt {
+				merged[p] = o
+			} else if !bok {
+				// added on both sides differently
+				conflicts = append(conflicts, p)
+			} else {
+				conflicts = append(conflicts, p)
+			}
+		}
+	}
+	// clean up: paths marked deleted must not linger in merged
+	for _, p := range conflicts {
+		delete(merged, p)
+	}
+	if len(conflicts) > 0 {
+		return "", fmt.Errorf("CONFLICT (content): merge conflicts in:\n%s\nAutomatic merge failed; fix conflicts and commit.", strings.Join(conflicts, "\n"))
+	}
+
+	// write merged tree
+	entries := make([]GitEntry, 0, len(merged))
+	for p, sha := range merged {
+		entries = append(entries, GitEntry{Blob: sha, Path: p})
+	}
+	mergedTree, err := writeGitTree(d, base, entries, u.Name, u)
+	if err != nil {
+		return "", err
+	}
+
+	stamp := w.Sim.Format("2006-01-02 15:04")
+	msg := fmt.Sprintf("Merge branch %q", name)
+	c := GitCommitInfo{Parent: mine, Parent2: other, Author: u.Name, Date: stamp, Message: msg, Tree: mergedTree}
+	id, err := writeGitCommit(d, base, c, u.Name, u)
+	if err != nil {
+		return "", err
+	}
+	if err := writeHead(d, base, id, u.Name, u); err != nil {
+		return "", err
+	}
+	oldTree := oursManifest
+	if err := gitCheckout(d, repo, base, mergedTree, oldTree, u); err != nil {
+		return "", err
+	}
+	d.Logf("info", "git", "merged %s into %s on %s (merge commit %s)", name, cur, repo, shortOrEmpty(id))
+	return fmt.Sprintf("Merge made by the 'recursive' strategy.\n%s", shortOrEmpty(id)), nil
+}
+
+// mergeBase returns the best common ancestor of a and b (deepest by height),
+// or "" when they share none.
+func mergeBase(d *Device, base, a, b string) string {
+	ancestors := map[string]bool{}
+	var collect func(id string)
+	collect = func(id string) {
+		if id == "" || ancestors[id] {
+			return
+		}
+		ancestors[id] = true
+		c, ok := readGitCommit(d, base, id)
+		if !ok {
+			return
+		}
+		for _, p := range commitParents(c) {
+			collect(p)
+		}
+	}
+	collect(a)
+
+	memo := map[string]int{}
+	var height func(id string) int
+	height = func(id string) int {
+		if id == "" {
+			return 0
+		}
+		if h, ok := memo[id]; ok {
+			return h
+		}
+		c, ok := readGitCommit(d, base, id)
+		if !ok {
+			memo[id] = 0
+			return 0
+		}
+		maxp := 0
+		for _, p := range commitParents(c) {
+			h := height(p)
+			if h > maxp {
+				maxp = h
+			}
+		}
+		memo[id] = 1 + maxp
+		return memo[id]
+	}
+
+	best := ""
+	bestH := -1
+	var consider func(id string)
+	consider = func(id string) {
+		if id == "" {
+			return
+		}
+		if ancestors[id] {
+			h := height(id)
+			if h > bestH {
+				bestH = h
+				best = id
+			}
+		}
+		c, ok := readGitCommit(d, base, id)
+		if !ok {
+			return
+		}
+		for _, p := range commitParents(c) {
+			consider(p)
+		}
+	}
+	consider(b)
+	return best
 }
 
 // ---- transport ----
@@ -801,22 +1001,10 @@ func (w *World) GitPull(d *Device, dir string, u *User) (string, error) {
 	} else if err := w.gitFetchObjects(dst, serverBase, d, base, u); err != nil {
 		return "", err
 	}
-	// fast-forward only: the remote HEAD's parent chain must contain the
-	// local HEAD — a diverged history needs a merge, which this world does
-	// not pretend to do
-	ff := false
-	for id := rc.Parent; id != ""; {
-		if id == local {
-			ff = true
-			break
-		}
-		pc, ok := readGitCommit(d, base, id)
-		if !ok {
-			break
-		}
-		id = pc.Parent
-	}
-	if !ff && local != "" {
+	// fast-forward only: the remote HEAD must descend from the local HEAD.
+	// A diverged history needs a merge, which pull does not attempt.
+	ff := local == "" || gitAncestor(d, base, local, remote)
+	if !ff {
 		return "", fmt.Errorf("fatal: not possible to fast-forward, %s and %s diverged", local[:8], remote[:8])
 	}
 	oldTree := map[string]string{}
@@ -865,11 +1053,10 @@ func (w *World) GitPush(d *Device, dir string, u *User, user, pass string) (stri
 	if server == local {
 		return "Everything up-to-date", nil
 	}
-	lc, ok := readGitCommit(d, base, local)
-	if !ok {
+	if _, ok := readGitCommit(d, base, local); !ok {
 		return "", fmt.Errorf("git: local repository is corrupt")
 	}
-	if server != "" && lc.Parent != server {
+	if server != "" && !gitAncestor(d, base, server, local) {
 		return "", fmt.Errorf("to git.neohome.example:%s.git\n ! [rejected] %s -> %s (fetch first)", g.Repo, g.Repo, g.Repo)
 	}
 	if err := pushObjects(d, base, dst, serverBase); err != nil {
@@ -922,20 +1109,47 @@ func writeHead(d *Device, base, id, owner string, u *User) error {
 	return gitWriteFile(d, base, "HEAD", id+"\n", owner, u)
 }
 
-// gitAncestor reports whether maybeAncestor is reachable by walking parents
-// from tip. Histories here are short; the cap is a backstop, not a limit.
+// commitParents returns all parents of a commit (first and, for merges,
+// second). A root commit has none.
+func commitParents(c GitCommitInfo) []string {
+	var out []string
+	if c.Parent != "" {
+		out = append(out, c.Parent)
+	}
+	if c.Parent2 != "" {
+		out = append(out, c.Parent2)
+	}
+	return out
+}
+
+// gitAncestor reports whether maybeAncestor is reachable from tip, following
+// every parent of a merge commit. Histories here are short.
 func gitAncestor(d *Device, base, maybeAncestor, tip string) bool {
-	for id := tip; id != ""; {
+	if maybeAncestor == "" || tip == "" {
+		return false
+	}
+	visited := map[string]bool{}
+	var dfs func(id string) bool
+	dfs = func(id string) bool {
 		if id == maybeAncestor {
 			return true
 		}
+		if visited[id] {
+			return false
+		}
+		visited[id] = true
 		c, ok := readGitCommit(d, base, id)
 		if !ok {
 			return false
 		}
-		id = c.Parent
+		for _, p := range commitParents(c) {
+			if dfs(p) {
+				return true
+			}
+		}
+		return false
 	}
-	return false
+	return dfs(tip)
 }
 
 var gitBranchRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
