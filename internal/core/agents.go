@@ -8,7 +8,39 @@ import (
 
 // ---- assistant agent: works jobs on its own node, learns ----
 
+// assistantTrackGates maps every verifier the assistant can perform to the
+// training track that teaches it; "" means it ships with the assistant (it
+// can follow explicit instructions — the tutorial jobs). A verifier absent
+// from the map is people's work (desks, trophies, warrants) and delegation
+// refuses it outright. This map is the ONE list: TaskAssistant refuses from
+// it, assistantAct performs from it, and decision.go's assistantCapable
+// consults it, so the trigger and the refusal cannot drift apart.
+var assistantTrackGates = map[string]string{
+	"dns-fix":     "",
+	"pkg-busybox": "",
+	"ssh-up":      "networking",
+	"clean":       "networking",
+}
+
+// assistantMissingTrack answers the two questions delegation needs: is this
+// verifier assistant work at all, and if so, which track is still missing
+// ("" when the assistant can perform it now).
+func (w *World) assistantMissingTrack(verify string) (track string, learnable bool) {
+	track, learnable = assistantTrackGates[verify]
+	if !learnable {
+		return "", false
+	}
+	if track != "" && !w.HasTrack(track) {
+		return track, true
+	}
+	return "", true
+}
+
 func (w *World) AssistantWork() {
+	// §1's countermeasure loop runs ahead of the job queue: an armed,
+	// security-trained assistant spends one step per cycle on the household's
+	// own §33 detections before it turns to paid work.
+	w.assistantDefense()
 	for _, t := range w.Tasks {
 		if t.Done || t.Kind != "assist-job" {
 			continue
@@ -86,10 +118,11 @@ func (w *World) AssistantWork() {
 	}
 }
 
-// assistantAct performs one stage the assistant knows how to do: the same
-// two fixes the legacy single-shot path always had. Anything else is not a
-// failure of effort but of capability — TaskAssistant refuses such stages
-// before they are ever delegated.
+// assistantAct performs one stage the assistant knows how to do. What it can
+// do is what its learned tracks cover (assistantTrackGates): the two baseline
+// fixes it ships with, plus the networking track's service/gateway work.
+// Anything else is not a failure of effort but of capability — TaskAssistant
+// refuses such stages before they are ever delegated.
 func (w *World) assistantAct(a *Device, verify string) bool {
 	ok := false
 	switch verify {
@@ -122,6 +155,43 @@ func (w *World) assistantAct(a *Device, verify string) bool {
 					break
 				}
 			}
+		}
+	case "ssh-up":
+		// networking track: bring the household's own ssh endpoints back up —
+		// a stopped sshd on a powered box the owner has is started for real.
+		for _, id := range w.Order {
+			d := w.Devices[id]
+			if d.Owner != a.Owner || !d.Powered() {
+				continue
+			}
+			if svc := d.Svc("sshd"); svc != nil && svc.State != "running" {
+				if _, err := d.StartService("sshd"); err == nil {
+					ok = true
+				}
+			}
+		}
+		if !ok {
+			// nothing was down: confirm the world really has a live sshd
+			// rather than claiming one (the verifier asks the same question).
+			for _, id := range w.Order {
+				if d := w.Devices[id]; d.Svc("sshd") != nil && d.Svc("sshd").State == "running" {
+					ok = true
+					break
+				}
+			}
+		}
+	case "clean":
+		// networking track: clear the household gateway's strike state for
+		// real — every active ban lifted, every fail counter zeroed — so the
+		// verifier's "no leftover bans" is true because the router holds none.
+		if r := w.RouterForPlayer(a.Owner); r != nil {
+			for _, b := range r.ActiveBans() {
+				r.Unban(b.IP)
+			}
+			for ip := range r.Fail2Ban {
+				r.Fail2Ban[ip] = 0
+			}
+			ok = true
 		}
 	}
 	return ok

@@ -508,8 +508,20 @@ func cmdAssist(s *Shell, args []string) int {
 		}
 		if len(s.W.AssistantTracksLearned()) > 0 {
 			fmt.Fprintf(s.Out, "tracks:   %s\n", strings.Join(s.W.AssistantTracksLearned(), ", "))
+			for _, t := range core.AssistantTracks() {
+				if s.W.HasTrack(t.Name) && t.Unlocks != "" {
+					fmt.Fprintf(s.Out, "          %-18s unlocks: %s\n", t.Name, t.Unlocks)
+				}
+			}
 		} else {
 			fmt.Fprintf(s.Out, "tracks:   none — it can only follow explicit instructions\n")
+		}
+		if p := s.W.Players[s.User.Name]; p != nil {
+			defend := "off"
+			if p.AssistDefend {
+				defend = "armed"
+			}
+			fmt.Fprintf(s.Out, "defend:   %s (automatic countermeasures — see `assist defend`)\n", defend)
 		}
 		return 0
 	case "guide":
@@ -534,6 +546,9 @@ func cmdAssist(s *Shell, args []string) int {
 					known = "  [learned]"
 				}
 				fmt.Fprintf(s.Out, "  %-18s %-9s %s%s\n", t.Name, fmtMoney(t.Cost), t.Desc, known)
+				if t.Unlocks != "" {
+					fmt.Fprintf(s.Out, "  %-18s %-9s unlocks: %s\n", "", "", t.Unlocks)
+				}
 			}
 			fmt.Fprintln(s.Out, "\nusage: assist train TRACK")
 			return 0
@@ -576,8 +591,77 @@ func cmdAssist(s *Shell, args []string) int {
 			fmt.Fprintf(s.Out, "%-14s %-10s %-8s %-14d %s\n", n.Hostname, state, fmt.Sprintf("%dMiB", n.HW.RAMMB), q, n.FirstLANIP())
 		}
 		return 0
+	case "defend":
+		return cmdAssistDefend(s, args[1:])
 	}
-	s.errf("usage: assist [status|guide|tasks|train TRACK|quota [--cpu N] [--mem MB]|quota clear|clone|nodes]")
+	s.errf("usage: assist [status|guide|tasks|train TRACK|defend [on|off]|quota [--cpu N] [--mem MB]|quota clear|clone|nodes]")
+	return 1
+}
+
+// cmdAssistDefend arms or disarms the §1 countermeasure loop on the
+// household's assistant (Player.AssistDefend). Arming is refused while the
+// assistant lacks the security track — an untrained assistant promises
+// nothing it cannot do — and every toggle is logged on the node itself,
+// because the node is where an operator goes to see what it is doing.
+func cmdAssistDefend(s *Shell, args []string) int {
+	p := s.W.Players[s.User.Name]
+	if p == nil {
+		s.errf("assist: no household for %s", s.User.Name)
+		return 1
+	}
+	a := s.W.AssistantNodeFor(p)
+	if a == nil {
+		s.errf("assist: no assistant node for %s", s.User.Name)
+		return 1
+	}
+	if a.Owner != s.User.Name {
+		s.errf("assist: only %s arms this household's defence", a.Owner)
+		return 1
+	}
+	if len(args) == 0 {
+		state := "off"
+		if p.AssistDefend {
+			state = "armed"
+		}
+		fmt.Fprintf(s.Out, "automatic countermeasures: %s\n", state)
+		if !s.W.HasTrack("security") {
+			fmt.Fprintln(s.Out, "the assistant lacks the security track — arming will fail until it learns it (assist train security)")
+		}
+		fmt.Fprintln(s.Out, "while armed it answers the household's own detections, one step per cycle:")
+		fmt.Fprintf(s.Out, "  clean  an implant on a household box (%s)\n", fmtMoney(core.DefendCleanCost))
+		fmt.Fprintf(s.Out, "  rotate a credential an intrusion used (%s)\n", fmtMoney(core.DefendRotateCost))
+		fmt.Fprintf(s.Out, "  block  an attacker's source at the victim and the gateway (%s)\n", fmtMoney(core.DefendBlockCost))
+		fmt.Fprintf(s.Out, "  report the source to the network that answers for it (%s)\n", fmtMoney(core.DefendReportCost))
+		fmt.Fprintln(s.Out, "each step is charged to your account and logged on the node")
+		return 0
+	}
+	switch args[0] {
+	case "on":
+		if !s.W.HasTrack("security") {
+			s.errf("assist: the assistant lacks the security track (assist train security first)")
+			return 1
+		}
+		if p.AssistDefend {
+			fmt.Fprintln(s.Out, "automatic countermeasures already armed")
+			return 0
+		}
+		p.AssistDefend = true
+		a.Logf("info", "assistant", "automatic countermeasures armed by %s", s.User.Name)
+		s.W.AddEvent(a.ID, "info", "assistant", "%s armed automatic countermeasures on %s", s.User.Name, a.Hostname)
+		fmt.Fprintln(s.Out, "automatic countermeasures armed — the assistant will block, rotate, clean and report, charging your account per step")
+		return 0
+	case "off":
+		if !p.AssistDefend {
+			fmt.Fprintln(s.Out, "automatic countermeasures already off")
+			return 0
+		}
+		p.AssistDefend = false
+		a.Logf("info", "assistant", "automatic countermeasures disarmed by %s", s.User.Name)
+		s.W.AddEvent(a.ID, "info", "assistant", "%s disarmed automatic countermeasures on %s", s.User.Name, a.Hostname)
+		fmt.Fprintln(s.Out, "automatic countermeasures off — detections are still logged, nothing acts on them")
+		return 0
+	}
+	s.errf("usage: assist defend [on|off]")
 	return 1
 }
 
@@ -838,21 +922,7 @@ func cmdExploit(s *Shell, args []string) int {
 	}
 
 	// the precondition is checked against real device state, not a flag
-	var svc *core.Service
-	for _, p := range portsOf(dst) {
-		if p == chosen.Port {
-			svc = dst.Svc(svcNameFor(dst, chosen.Port))
-		}
-	}
-	if chosen.Port == 21 {
-		svc = dst.Svc("vsftpd")
-	}
-	if chosen.Port == 22 {
-		if svc = dst.Svc("dropbear"); svc == nil {
-			svc = dst.Svc("sshd")
-		}
-	}
-	if !chosen.Detect(dst, svc) {
+	if !chosen.Detect(dst, vulnService(dst, chosen.Port)) {
 		fmt.Fprintf(s.Out, "exploit %s against %s: precondition failed\n", vulnID, host)
 		fmt.Fprintf(s.Out, "  the world does not have the condition this exploit needs.\n")
 		fmt.Fprintf(s.Out, "  hint: %s\n", chosen.Help)
@@ -878,12 +948,22 @@ func cmdExploit(s *Shell, args []string) int {
 	return 0
 }
 
-func portsOf(d *core.Device) []int {
-	var out []int
-	for _, s := range d.Services {
-		out = append(out, s.Port)
+// vulnService resolves the unit a vulnerability names on a device, so that
+// `recon` and `exploit` always agree about what answers the port. Ports 21 and
+// 22 keep their historical names (the FTP daemon is registered as vsftpd; ssh
+// prefers dropbear, then sshd); every other port is the service the device
+// really binds to that number in its own service table.
+func vulnService(d *core.Device, port int) *core.Service {
+	switch port {
+	case 21:
+		return d.Svc("vsftpd")
+	case 22:
+		if svc := d.Svc("dropbear"); svc != nil {
+			return svc
+		}
+		return d.Svc("sshd")
 	}
-	return out
+	return d.Svc(svcNameFor(d, port))
 }
 
 func svcNameFor(d *core.Device, port int) string {
@@ -971,6 +1051,100 @@ func (s *Shell) applyEffect(dst *core.Device, ip string, v *core.Vuln) []string 
 		s.creds = append(s.creds, "root@"+dst.Hostname+":"+dst.FindUser("root").Pass)
 		out = append(out, "root credentials: "+dst.FindUser("root").Pass)
 		out = append(out, "you can now: ssh root@"+dst.Hostname)
+	case strings.HasPrefix(v.Effect, "smb-access"):
+		// A guest share read: the same wire the mount uses, authenticated by
+		// the server's own share configuration (guest ok = yes) and read as
+		// the account a guest session really runs as.
+		shareName := strings.TrimPrefix(v.Effect, "smb-access:")
+		svc, _, msg := core.Dial(s.Dev, ip, 445)
+		if svc == nil || svc.State != "running" {
+			out = append(out, "SMB connection failed: "+msg)
+			break
+		}
+		if svc.Handler != "smb" {
+			out = append(out, fmt.Sprintf("no SMB server answers %s:445", dst.Hostname))
+			break
+		}
+		share, err := s.W.SMBShare(dst, shareName)
+		if err != nil {
+			out = append(out, "share "+shareName+" does not exist: "+err.Error())
+			break
+		}
+		if share.Path == "" || !(share.Path == "/" || v.File == share.Path ||
+			strings.HasPrefix(v.File, strings.TrimSuffix(share.Path, "/")+"/")) {
+			out = append(out, v.File+" is not inside //"+dst.Hostname+"/"+shareName)
+			break
+		}
+		// the guest login the daemon really offers (no credentials)
+		if err := s.W.SMBAuth(dst, share, "", ""); err != nil {
+			out = append(out, "guest access refused: "+err.Error())
+			break
+		}
+		acc := dst.FindUser("nobody")
+		if acc == nil {
+			out = append(out, "no guest account (nobody) on "+dst.Hostname)
+			break
+		}
+		data, exists, allowed := dst.FS.ReadPathAs(v.File, acc)
+		if !exists || !allowed {
+			out = append(out, "read of "+v.File+" refused as the guest account")
+			break
+		}
+		local := "/tmp/" + path.Base(v.File)
+		if err := s.Dev.WriteGuest(local, data, s.User); err != nil {
+			out = append(out, "could not keep the copy locally: "+err.Error())
+			break
+		}
+		s.stolen = append(s.stolen, v.File)
+		out = append(out, "mounted //"+dst.Hostname+"/"+shareName+" as guest (no credentials)")
+		out = append(out, "fetched "+v.File+" ("+fmt.Sprintf("%dB", len(data))+") -> "+local)
+	case strings.HasPrefix(v.Effect, "user-shell"):
+		// A low-privilege credential: the ssh end has to answer here and really
+		// accept passwords, and the account's own password is the one that is
+		// reported — the daemon would refuse a login that did not match.
+		user := strings.TrimPrefix(v.Effect, "user-shell:")
+		u := dst.FindUser(user)
+		if u == nil || u.Pass == "" {
+			out = append(out, "no usable account "+user+" on "+dst.Hostname)
+			break
+		}
+		svc, _, msg := core.Dial(s.Dev, ip, 22)
+		if svc == nil || svc.State != "running" {
+			out = append(out, "ssh connection failed: "+msg)
+			break
+		}
+		if data, has := dst.FS.Read("/etc/ssh/sshd_config"); has && strings.Contains(string(data), "PasswordAuthentication no") {
+			out = append(out, "sshd on "+dst.Hostname+" refuses password authentication")
+			break
+		}
+		if !u.CheckPassword(u.Pass) {
+			out = append(out, "credential for "+user+" did not authenticate")
+			break
+		}
+		s.creds = append(s.creds, user+"@"+dst.Hostname+":"+u.Pass)
+		out = append(out, "low-privilege credential: "+user+":"+u.Pass)
+		out = append(out, "use it yourself: ssh "+user+"@"+dst.Hostname)
+	case strings.HasPrefix(v.Effect, "cups-print"):
+		// No authentication on the printer's IPP port means a real job really
+		// lands in the printer's own queue, on the printer's own disk.
+		svc, _, msg := core.Dial(s.Dev, ip, core.PrintPort)
+		if svc == nil || svc.State != "running" {
+			out = append(out, "print service unreachable: "+msg)
+			break
+		}
+		if dst.Printer == nil {
+			out = append(out, dst.Hostname+" is not a printer")
+			break
+		}
+		title := strings.TrimPrefix(v.Effect, "cups-print:")
+		job, err := s.W.SubmitPrint(dst, s.User.Name, title, 1)
+		if err != nil {
+			out = append(out, "print job refused: "+err.Error())
+			break
+		}
+		out = append(out, fmt.Sprintf("unauthorized job queued on %s: %d (%s, %d page)",
+			dst.Hostname, job.ID, job.Title, job.Pages))
+		out = append(out, "CUPS accepted it with no credentials; it is in the printer's spool now")
 	}
 	return out
 }
@@ -1101,21 +1275,9 @@ func cmdRecon(s *Shell, args []string) int {
 	check = append(check, behind...)
 	fmt.Fprintf(s.Out, "\nknown vulnerabilities matching this host:\n")
 	anyV := false
-	svcFor := func(d *core.Device, v core.Vuln) *core.Service {
-		switch v.Port {
-		case 21:
-			return d.Svc("vsftpd")
-		case 22:
-			if svc := d.Svc("dropbear"); svc != nil {
-				return svc
-			}
-			return d.Svc("sshd")
-		}
-		return nil
-	}
 	for _, d := range check {
 		for _, v := range core.Vulns() {
-			if !v.Detect(d, svcFor(d, v)) {
+			if !v.Detect(d, vulnService(d, v.Port)) {
 				continue
 			}
 			anyV = true
@@ -1755,7 +1917,7 @@ Accounts & disks:         passwd useradd userdel usermod groupadd groups chpassw
 The world layer:
   job [list|show ID|accept ID|pay ID|advance ID|delegate ID]   job board — pays only against real world state
   bank [balance|history|pay|transfer TO $AMT]      household wallet + assistant budget + people
-  player [list|invite NAME TEMP-PASS]             citizens: vouched roommates with their own machines
+  player [list|invite NAME TEMP-PASS [--own-home]]   citizens: vouched roommates with their own machines (--own-home gives them a separate household LAN, $100)
   org [list|info|create|invite|join|leave|kick|contribute|withdraw|post|cancel]   crews, treasuries, escrowed contracts
   irc [read|say]                                    #local and #help are inhabited by real NPCs
   bbs [boards|read <board> [N]|post <board> <sub>]  bbs.neohome.example — the community board answers
@@ -1776,7 +1938,8 @@ The world layer:
   vps [list|regions|create|show|start|stop|reboot]  rent a real node: choose a region and an
   vps [reinstall|console|resize|disk]               OS, then power it, rebuild it, resize it,
   vps [snapshot|snapshots|restore|rdns|ip]          snapshot it or roll it back
-  worldgen [list|household]                     develop routine NPC housing ($100 a lot)
+  worldgen [list|household|enterprise|city]     develop routine NPC housing ($100 a lot), business sites ($500)
+  webstats [HOST]                               your sites' traffic, derived from the real access logs
 
   recon <host>      what is actually reachable + what is actually vulnerable
   scan <host|net>   port scan (logged on the target — it is not free)

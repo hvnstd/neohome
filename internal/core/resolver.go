@@ -298,6 +298,13 @@ func LoadWorld(path string) (*World, error) {
 			}
 		}
 	}
+	for _, h := range w.Households {
+		// saves from before a household carried its own /24: the default
+		// house's subnet is the one these numbers were always on.
+		if h != nil && h.Subnet == "" {
+			h.Subnet = LANSubnet
+		}
+	}
 	return w, nil
 }
 

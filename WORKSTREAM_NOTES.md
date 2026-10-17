@@ -2847,3 +2847,135 @@ three-way reconciliation (base = common ancestor), and honest conflict refusal.
 Ownership: `internal/core/db.go`. Adds INNER/CROSS JOIN in SELECT, GRANT/REVOKE
 with a per-database `.grants` file feeding `mysqlCanUse`, and BEGIN/COMMIT/
 ROLLBACK/START TRANSACTION verbs. Replication remains unimplemented.
+
+# P4b:收尾批次 —— 剩余缺口全关闭（2026-10-17）
+
+主 Agent 出骨架（World/Device 字段、Tick 钩子、gob 三处、类型占位），
+实现按文件所有权分发给子 Agent（文件集不重叠，共享文件由主 Agent 先改），
+rate limit 下小批量并发。六批全绿。
+
+## 缺口 2:MariaDB 主从复制（§52）
+
+Ownership: `internal/core/repl.go`（新建，拥有 ReplState 形状）、
+`internal/core/db.go`（binlog 追加 + 复制动词）、`tests/mysql_repl_test.go`。
+骨架：`Device.Repl *ReplState`（world.go 字段 + gob 三处）+ `World.ReplTick()`
+挂 engine.go（BCTick 后）。
+
+- 主侧 binlog：成功 CREATE/DROP/INSERT/UPDATE/DELETE 追加
+  `BinLogEvent{Pos,DB,Table,Op}`，位点递增；`SHOW MASTER STATUS` 报 File/Pos。
+- 从侧：`CHANGE MASTER TO ...`（未知键 1064）、`START/STOP/RESET SLAVE`、
+  `SHOW SLAVE STATUS`；`mariadb-repl` 进程（Kind builtin，user mysql）可见
+  可 kill，STOP 移除。管理动词限 root/owner（1227）。
+- ReplTick 每 tick 每个从库应用一个事件：DNS 解析（不缓存）→ Dial 3306
+  （电源/链路/防火墙/ban 全过）→ 主侧 CheckPassword（失败 NoteAuthFail +
+  LastError）→ 把对象的 `.schema`/`.rows` 从主 VFS 经从侧 **WriteGuest**
+  复制（满盘/EIO/audit 全吃，失败记 LastError 不推进）→ 位点推进、Lag
+  重算、LastSync。kill 进程即停（Running 保留）；存档往返。
+- 4 个测试：追平/Lag 0、存档、kill/STOP、三类失败（错口令/停服/断电）。
+
+## 缺口 4:`.py` 前端
+
+Ownership: `internal/core/pycompile.go`（新）、`internal/shell/py_cmds.go`
+（新）、`internal/core/pkgs.go`（PostInst 改诚实）、
+`internal/shell/sec_cmds.go`（pkgBinaries +python3）、`tests/py_test.go`。
+
+- `core.CompilePy(src) ([]BCInstr, error)`：整数变量（R1-R7，R0 保留）、
+  `+ - * / %`、括号、一元负号、`print(int|"lit")`、`if/elif/else`、
+  `while`、`== != < <= > >=`；编译错 `py:<line>: 原因`，float/import/
+  def/class 按名拒绝。只发已有 ops，文件/socket 门不变。注明 ISA 的
+  Mem 只写（无 LOAD-from-Mem），变量放寄存器。
+- `python3`/`python` builtin：未装 `command not found`；ReadPathAs 读
+  脚本 → CompilePy → BCRun（默认 fuel）。
+- 4 个测试：5050 求和、分支/优先级、行号报错、未装。
+
+## 缺口 5:§21 决策唤醒调度
+
+Ownership: `internal/core/decision.go`（新）、
+`internal/shell/decision_cmds.go`（新）、`internal/mcpserver/server.go`
+（list_decisions/resolve_decision + world_status 计数）、
+`tests/decision_test.go`。骨架：`World.Decisions []*Decision` +
+`DecisionTick()` 挂 engine.go。
+
+- Decision{ID,Kind,Subject,Detail,Status,CreatedTick,ResolvedBy,Action,
+  Result}；按 (Kind,Subject) 去重，TTL 240 tick 过期，cap 200。
+- 四种真实触发：intrusion（有 Foothold 而本机 §33 传感器无 Seen）、
+  assistant-stuck（接了助手做不了的 verify）、abuse-review（到期且台子
+  不可运行）、npc-anomaly（封禁命中了有主人的设备）。每种的 resolve
+  都落到真实后果（CleanFoothold/重排任务/案件升级/解封），不是翻字段。
+- MCP 两个 tool + world_status 计数；shell `decisions [all|resolve ID
+  ACTION]`。8 个测试全绿。
+
+## 缺口 6:§29 漏洞 3→8
+
+Ownership: `internal/core/vuln.go`、`internal/shell/world_cmds.go`、
+`tests/vuln_test.go`（新）。World.Vulns 字段保持死字段（func 不能 gob）。
+
+- 统一 `vulnService(d, port)`：21→vsftpd、22→dropbear 否则 sshd、其余按
+  绑定端口；cmdExploit/cmdRecon 共用，21/22 行为不变。
+- 新增 5 个（前提全读真实重解析状态，注释点名种子位置）：
+  router-telnet-default（23，root=admin，root-shell）、
+  nas-smb-guest-share（445，guest ok + 真路径，新 smb-access: 走
+  SMBAuth+ReadPathAs）、guest-weak-account（22，guest/guest，新
+  user-shell: 尊重 PasswordAuthentication no 并真验证）、
+  printer-cups-noauth（631，cupsd.conf 无 Require user，新 cups-print:
+  真 SubmitPrint 进自家队列）、bazaar-anon-drop（21，ftp-access: 复用）。
+- 7 个测试：recon 列表随前提修复消失、三条端到端、拒绝指 help。
+
+## 缺口 7:内容生长（§44）
+
+Ownership: `internal/core/addr.go`（npc/ent 网段常量 + 分配器）、
+`internal/core/worldgen.go`、`internal/shell/vm_cmds.go`、
+`tests/gen_test.go`。骨架：World.EnterpriseSeq/EnterpriseNames 字段。
+
+- 住宅 cap 4→8（10.88.2-9），名单加 lena/kai，SMS 号段 555-%04d。
+- 企业：`AllocEnterpriseSubnet` 从 10.89.0/2/4/6 成对分配（服务器/工作站
+  两个 /24，偶数步进）；GenEnterprise = 边缘路由双 VLAN + dnsmasq +
+  dropbear + smtpd + 真 /etc/config/network allow + dc/fs/ws 三机，$500，
+  cap 4，hosts/resolv 最后补。`GenCity` 批量包装。
+- `worldgen list|household|enterprise|city`；`HouseholdCapacity()`/
+  `EnterpriseCapacity()` 导出防第二份拷贝。
+
+## 缺口 8:多家庭子网（LAN 规划变更）
+
+Ownership: `internal/core/addr.go`、`internal/core/players.go`、
+`internal/core/devseed.go`、`internal/core/resolver.go`、
+`internal/shell/org_cmds.go`、`tests/multi_test.go`。
+
+- `Household.Subnet`（base 串）+ resolver backfill（""→LANSubnet）。
+- addr.go：`AllocHouseholdSubnet`（10.77.1-254 最低空闲，查 IPMap 与
+  Household.Subnet）、`AllocLANStaticIn`、`lanIPIn/lanGatewayIn/
+  lanLastOctetIn/baseOfIP`、`Device.LANBase()/LANGateway()`；ValidateLAN
+  按每个 10.77.x /24 独立校验（CIDR 派生，不再只看常量前缀）。
+- devseed 的 resolv/exports/cups/dnsmasq/hosts 全部从设备自身 LAN base
+  派生——默认家 base 恰为 10.77.1.，默认世界逐字节不变。
+- `InvitePlayerOwnHome`（$20+$80 家庭基建费）：AllocHouseholdSubnet →
+  种子自家 router/nas（默认拒 WAN、零转发）→ PC 落 base.11，GW/resolv
+  指自家网关 → Household 注册。`player invite NAME PASS --own-home`。
+- 默认路由 /etc/hosts 只列本 /24 设备（跨家庭隔离的必要修正：不再带
+  10.88 的 NPC 条目）。
+- 6 个测试：独立 /24、双向隔离、内部解析可达、双家庭 ValidateLAN、
+  存档往返、拒付不动钱。
+
+## 深度项（无人值守子 Agent，已完成）
+
+- §1 自动反制执行体 + §52 Assistant 训练深度：tracks 解锁真实能力
+  （networking→`ssh-up`/`clean`、security→反制执行体），`Player.AssistDefend`
+  武装开关（`assist defend on|off`）。反制每周期一步、走真实动词、花真实
+  预算（clean $5 / rotate $2 / block $3 / report $1.50），去重写在
+  `/home/assistant/defense.log`。`assistantCapable` 统一成 `World` 方法，
+  触发与拒绝不再漂移。8 个测试。
+  Ownership: `internal/core/defense.go`（新）、`agents.go`、`npc.go`、
+  `work.go`、`decision.go`、`internal/shell/world_cmds.go`、
+  `tests/assistant_depth_test.go`。
+- §52 网站运营深度：`WebsiteTick` 给真实可达的公开站点发访客（DNS 解析→
+  Dial 全门→handler `http-*`→非空 docroot），访问日志即状态（nginx/apache/
+  webd 三种路径，combined 格式），`webstats [HOST]` 命令时解析派生（hits/
+  独立访客/状态码/Top 路径/小时日），不存第二份。空占位（bank/jobs/git/
+  provider API）在 dial 前跳过，盲扫不污染路由 drop-log。6 个测试。
+  Ownership: `internal/core/webtraffic.go`、`internal/shell/webstats_cmds.go`
+  （新）、`internal/shell/world_cmds.go`（help 行）、`tests/webtraffic_test.go`。
+
+## 验证
+
+全量 `go test ./... -count=1` **426 pass / 0 fail**（~296s，`-timeout 1500s`），gofmt/vet
+干净。

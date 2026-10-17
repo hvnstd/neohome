@@ -18,23 +18,19 @@ NeoHome = 一个持续运行的 Go 世界模拟器：家庭网络 + VPS + 互联
 
 ## 2. 当前状态（2026-10-17）
 
-- 分支:`arena/01a10c9c-neohome`，HEAD `4629dbc`，工作区干净，已推
-- `go build` ✓ `go vet ./...` ✓ `go test ./...` **381 pass 0 fail** `gofmt -l` 空
+- 分支:`arena/01a10c9c-neohome`，HEAD `92b6b26`，工作区有未提交改动（本轮 8 项缺口 + 2 深度项）
+- `go build` ✓ `go vet ./...` ✓ `go test ./...` **426 pass 0 fail** `gofmt -l` 空
 - 阶段：Phase 0/1/2/3 服务端全部完成；真浏览器前端（§45 Web 后续）已落地（`internal/webtty`）
+- 本轮补齐：DB 主从复制、`.py` 前端、§21 决策唤醒队列、§29 漏洞 3→8、内容生长（企业/城市）、多家庭子网、§1 自动反制执行体、§52 网站运营深度 + Assistant 训练深度（全部 8 项缺口关闭）
 - 入口：telnet `:2024` + SSH `:2222`，存档 `world.gob`，引擎 3s 一 tick，每 12 tick 存盘
 - 存档已修：`Device.GobEncode` 现在写 `Rsrc`；`VM.GobEncode` 只带数据（Host/W 重链接）；`WebSessions`/`Households`/`BCStates`/`GroupIDs` 全 round-trip
 
 ## 3. 剩余缺口（按优先级）
 
-PROGRESS.md 末尾的“缺口清单”是权威版，摘要：
-
-1. ~~真 3-way git merge~~ **已完成**（merge commit + 递归合并）
-2. 数据库高级语义：GRANT/JOIN/事务 已落地；复制仍缺
-3. `.py` 前端（bytecode 脚本糖；PostInst 已改诚实文案）
-4. §21 LLM 唤醒调度（规则层即 agent 层；MCP 只是透传）
-5. §29 更多虚拟漏洞（现 3 个）
-6. 随机内容生长（生成器只出住宅，4 lot 封顶）
-7. 多家庭子网（LAN 规划变更，addr.go 管）
+PROGRESS.md 末尾的“缺口清单”是权威版。**全部 8 项均已关闭**（真浏览器
+前端、DB 复制、真 3-way merge、`.py` 前端、§21 决策唤醒、§29 漏洞 3→8、
+内容生长、多家庭子网），外加两处深度项（§1 自动反制执行体、§52 网站运营
+深度 + Assistant 训练深度）也已收尾。详见 PROGRESS.md 分节表（已无“部分”行）。
 
 明确不适用（勿重开）：suid 建模、SQLite 后端。
 

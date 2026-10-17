@@ -325,22 +325,33 @@ func randPass(seed string) string {
 
 // ---- assistant upgrade: skills cost money and change its real behaviour ----
 
+// Each track names what learning it UNLOCKS, not just what it describes: a
+// track that changed nothing observable would be the "+10%" the spec forbids.
+// The wiring lives where the capability is exercised: Unlocks is the label,
+// assistantTrackGates (agents.go) and the defense executor (defense.go) are
+// the mechanism.
 var assistantTracks = []struct {
-	Name string
-	Cost int64
-	Desc string
+	Name    string
+	Cost    int64
+	Desc    string
+	Unlocks string
 }{
-	{"dns-troubleshoot", 1200, "resolve resolver-chain faults without being told which file to edit"},
-	{"sysadmin", 2400, "read service configs, restart what is broken, verify the fix"},
-	{"networking", 3600, "reason about routes, NAT and firewall rules end-to-end"},
-	{"security", 6000, "spot exposed services, weak credentials and risky port-forwards"},
+	{"dns-troubleshoot", 1200, "resolve resolver-chain faults without being told which file to edit",
+		"resolver-chain diagnosis: it finds and explains dnsmasq upstream faults on its own"},
+	{"sysadmin", 2400, "read service configs, restart what is broken, verify the fix",
+		"service repair (assistantCanFix): it maintains and restarts broken services"},
+	{"networking", 3600, "reason about routes, NAT and firewall rules end-to-end",
+		"network jobs: the ssh-up and clean verifiers can be delegated to it (job delegate)"},
+	{"security", 6000, "spot exposed services, weak credentials and risky port-forwards",
+		"automatic countermeasures: `assist defend on` arms block/rotate/clean/report, paid from your account"},
 }
 
 // AssistantTracks exposes the catalogue.
 func AssistantTracks() []struct {
-	Name string
-	Cost int64
-	Desc string
+	Name    string
+	Cost    int64
+	Desc    string
+	Unlocks string
 } {
 	return assistantTracks
 }
@@ -352,9 +363,10 @@ func (w *World) TrainAssistant(owner, track string) (string, error) {
 		return "", fmt.Errorf("no such player")
 	}
 	var chosen *struct {
-		Name string
-		Cost int64
-		Desc string
+		Name    string
+		Cost    int64
+		Desc    string
+		Unlocks string
 	}
 	for i := range assistantTracks {
 		if assistantTracks[i].Name == track {

@@ -58,6 +58,7 @@ var pkgBinaries = map[string]string{
 	"restic":          "/usr/bin/restic",
 	"rkhunter":        "/usr/bin/rkhunter",
 	"mysql":           "/usr/bin/mysql",
+	"python3":         "/usr/bin/python3",
 }
 
 // pkgCommandMissing reports whether a §33 command is absent from this machine

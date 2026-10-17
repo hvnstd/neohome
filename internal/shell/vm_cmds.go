@@ -54,8 +54,10 @@ func cmdVM(s *Shell, args []string) int {
 }
 
 // worldgen develops the world itself: routine NPC housing on the next free
-// street, paid by the developer. Generated boxes are ordinary devices —
-// same DNS, same firewall defaults, same safety (nothing forwarded).
+// street and office sites on the next free business-park plot, paid by the
+// developer. Generated boxes are ordinary devices — same DNS, same firewall
+// defaults, same safety (nothing forwarded) — and `city` is just the batch
+// wrapper that builds both kinds until the caps or the money run out.
 func cmdWorldgen(s *Shell, args []string) int {
 	sub := ""
 	if len(args) > 0 {
@@ -63,20 +65,7 @@ func cmdWorldgen(s *Shell, args []string) int {
 	}
 	switch sub {
 	case "", "list", "ls":
-		if len(s.W.GenNames) == 0 {
-			fmt.Fprintln(s.Out, "no generated streets yet — develop one with: worldgen household ($100)")
-			return 0
-		}
-		fmt.Fprintf(s.Out, "%-10s %-14s %s\n", "TENANT", "STREET", "ROUTER")
-		for _, name := range s.W.GenNames {
-			for _, id := range s.W.Order {
-				d := s.W.Devices[id]
-				if d != nil && d.Owner == name && d.Profile == "router" {
-					fmt.Fprintf(s.Out, "%-10s %-14s %s\n", name, wanBaseOf(d), d.Hostname)
-				}
-			}
-		}
-		return 0
+		return worldgenList(s)
 	case "household", "house", "new":
 		name, err := s.W.GenHousehold(s.User.Name)
 		if err != nil {
@@ -85,9 +74,62 @@ func cmdWorldgen(s *Shell, args []string) int {
 		}
 		fmt.Fprintf(s.Out, "developed a household for %s ($100) — router, pc, phone, all wired\n", name)
 		return 0
+	case "enterprise", "ent", "office":
+		name, err := s.W.GenEnterprise(s.User.Name)
+		if err != nil {
+			s.errf("worldgen: %v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "developed an office for %s ($500) — edge router, two VLANs, three hosts\n", name)
+		return 0
+	case "city", "batch":
+		names, err := s.W.GenCity(s.User.Name)
+		if err != nil {
+			s.errf("worldgen: %v", err)
+			return 1
+		}
+		fmt.Fprintf(s.Out, "developed %d site(s): %s\n", len(names), strings.Join(names, ", "))
+		fmt.Fprintf(s.Out, "capacity left: %d household lot(s), %d enterprise site(s)\n",
+			core.HouseholdCapacity()-s.W.GenSeq, core.EnterpriseCapacity()-s.W.EnterpriseSeq)
+		return 0
 	}
-	s.errf("usage: worldgen [list|household]")
+	s.errf("usage: worldgen [list|household|enterprise|city]")
 	return 1
+}
+
+// worldgenList shows what has been developed and how much room is left, both
+// kinds in one report.
+func worldgenList(s *Shell) int {
+	hh, ent := len(s.W.GenNames), len(s.W.EnterpriseNames)
+	if len(s.W.GenNames) == 0 && len(s.W.EnterpriseNames) == 0 {
+		fmt.Fprintln(s.Out, "nothing generated yet — worldgen household ($100), enterprise ($500), or city for both")
+		return 0
+	}
+	if hh > 0 {
+		fmt.Fprintf(s.Out, "%-10s %-16s %s\n", "TENANT", "STREET", "ROUTER")
+		for _, name := range s.W.GenNames {
+			for _, id := range s.W.Order {
+				d := s.W.Devices[id]
+				if d != nil && d.Owner == name && d.Profile == "router" && strings.HasPrefix(id, "npc-router-") {
+					fmt.Fprintf(s.Out, "%-10s %-16s %s\n", name, wanBaseOf(d), d.Hostname)
+				}
+			}
+		}
+	}
+	if ent > 0 {
+		fmt.Fprintf(s.Out, "%-10s %-16s %s\n", "ORG", "SITE", "ROUTER")
+		for _, name := range s.W.EnterpriseNames {
+			for _, id := range s.W.Order {
+				d := s.W.Devices[id]
+				if d != nil && d.Owner == name && d.Profile == "router" && strings.HasPrefix(id, "ent-router-") {
+					fmt.Fprintf(s.Out, "%-10s %-16s %s\n", name, wanBaseOf(d), d.Hostname)
+				}
+			}
+		}
+	}
+	fmt.Fprintf(s.Out, "capacity: %d/%d household lots, %d/%d enterprise sites\n",
+		hh, core.HouseholdCapacity(), ent, core.EnterpriseCapacity())
+	return 0
 }
 
 func wanBaseOf(d *core.Device) string {

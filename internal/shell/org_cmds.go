@@ -25,19 +25,38 @@ func cmdPlayer(s *Shell, args []string) int {
 	}
 	if args[0] == "invite" {
 		if len(args) < 3 {
-			s.errf("usage: player invite NAME TEMP-PASS  ($20.00 setup from your account)")
+			s.errf("usage: player invite NAME TEMP-PASS [--own-home]  ($20.00 setup from your account; --own-home adds an $80.00 home)")
 			return 1
 		}
-		p, err := s.W.InvitePlayer(s.User.Name, args[1], args[2])
+		ownHome := false
+		for _, a := range args[3:] {
+			if a == "--own-home" || a == "own" {
+				ownHome = true
+			}
+		}
+		invite := s.W.InvitePlayer
+		if ownHome {
+			invite = s.W.InvitePlayerOwnHome
+		}
+		p, err := invite(s.User.Name, args[1], args[2])
 		if err != nil {
 			s.errf("player: %v", err)
 			return 1
 		}
 		d := s.W.Devices[p.PC]
+		if ownHome {
+			subnet := ""
+			if h := s.W.Households[p.HouseKey]; h != nil {
+				subnet = h.Subnet
+			}
+			fmt.Fprintf(s.Out, "%s vouched for $100.00 ($20 setup + $80 home) — own home on %s0/24, pc %s; login and run passwd first\n",
+				p.Name, subnet, d.FirstLANIP())
+			return 0
+		}
 		fmt.Fprintf(s.Out, "%s vouched for $20.00 — pc %s, login and run passwd first\n", p.Name, d.FirstLANIP())
 		return 0
 	}
-	s.errf("usage: player [list|invite NAME TEMP-PASS]")
+	s.errf("usage: player [list|invite NAME TEMP-PASS [--own-home]]")
 	return 1
 }
 

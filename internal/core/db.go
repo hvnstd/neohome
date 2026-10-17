@@ -29,10 +29,49 @@ import (
 // mysqlDataDir is where every server in this world keeps its databases.
 const mysqlDataDir = "/var/lib/mysql"
 
+// mysqlBinLogFile is the name of every server's single binlog file. The model
+// has one file per server, so rotation is not needed and not faked.
+const mysqlBinLogFile = "mysql-bin.000001"
+
 // mysqlErr renders a MySQL-coded error: the number is the diagnostic players
 // already know, the words say what this world actually checked.
 func mysqlErr(code int, sqlstate, format string, a ...any) error {
 	return fmt.Errorf("ERROR %d (%s): %s", code, sqlstate, fmt.Sprintf(format, a...))
+}
+
+// mysqlEnsureRepl lazily creates the replication state, the way the server
+// creates its binlog on first write. The binlog file name is server policy,
+// not something a player sets.
+func mysqlEnsureRepl(d *Device) *ReplState {
+	if d.Repl == nil {
+		d.Repl = &ReplState{}
+	}
+	if d.Repl.BinLogFile == "" {
+		d.Repl.BinLogFile = mysqlBinLogFile
+	}
+	return d.Repl
+}
+
+// mysqlLogEvent records one successful change on the server's own binlog: the
+// position is the event's identity, and DB/Table/Op name the object whose real
+// files carry the change. A slave replays these against the same files.
+func mysqlLogEvent(d *Device, db, table, op string) {
+	r := mysqlEnsureRepl(d)
+	r.BinLogPos++
+	r.BinLog = append(r.BinLog, BinLogEvent{Pos: r.BinLogPos, DB: db, Table: table, Op: op})
+}
+
+// mysqlReplAllowed is the privilege rule for replication administration: root
+// goes everywhere, and the machine's own owner may administer its server. Any
+// other account is refused with the same 1227 a real server gives.
+func mysqlReplAllowed(d *Device, u *User) error {
+	if u == nil {
+		return mysqlErr(1045, "28000", "Access denied for user ''@'localhost'")
+	}
+	if u.UID == 0 || (d.Owner != "" && u.Name == d.Owner) {
+		return nil
+	}
+	return mysqlErr(1227, "42000", "Access denied; you need (at least one of) the SUPER, REPLICATION SLAVE privilege(s) for this operation")
 }
 
 // mysqlDBDir resolves a database directory, refusing names that would walk
@@ -559,8 +598,27 @@ func mysqlOne(d *Device, u *User, curDB, stmt string) (string, string, error) {
 	kw := strings.ToUpper(f[0])
 	rest := strings.TrimSpace(stmt[len(f[0]):])
 	switch kw {
-	case "BEGIN", "START":
+	case "BEGIN":
 		return "Query OK, 0 rows affected\n", curDB, nil
+	case "START":
+		// START TRANSACTION stays the no-op it always was; START SLAVE is the
+		// replication verb and must not be swallowed by it.
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rest)), "SLAVE") {
+			return mysqlStartSlave(d, u, curDB)
+		}
+		return "Query OK, 0 rows affected\n", curDB, nil
+	case "STOP":
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rest)), "SLAVE") {
+			return mysqlStopSlave(d, u, curDB)
+		}
+		return "", curDB, mysqlErr(1064, "42000", "syntax error near 'STOP %s'", strings.TrimSpace(rest))
+	case "CHANGE":
+		return mysqlChangeMaster(d, u, curDB, rest)
+	case "RESET":
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rest)), "SLAVE") {
+			return mysqlResetSlave(d, u, curDB)
+		}
+		return "", curDB, mysqlErr(1064, "42000", "syntax error near 'RESET %s'", strings.TrimSpace(rest))
 	case "COMMIT", "ROLLBACK":
 		return "Query OK, 0 rows affected\n", curDB, nil
 	case "SHOW":
@@ -597,9 +655,19 @@ func mysqlOne(d *Device, u *User, curDB, stmt string) (string, string, error) {
 func mysqlShow(d *Device, u *User, curDB, rest string) (string, string, error) {
 	f := mysqlFields(rest)
 	if len(f) == 0 {
-		return "", curDB, mysqlErr(1064, "42000", "SHOW what? (DATABASES, TABLES)")
+		return "", curDB, mysqlErr(1064, "42000", "SHOW what? (DATABASES, TABLES, MASTER STATUS, SLAVE STATUS)")
 	}
 	switch strings.ToUpper(f[0]) {
+	case "MASTER":
+		if len(f) >= 2 && strings.ToUpper(f[1]) == "STATUS" {
+			return mysqlShowMasterStatus(d, u, curDB)
+		}
+		return "", curDB, mysqlErr(1064, "42000", "SHOW MASTER STATUS")
+	case "SLAVE":
+		if len(f) >= 2 && strings.ToUpper(f[1]) == "STATUS" {
+			return mysqlShowSlaveStatus(d, u, curDB)
+		}
+		return "", curDB, mysqlErr(1064, "42000", "SHOW SLAVE STATUS")
 	case "DATABASES":
 		var b strings.Builder
 		b.WriteString("Database\n")
@@ -634,7 +702,149 @@ func mysqlShow(d *Device, u *User, curDB, rest string) (string, string, error) {
 		}
 		return b.String(), curDB, nil
 	}
-	return "", curDB, mysqlErr(1064, "42000", "SHOW what? (DATABASES, TABLES)")
+	return "", curDB, mysqlErr(1064, "42000", "SHOW what? (DATABASES, TABLES, MASTER STATUS, SLAVE STATUS)")
+}
+
+// mysqlShowMasterStatus prints this server's binlog position, the same shape a
+// real server prints: the file and the last assigned position.
+func mysqlShowMasterStatus(d *Device, u *User, curDB string) (string, string, error) {
+	if err := mysqlReplAllowed(d, u); err != nil {
+		return "", curDB, err
+	}
+	file, pos := mysqlBinLogFile, 0
+	if d.Repl != nil {
+		if d.Repl.BinLogFile != "" {
+			file = d.Repl.BinLogFile
+		}
+		pos = d.Repl.BinLogPos
+	}
+	var b strings.Builder
+	b.WriteString("File\tPosition\tBinlog_Do_DB\tBinlog_Ignore_DB\n")
+	b.WriteString(fmt.Sprintf("%s\t%d\t\t\n", file, pos))
+	return b.String(), curDB, nil
+}
+
+// mysqlShowSlaveStatus prints the slave's connection and the position it has
+// really applied. Lag is the number of events it is behind, so it reaches 0
+// exactly when it has caught up.
+func mysqlShowSlaveStatus(d *Device, u *User, curDB string) (string, string, error) {
+	if err := mysqlReplAllowed(d, u); err != nil {
+		return "", curDB, err
+	}
+	r := d.Repl
+	if r == nil {
+		r = &ReplState{}
+	}
+	io, sql := "No", "No"
+	if r.Running {
+		io, sql = "Yes", "Yes"
+	}
+	var b strings.Builder
+	b.WriteString("Slave_IO_Running\tSlave_SQL_Running\tMaster_Host\tMaster_Log_File\tRead_Master_Log_Pos\tLag\tLast_Error\n")
+	b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+		io, sql, r.MasterHost, r.MasterLogFile, r.MasterLogPos, r.Lag, r.LastError))
+	return b.String(), curDB, nil
+}
+
+// mysqlChangeMaster records the upstream a slave will follow. The assignments
+// use the same simple key=value style as the rest of this SQL subset, and an
+// unknown key is refused rather than silently ignored.
+func mysqlChangeMaster(d *Device, u *User, curDB, rest string) (string, string, error) {
+	if err := mysqlReplAllowed(d, u); err != nil {
+		return "", curDB, err
+	}
+	body := strings.TrimSpace(rest)
+	if !strings.HasPrefix(strings.ToUpper(body), "MASTER") {
+		return "", curDB, mysqlErr(1064, "42000", "CHANGE MASTER syntax: CHANGE MASTER TO MASTER_HOST=..., MASTER_USER=..., MASTER_PASSWORD=...")
+	}
+	body = strings.TrimSpace(body[len("MASTER"):])
+	if !strings.HasPrefix(strings.ToUpper(body), "TO") {
+		return "", curDB, mysqlErr(1064, "42000", "CHANGE MASTER needs TO")
+	}
+	body = strings.TrimSpace(body[len("TO"):])
+	if body == "" {
+		return "", curDB, mysqlErr(1064, "42000", "CHANGE MASTER needs at least one option")
+	}
+	r := mysqlEnsureRepl(d)
+	for _, a := range mysqlSplitList(body) {
+		eq := strings.Index(a, "=")
+		if eq < 0 {
+			return "", curDB, mysqlErr(1064, "42000", "bad CHANGE MASTER assignment '%s'", a)
+		}
+		key := strings.ToUpper(strings.TrimSpace(a[:eq]))
+		val := mysqlLiteral(a[eq+1:])
+		switch key {
+		case "MASTER_HOST":
+			r.MasterHost = val
+		case "MASTER_USER":
+			r.MasterUser = val
+		case "MASTER_PASSWORD":
+			r.MasterPassword = val
+		case "MASTER_LOG_FILE":
+			r.MasterLogFile = val
+		case "MASTER_LOG_POS":
+			n, err := strconv.Atoi(strings.TrimSpace(val))
+			if err != nil || n < 0 {
+				return "", curDB, mysqlErr(1064, "42000", "MASTER_LOG_POS must be a non-negative number")
+			}
+			r.MasterLogPos = n
+		default:
+			return "", curDB, mysqlErr(1064, "42000", "unknown CHANGE MASTER option '%s'", key)
+		}
+	}
+	d.Logf("info", "mariadb", "slave configured for master %s at position %d", r.MasterHost, r.MasterLogPos)
+	return "Query OK, 0 rows affected\n", curDB, nil
+}
+
+// mysqlStartSlave sets the slave running and starts its apply thread. Without
+// a configured master there is nothing to follow.
+func mysqlStartSlave(d *Device, u *User, curDB string) (string, string, error) {
+	if err := mysqlReplAllowed(d, u); err != nil {
+		return "", curDB, err
+	}
+	r := mysqlEnsureRepl(d)
+	if r.MasterHost == "" {
+		return "", curDB, mysqlErr(1236, "HY000", "START SLAVE: no MASTER_HOST configured (run CHANGE MASTER TO first)")
+	}
+	r.Running = true
+	r.LastError = ""
+	if d.W != nil {
+		d.W.startReplProc(d)
+	}
+	d.Logf("info", "mariadb", "slave started, following %s", r.MasterHost)
+	return "Query OK, 0 rows affected\n", curDB, nil
+}
+
+// mysqlStopSlave stops applying and removes the apply thread. The configured
+// master and the applied position are kept, so a later START resumes.
+func mysqlStopSlave(d *Device, u *User, curDB string) (string, string, error) {
+	if err := mysqlReplAllowed(d, u); err != nil {
+		return "", curDB, err
+	}
+	r := mysqlEnsureRepl(d)
+	r.Running = false
+	if d.W != nil {
+		d.W.stopReplProc(d)
+	}
+	d.Logf("info", "mariadb", "slave stopped")
+	return "Query OK, 0 rows affected\n", curDB, nil
+}
+
+// mysqlResetSlave forgets the upstream and the applied position. The replicated
+// data stays on disk, as RESET SLAVE leaves it.
+func mysqlResetSlave(d *Device, u *User, curDB string) (string, string, error) {
+	if err := mysqlReplAllowed(d, u); err != nil {
+		return "", curDB, err
+	}
+	r := mysqlEnsureRepl(d)
+	r.Running = false
+	r.MasterHost, r.MasterUser, r.MasterPassword = "", "", ""
+	r.MasterLogFile, r.MasterLogPos = "", 0
+	r.LastError, r.Lag = "", 0
+	if d.W != nil {
+		d.W.stopReplProc(d)
+	}
+	return "Query OK, 0 rows affected\n", curDB, nil
 }
 
 func mysqlCreate(d *Device, u *User, curDB, rest string) (string, string, error) {
@@ -657,6 +867,7 @@ func mysqlCreate(d *Device, u *User, curDB, rest string) (string, string, error)
 		// or drop it — creation is harmless, use is gated
 		d.FS.MkdirAll(dir, 0755, u.Name, u.Name)
 		d.Logf("info", "mariadb", "%s created database %s", u.Name, db)
+		mysqlLogEvent(d, db, "", "CREATE DATABASE")
 		return "Query OK, 1 row affected\n", curDB, nil
 	case "TABLE":
 		paren := strings.Index(rest, "(")
@@ -697,6 +908,7 @@ func mysqlCreate(d *Device, u *User, curDB, rest string) (string, string, error)
 			return "", curDB, err
 		}
 		d.Logf("info", "mariadb", "%s created table %s.%s", u.Name, db, table)
+		mysqlLogEvent(d, db, table, "CREATE TABLE")
 		return "Query OK, 0 rows affected\n", curDB, nil
 	}
 	return "", curDB, mysqlErr(1064, "42000", "CREATE what? (DATABASE, TABLE)")
@@ -722,6 +934,7 @@ func mysqlDrop(d *Device, u *User, curDB, rest string) (string, string, error) {
 		}
 		d.FS.Remove(dir)
 		d.Logf("info", "mariadb", "%s dropped database %s", u.Name, db)
+		mysqlLogEvent(d, db, "", "DROP DATABASE")
 		return "Query OK, 0 rows affected\n", curDB, nil
 	case "TABLE":
 		db, table, err := mysqlTableRef(curDB, strings.Join(f[1:], " "))
@@ -737,6 +950,7 @@ func mysqlDrop(d *Device, u *User, curDB, rest string) (string, string, error) {
 		dir, _ := mysqlDBDir(db)
 		d.FS.Remove(dir + "/" + table + ".schema")
 		d.FS.Remove(dir + "/" + table + ".rows")
+		mysqlLogEvent(d, db, table, "DROP TABLE")
 		return "Query OK, 0 rows affected\n", curDB, nil
 	}
 	return "", curDB, mysqlErr(1064, "42000", "DROP what? (DATABASE, TABLE)")
@@ -861,6 +1075,7 @@ func mysqlInsert(d *Device, u *User, curDB, rest string) (string, string, error)
 	if err := mysqlWriteRows(d, u, db, table, rows); err != nil {
 		return "", curDB, err
 	}
+	mysqlLogEvent(d, db, table, "INSERT")
 	return fmt.Sprintf("Query OK, %d row(s) affected\n", len(groups)), curDB, nil
 }
 
@@ -1226,6 +1441,7 @@ func mysqlUpdate(d *Device, u *User, curDB, rest string) (string, string, error)
 	if err := mysqlWriteRows(d, u, db, table, rows); err != nil {
 		return "", curDB, err
 	}
+	mysqlLogEvent(d, db, table, "UPDATE")
 	return fmt.Sprintf("Query OK, %d row(s) affected\n", hit), curDB, nil
 }
 
@@ -1270,5 +1486,6 @@ func mysqlDelete(d *Device, u *User, curDB, rest string) (string, string, error)
 	if err := mysqlWriteRows(d, u, db, table, keep); err != nil {
 		return "", curDB, err
 	}
+	mysqlLogEvent(d, db, table, "DELETE")
 	return fmt.Sprintf("Query OK, %d row(s) affected\n", len(rows)-len(keep)), curDB, nil
 }

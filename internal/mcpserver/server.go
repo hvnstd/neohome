@@ -229,6 +229,26 @@ func (s *Server) handle(req rpcRequest) (any, *rpcError) {
 					"additionalProperties": false,
 				},
 			},
+			map[string]any{
+				"name":        "list_decisions",
+				"description": "List the moments the simulated rule layer queued for judgement because it could not decide without one (§21). Read-only; the world keeps running with the queue full.",
+				"annotations": map[string]bool{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false},
+				"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
+			},
+			map[string]any{
+				"name":        "resolve_decision",
+				"description": "Answer a queued decision as the mcp-agent character, applying the real consequence the action names (clean an implant, return a stuck job, close a case, lift a ban). Changes persistent simulated state.",
+				"annotations": map[string]bool{"readOnlyHint": false, "destructiveHint": true, "openWorldHint": false},
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":     map[string]any{"type": "string", "maxLength": 128, "description": "Decision id from list_decisions, e.g. dec-1."},
+						"action": map[string]any{"type": "string", "maxLength": 64, "description": "Action from the decision's kind (clean, escalate, requeue, drop, close, unban, confirm)."},
+					},
+					"required":             []string{"id", "action"},
+					"additionalProperties": false,
+				},
+			},
 		}}, nil
 	case "tools/call":
 		var call toolCall
@@ -245,9 +265,9 @@ func (s *Server) callTool(call toolCall) (any, *rpcError) {
 	switch call.Name {
 	case "world_status":
 		s.world.Lock()
-		status := fmt.Sprintf("sim_time=%s\ntick=%d\ndevice=%s\nhostname=%s\nprofile=%s\npowered=%t\nnetwork_up=%t\n",
+		status := fmt.Sprintf("sim_time=%s\ntick=%d\ndevice=%s\nhostname=%s\nprofile=%s\npowered=%t\nnetwork_up=%t\npending_decisions=%d\n",
 			s.world.Sim.Format(time.RFC3339), s.world.TickCount, s.device.ID, s.device.Hostname,
-			s.device.Profile, s.device.Powered(), s.device.NetUp)
+			s.device.Profile, s.device.Powered(), s.device.NetUp, len(s.world.PendingDecisions()))
 		s.world.Unlock()
 		return toolResult(status, false), nil
 	case "run_shell":
@@ -269,6 +289,39 @@ func (s *Server) callTool(call toolCall) (any, *rpcError) {
 			text += "\n[output truncated at 65536 bytes]"
 		}
 		return toolResult(text, exitCode != 0), nil
+	case "list_decisions":
+		s.world.Lock()
+		pending := s.world.PendingDecisions()
+		s.world.Unlock()
+		buf, err := json.MarshalIndent(pending, "", "  ")
+		if err != nil {
+			return toolResult("cannot encode pending decisions: "+err.Error(), true), nil
+		}
+		return toolResult(string(buf), false), nil
+	case "resolve_decision":
+		var args struct {
+			ID     string `json:"id"`
+			Action string `json:"action"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil || strings.TrimSpace(args.ID) == "" || strings.TrimSpace(args.Action) == "" {
+			return toolResult("id and action are required", true), nil
+		}
+		s.world.Lock()
+		err := s.world.ResolveDecision(args.ID, args.Action, "mcp-agent")
+		result := ""
+		if err == nil {
+			for _, d := range s.world.Decisions {
+				if d.ID == args.ID {
+					result = d.Result
+					break
+				}
+			}
+		}
+		s.world.Unlock()
+		if err != nil {
+			return toolResult(err.Error(), true), nil
+		}
+		return toolResult(fmt.Sprintf("resolved %s: %s", args.ID, result), false), nil
 	default:
 		return nil, &rpcError{Code: -32602, Message: "unknown tool"}
 	}

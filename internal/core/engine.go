@@ -261,9 +261,19 @@ func (w *World) Tick() {
 	// Black market: listings expire and one NPC buyer walks the board on its
 	// own fixed schedule.
 	w.BazaarTick()
+	// §52: public sites get real visitors — the access log is the state, and
+	// the analytics are derived from it, so nothing is stored twice.
+	w.WebsiteTick()
 	// Bytecode programs run their bounded slice after every other system
 	// has moved, so ps-visible background work is part of the same tick.
 	w.BCTick()
+	// §52: database replication applies one binlog event per tick on each
+	// running slave, through the same Dial/Disk gates as any other write.
+	w.ReplTick()
+	// §21: the rule layer has finished moving the world; anything it could
+	// not decide without judgement is queued here for a smarter layer,
+	// while the world keeps running unchanged with the queue full.
+	w.DecisionTick()
 	// §17 runs last: the numbers it charges describe the world as it now is
 	w.ResourceTick()
 }

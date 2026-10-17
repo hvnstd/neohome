@@ -648,13 +648,27 @@ func (w *World) TaskAssistant(jobID string) error {
 	if j == nil {
 		return fmt.Errorf("no such job: %s", jobID)
 	}
-	// staged delegation is honest about capability: the assistant performs
-	// exactly two fixes (dns-fix, pkg-busybox). A stage it cannot perform
-	// would sit in its queue forever, so delegation refuses up front,
-	// naming the stage.
+	// Delegation is honest about capability: the assistant performs the
+	// verifiers its learned tracks cover (assistantTrackGates), no others. A
+	// verifier it cannot perform would sit in its queue forever, so
+	// delegation refuses up front — naming the stage and, when a track would
+	// teach it, the missing track.
 	for _, st := range j.Stages {
-		if st.Verify != "dns-fix" && st.Verify != "pkg-busybox" {
+		track, learnable := w.assistantMissingTrack(st.Verify)
+		if !learnable {
 			return fmt.Errorf("assistant cannot do stage %s (%s)", st.Name, st.Verify)
+		}
+		if track != "" {
+			return fmt.Errorf("assistant cannot do stage %s (%s): assistant lacks the %s track", st.Name, st.Verify, track)
+		}
+	}
+	if len(j.Stages) == 0 {
+		track, learnable := w.assistantMissingTrack(j.Verify)
+		if !learnable {
+			return fmt.Errorf("assistant cannot do job %s (%s)", j.ID, j.Verify)
+		}
+		if track != "" {
+			return fmt.Errorf("assistant cannot do job %s (%s): assistant lacks the %s track", j.ID, j.Verify, track)
 		}
 	}
 	j.Accepted = "assistant"
