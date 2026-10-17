@@ -20,6 +20,10 @@ type Shell struct {
 	capture []string
 	// histLoaded guards the one-time read of the account's history file.
 	histLoaded bool
+	// introShown guards the one-time welcome banner (§附): it prints on the
+	// first prompt of a player's own-PC session, like a real login showing
+	// /etc/motd, and is re-viewable any time via `motd`.
+	introShown bool
 	W          *core.World
 	Dev        *core.Device
 	User       *core.User
@@ -127,6 +131,28 @@ func (s *Shell) relCWD() string {
 	return s.CWD
 }
 
+// showIntro prints a short welcome on the player's own PC, the way a real
+// login shell shows /etc/motd: device, account, world time and the two entry
+// points (help / assist guide). It does not fire on nested remote sessions —
+// those get the remote host's own "Welcome to ..." — and it never blocks: a
+// few lines, re-viewable any time via `motd`. Every fact it states (device,
+// address, account, world time) is read from real session state.
+func (s *Shell) showIntro() {
+	if s.User == nil || s.W == nil || s.Dev == nil {
+		return
+	}
+	p := s.W.Players[s.User.Name]
+	if p == nil || s.W.Devices[p.PC] != s.Dev {
+		return
+	}
+	fmt.Fprintf(s.Out, "NeoHome — you are %s@%s (%s)\n", s.User.Name, s.Dev.Hostname, s.Dev.FirstLANIP())
+	fmt.Fprintf(s.Out, "World time: %s\n", s.W.Now().Format("2006-01-02 15:04 MST"))
+	fmt.Fprintf(s.Out, "New here? `assist guide` reads the current situation; `help` lists commands, `help <cmd>` details one; `motd` replays this.\n")
+	if data, ok := s.Dev.FS.Read("/etc/motd"); ok {
+		fmt.Fprint(s.Out, string(data))
+	}
+}
+
 func (s *Shell) RunLoop(r io.Reader) {
 	if s.bufrd == nil {
 		s.bufrd = bufio.NewReader(r)
@@ -137,6 +163,10 @@ func (s *Shell) RunLoop(r io.Reader) {
 		if s.Dev != nil && !s.Dev.Powered() {
 			fmt.Fprintf(s.Out, "\nConnection to host lost (%s).\n", s.Dev.UnavailableReason())
 			return
+		}
+		if !s.introShown {
+			s.introShown = true
+			s.showIntro()
 		}
 		fmt.Fprint(s.Out, s.PS1())
 		line, err := s.readLine()

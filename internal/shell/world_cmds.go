@@ -769,6 +769,7 @@ func cmdAssistGuide(s *Shell) int {
 		}
 		if job.Done {
 			fmt.Fprintf(s.Out, "%s is already completed. Use `job list` to choose the next task.\n", job.ID)
+			s.guideNextSteps()
 			return 0
 		}
 		verified, reason := s.W.VerifyJob(job)
@@ -788,7 +789,39 @@ func cmdAssistGuide(s *Shell) int {
 		return 0
 	}
 	fmt.Fprintln(s.Out, "Name resolution is working. Use `job list` to find available work.")
+	s.guideNextSteps()
 	return 0
+}
+
+// guideNextSteps is the post-DNS "what should I check next" the assistant
+// offers (§附: stepwise clues grounded in real state, not a canned tutorial).
+// Every suggestion reads live world state: the player's unverified jobs, the
+// assistant's trained tracks, and the LAN there is to explore. It never acts —
+// it only names commands the player may run.
+func (s *Shell) guideNextSteps() {
+	if s.User == nil {
+		return
+	}
+	fmt.Fprintln(s.Out)
+	// 1. work the player already took on but has not finished
+	for _, j := range s.W.Jobs.List {
+		if j.Done || j.Accepted != s.User.Name {
+			continue
+		}
+		if verified, reason := s.W.VerifyJob(j); !verified {
+			fmt.Fprintf(s.Out, "You accepted %s but it is not verified yet: %s. `job show %s` recalls the brief.\n", j.ID, reason, j.ID)
+			return
+		}
+	}
+	// 2. the assistant's own capability gap
+	if s.W.AssistantSkill() == 0 {
+		fmt.Fprintln(s.Out, "The assistant has no trained skill yet. `assist train recon` (or `security`) unlocks real capabilities on its node.")
+		return
+	}
+	// 3. explore and find more work
+	fmt.Fprintf(s.Out, "Explore your LAN: `scan %s0/24` lists reachable hosts (it is logged on the target), `ip addr` shows your own address.\n", core.LANSubnet)
+	fmt.Fprintln(s.Out, "Looking for work? `job list` shows open tasks; `recon <host>` reports what is reachable and vulnerable.")
+	fmt.Fprintln(s.Out, "Want detail on any command? `help <cmd>` explains purpose, usage and permissions.")
 }
 
 // ---- recon ----
@@ -1901,8 +1934,62 @@ func orNone(v string) string {
 
 // ---- help ----
 
+// cmdHelpEntry is the per-command detail §附 requires: purpose, usage and the
+// permission boundary. It is only consulted for commands a player explicitly
+// asks about with `help <cmd>`; the overview blob covers the rest.
+type cmdHelpEntry struct {
+	summary string
+	usage   string
+	perms   string
+}
+
+// helpEntries documents the commands a new player is most likely to ask about.
+// A command present in builtinTable but absent here still answers "registered"
+// (see cmdHelp) — this table adds depth, it is not the gate for existence.
+var helpEntries = map[string]cmdHelpEntry{
+	"ls":        {"list directory contents", "ls [-l] [PATH]", "read the path"},
+	"cd":        {"change the working directory", "cd [PATH]", "any logged-in user"},
+	"cat":       {"print file contents", "cat FILE...", "read each file"},
+	"cp":        {"copy files", "cp SRC DST", "read SRC, write DST"},
+	"mv":        {"move or rename a file", "mv SRC DST", "write DST (and remove SRC)"},
+	"rm":        {"remove files/directories", "rm [-r] PATH...", "write (delete) the path"},
+	"echo":      {"print arguments (use -e to interpret escapes)", "echo [-e] TEXT...", "any user"},
+	"grep":      {"filter lines matching a pattern", "grep PATTERN [FILE]", "read the file or stdin"},
+	"ps":        {"list processes on this device", "ps [aux]", "any user"},
+	"top":       {"process and load summary", "top", "any user"},
+	"kill":      {"end a process by PID", "kill PID", "own the process or be root"},
+	"ip":        {"show interfaces, routes or neighbors", "ip [addr|route|neigh]", "any user"},
+	"ping":      {"probe reachability of a host", "ping HOST", "any user"},
+	"dig":       {"resolve a DNS name", "dig NAME", "any user"},
+	"curl":      {"fetch a URL over the world's network", "curl URL", "reach the target"},
+	"ssh":       {"open a shell on a remote host", "ssh [user@]HOST [CMD]", "prove a key or password on the target"},
+	"scp":       {"copy a file over ssh", "cp SRC DST (host:path form)", "auth on the target"},
+	"ftp":       {"open an FTP session (ls/get/put)", "ftp [-A] [user@]host[:port]", "auth or anonymous if allowed"},
+	"systemctl": {"inspect or control a service", "systemctl [status|start|stop|...] SVC", "root to mutate"},
+	"apt":       {"install/remove packages (debian/ubuntu)", "apt [install|remove] PKG", "root"},
+	"apk":       {"install/remove packages (alpine)", "apk [add|del] PKG", "root"},
+	"passwd":    {"change an account password", "passwd [USER]", "own password (needs current); root for others"},
+	"su":        {"switch user", "su [USER]", "prove the target's password"},
+	"sudo":      {"run one command as root", "sudo CMD...", "be in the sudoers file"},
+	"fastfetch": {"show this device's real hardware and OS", "fastfetch", "any user"},
+	"free":      {"memory and swap usage from real state", "free [-m]", "any user"},
+	"df":        {"disk usage vs the real limit", "df [-h]", "any user"},
+	"assist":    {"the household assistant node", "assist [status|guide|tasks|train TRACK|defend on|off]", "the player who owns it"},
+	"job":       {"the work board — pays only against real state", "job [list|show|accept|pay|advance|delegate] ID", "any player; pay needs acceptance"},
+	"bank":      {"household wallet and transfers", "bank [balance|history|pay|transfer TO $AMT]", "own account"},
+	"player":    {"citizens and invitations", "player [list|invite NAME PASS [--own-home]]", "a registered player to invite"},
+	"scan":      {"port-scan a host or net (logged on the target)", "scan [HOST|NET]", "reach the target"},
+	"recon":     {"what is reachable AND vulnerable on a host", "recon HOST", "reach the target"},
+	"exploit":   {"apply a known vuln's effect to world state", "exploit HOST VULN-ID", "reach the target's service"},
+	"evidence":  {"the evidence graph behind your heat", "evidence", "any user"},
+	"trace":     {"walk evidence back to a provider (not a person)", "trace IP", "any user"},
+	"motd":      {"replay the welcome banner", "motd", "any user"},
+	"help":      {"list commands or detail one", "help [CMD]", "any user"},
+}
+
 func cmdHelp(s *Shell, args []string) int {
-	fmt.Fprint(s.Out, `NeoHome — a world that keeps running whether you are watching or not.
+	if len(args) == 0 {
+		fmt.Fprint(s.Out, `NeoHome — a world that keeps running whether you are watching or not.
 
 Start here:                assist guide (state-aware help)   job list
 Work on the machine:      ls cd cat cp mv rm mkdir touch echo find grep head tail
@@ -1947,10 +2034,44 @@ The world layer:
   evidence          the evidence graph behind your heat
   trace <ip>        walks the evidence back to a provider, not a person
 `)
-	return 0
+		return 0
+	}
+	name := args[0]
+	// §附: help must come from actually registered AND available commands.
+	if _, ok := builtinTable[name]; ok {
+		// a §33 tool is absent until its package is installed — say so, the
+		// way `command not found` does, rather than documenting a ghost.
+		if s.pkgCommandMissing(name) {
+			s.errf("help: %s: provided by an uninstalled package; install it first", name)
+			return 1
+		}
+		if e, ok := helpEntries[name]; ok {
+			fmt.Fprintf(s.Out, "%s — %s\n", name, e.summary)
+			if e.usage != "" {
+				fmt.Fprintf(s.Out, "usage: %s\n", e.usage)
+			}
+			if e.perms != "" {
+				fmt.Fprintf(s.Out, "permissions: %s\n", e.perms)
+			}
+			return 0
+		}
+		fmt.Fprintf(s.Out, "%s: registered command (run it with no arguments for its own usage).\n", name)
+		return 0
+	}
+	// a real virtual binary on this machine, just with no builtin behind it
+	if s.commandExists(name) {
+		fmt.Fprintf(s.Out, "%s: a virtual binary on this machine; no builtin help.\n", name)
+		return 0
+	}
+	s.errf("help: %s: command not found", name)
+	return 1
 }
 
 func cmdMotd(s *Shell, args []string) int {
+	// `motd` replays the welcome banner on demand (§附: re-viewable any time),
+	// then the static /etc/motd file if one exists — exactly what a real
+	// login shell does.
+	s.showIntro()
 	if data, ok := s.Dev.FS.Read("/etc/motd"); ok {
 		fmt.Fprint(s.Out, string(data))
 	}

@@ -4,7 +4,7 @@
 测试和 `WORKSTREAM_NOTES.md`。状态只有三种：**已完成**（有实现+测试+验证）、
 **部分**（能用但有明确缺口，缺口写出来）、**未开始**。
 
-验证基线：`go build` ✓、`go vet ./...` ✓、`go test ./...` 426 pass 0 fail、
+验证基线：`go build` ✓、`go vet ./...` ✓、`go test ./...` 431 pass 0 fail、
 `gofmt -l` 空。Live 端口 `:2024`/`:2222`，存档默认 `world.gob`。
 
 ## 阶段
@@ -72,7 +72,7 @@
 | 五十 | Phase 3 | 已完成 | 社区包/任务/Mirror+Server+Backup Builder/调度/多实例/拓扑图/webd 全落地，浏览器前端也已落地（`NEOHOME_WEB_ADDR`，活体验证见 `tools/_live_web_proof.mjs`） |
 | 五十一 | 不做事项 | 遵守中 | 无真执行/无容器/无等待墙/无随机灾害/无点击 exploit（vet+测试+评审共同保证） |
 | 五十二 | 最终目标 | 已完成 | 数字生活+攻防大循环全闭环；数据库运维（主从复制）、网站运营深度（真实流量+访问日志+`webstats`）、Assistant 训练深度（tracks 解锁真实能力+自动反制）均已补齐 |
-| 附 | 体验补充 | 部分 | `assist guide`+help 入口+低权限报错可诊断齐；引导链（DNS 故障教学流）靠 IRC/NPC 提示，无强制新手流（符合“可选可跳过”） |
+| 附 | 体验补充 | 已完成 | 登录欢迎横幅（设备/账号/世界时间/入口，`showIntro` 只在玩家 PC 首提示触发，`motd` 随时重看）；`help <命令>` 按注册表给用途/用法/权限，未知命令报 `command not found`、未装 §33 工具报 `uninstalled`；`assist guide` DNS 链保留 + 修完后给状态化下一步（未验证任务/`assist train`/`scan`/`recon`）；低权限报错可诊断齐。可选可跳过、不阻塞 |
 
 ## 缺口清单（2026-10-17 更新）——全部关闭
 

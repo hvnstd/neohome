@@ -2975,7 +2975,28 @@ Ownership: `internal/core/addr.go`、`internal/core/players.go`、
   Ownership: `internal/core/webtraffic.go`、`internal/shell/webstats_cmds.go`
   （新）、`internal/shell/world_cmds.go`（help 行）、`tests/webtraffic_test.go`。
 
+## §附 体验补充（onboarding 补全）
+
+Ownership: `internal/shell/shell.go`（`showIntro` + `introShown`）、
+`internal/shell/world_cmds.go`（`cmdHelp` 逐命令 + `helpEntries` 表、
+`cmdMotd` 重放、`cmdAssistGuide` 通用化 + `guideNextSteps`）、
+`tests/onboarding_test.go`（新）。纯 shell 层，不动 core/gob/tick。
+
+- 登录欢迎横幅：`showIntro` 在玩家自己 PC 的首提示触发（`isPlayerSession`
+  门控：`Players[user].PC == s.Dev`），打印设备/账号/LAN 地址/世界时间/
+  `help`·`assist guide`·`motd` 入口 + `/etc/motd`。嵌套 ssh 不触发（远端
+  已有自己的 `Welcome to`）。`motd` 命令随时重放。不阻塞、不代玩家操作。
+- `help <命令>`：`helpEntries` 表给 ~40 个主命令的用途/用法/权限；注册但
+  无详表的命令答“registered”；未知命令报 `command not found`；§33 工具
+  未装报 `uninstalled`（`pkgCommandMissing` 门）。无参 `help` 仍给总览。
+- `assist guide` 通用化：DNS 故障链逐字保留（既有测试不变），修完后
+  `guideNextSteps` 按真实状态给下一步——未验证的已接任务 / `assist train`
+  能力缺口 / `scan`·`ip addr`·`recon`·`job list` 探索。只报状态、只给命令，
+  不代行。
+- 5 个测试：欢迎横幅在玩家 PC 触发、在路由器不触发、`motd` 重放、
+  `help` 逐命令（已知/未知/未装）、`assist guide` 状态化下一步。
+
 ## 验证
 
-全量 `go test ./... -count=1` **426 pass / 0 fail**（~296s，`-timeout 1500s`），gofmt/vet
+全量 `go test ./... -count=1` **431 pass / 0 fail**（~299s，`-timeout 1500s`），gofmt/vet
 干净。
