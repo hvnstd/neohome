@@ -84,9 +84,10 @@
    （HTTP+WebSocket 终端）在 `internal/webtty`，与 telnet/ssh 共用
    `core.LandPlayer`/`BeginSession`，会话进 `who`/syslog/证据；`resize`
    经新内建 `stty`/`tty` 可读。接下来从第 2 项继续。
-2. **数据库高级语义**——`GRANT`/多用户权限、`JOIN`、事务、主从复制
-   （现为 all-TEXT 表+MySQL 报错码）。
-3. **真 3-way git merge**（分叉历史；现为 FF-only+拒绝并命名）。
+2. **数据库高级语义**——`GRANT`/`REVOKE`+多用户权限、`JOIN`、事务
+   已落地；主从复制仍缺（现为 all-TEXT 表+MySQL 报错码）。
+3. ~~**真 3-way git merge**~~ **已完成**——merge commit 双 parent + 递归
+   三路合并 + 冲突拒绝（`internal/core/git.go`）。
 4. **`.py` 前端**（bytecode 的脚本语法糖；PostInst 已改诚实文案）。
 5. **§21 的 LLM 唤醒调度**（规则层即 agent 层，MCP 只是透传）。
 6. **§29 更多虚拟漏洞**（现 3 个：vsftpd-anon-upload / ftp-cred-file /

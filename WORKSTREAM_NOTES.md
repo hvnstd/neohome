@@ -2835,3 +2835,15 @@ catalogue，是模型变更不是动词。`gofmt` 空、`vet` 干净、全量绿
   套实现，交叉验证协议）——页面→登录→升级→打字→`stty size`→`sudo`
   掩码→**从 telnet 门看 `who` 里有这条 webterm 会话**→关标签页→再看
   已消失。`gofmt` 空、`vet` 干净、全量绿（228.8 s，0 fail）。
+
+## Workstream notes — 真 3-way git merge (2026-10-17)
+
+Ownership: `internal/core/git.go` (GitMerge, mergeBase, commitParents, GitCommitInfo
+second parent), `tests/git_test.go`. Adds real merge commits with two parents,
+three-way reconciliation (base = common ancestor), and honest conflict refusal.
+
+## Workstream notes — DB 高级语义 (2026-10-17)
+
+Ownership: `internal/core/db.go`. Adds INNER/CROSS JOIN in SELECT, GRANT/REVOKE
+with a per-database `.grants` file feeding `mysqlCanUse`, and BEGIN/COMMIT/
+ROLLBACK/START TRANSACTION verbs. Replication remains unimplemented.

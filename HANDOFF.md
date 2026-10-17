@@ -28,8 +28,8 @@ NeoHome = 一个持续运行的 Go 世界模拟器：家庭网络 + VPS + 互联
 
 PROGRESS.md 末尾的“缺口清单”是权威版，摘要：
 
-1. 真 3-way git merge（现 FF-only+拒绝并命名）
-2. 数据库高级语义：GRANT/JOIN/事务/复制（现 all-TEXT 表+MySQL 报错码）
+1. ~~真 3-way git merge~~ **已完成**（merge commit + 递归合并）
+2. 数据库高级语义：GRANT/JOIN/事务 已落地；复制仍缺
 3. `.py` 前端（bytecode 脚本糖；PostInst 已改诚实文案）
 4. §21 LLM 唤醒调度（规则层即 agent 层；MCP 只是透传）
 5. §29 更多虚拟漏洞（现 3 个）
