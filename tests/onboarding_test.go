@@ -1,12 +1,50 @@
 package tests
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"neohome/internal/core"
 	"neohome/internal/shell"
 )
+
+// The world has no pty, so the ONLCR translation a real terminal relies on is
+// done by the doors via shell.CRLF. A bare \n must become \r\n, an existing
+// \r\n must pass through untouched, and a \r\n split across two Write calls
+// must not be double-converted.
+func TestCRLFWriterNormalizesLineEndings(t *testing.T) {
+	var b strings.Builder
+	w := shell.CRLF(&b)
+	fmt.Fprint(w, "line one\n")
+	fmt.Fprint(w, "already\r\n")
+	fmt.Fprint(w, "split\r")
+	fmt.Fprint(w, "\n")
+	got := b.String()
+	want := "line one\r\nalready\r\nsplit\r\n"
+	if got != want {
+		t.Fatalf("CRLF writer produced %q, want %q", got, want)
+	}
+}
+
+// Multi-line shell output (the `help` screen) over a terminal transport must
+// carry CRLF on every line: a surviving bare \n is exactly what staircases a
+// real terminal emulator, because it moves down a row but keeps the column.
+func TestHelpOutputCarriesCRLFOverATerminal(t *testing.T) {
+	w := core.NewWorld()
+	pc := w.Devices["pc-alex"]
+	u := pc.FindUser("alex")
+	raw := &bufOut{}
+	sh := shell.NewShell(w, pc, u, shell.CRLF(raw), "10.77.1.11", "xterm")
+	sh.ExecLine("help")
+	got := raw.String()
+	if !strings.Contains(got, "\r\n") {
+		t.Fatalf("help over a terminal transport should emit CRLF:\n%q", got)
+	}
+	if stripped := strings.ReplaceAll(got, "\r\n", ""); strings.Contains(stripped, "\n") {
+		t.Fatalf("a bare \\n survived CRLF normalization:\n%q", got)
+	}
+}
 
 // §附: a player's first connection should show a short welcome naming the
 // device, account, world time and the help/guide entries — like a real login

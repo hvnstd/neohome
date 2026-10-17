@@ -497,7 +497,20 @@ const pageJS = `
     ev.preventDefault();
   });
   window.addEventListener("resize", function () { send({ t: "resize", cols: cols(), rows: rows() }); });
-  document.getElementById("screen").addEventListener("click", function () { inputEl.focus(); });
+  // Clicking the terminal focuses the hidden input so the keyboard — and the
+  // on-screen one on touch — has somewhere to land. While the login overlay is
+  // up it owns focus instead: #login is a child of #screen, so without this
+  // guard a click on the account/password field bubbles here and immediately
+  // refocuses the hidden textarea, stealing the caret the user just clicked
+  // into (and the document keydown handler then swallows the keystrokes because
+  // login is still showing — which is why the fields could not take a mouse
+  // click, only a Tab).
+  document.getElementById("screen").addEventListener("click", function (ev) {
+    if (loginEl.style.display !== "none") return;
+    var t = ev.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "BUTTON" || t.isContentEditable)) return;
+    inputEl.focus();
+  });
   document.getElementById("disc").addEventListener("click", function () {
     if (ws) ws.close(1000, "bye");
   });
@@ -531,6 +544,10 @@ const pageJS = `
     }).catch(function (e) { errEl.textContent = "cannot reach the world: " + e; });
   });
 
-  inputEl.focus();
+  // Initial focus: a fresh page shows the login form, so land the caret in the
+  // account field. Focusing the hidden textarea here is what left the form
+  // unable to take a mouse click. Once connected, the terminal owns focus.
+  if (loginEl.style.display !== "none") { document.getElementById("u").focus(); }
+  else { inputEl.focus(); }
 })();
 `

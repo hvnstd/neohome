@@ -13,6 +13,36 @@ import (
 // Cmd is one builtin: it MUST read or write real world state.
 type Cmd func(s *Shell, args []string) int
 
+// crlfWriter performs the ONLCR translation a real pty applies to output: a
+// bare \n becomes \r\n so terminal emulators return to column 0 instead of
+// staircasing each wrapped line. An existing \r\n passes through untouched.
+// It remembers the last byte across Write calls so a \r\n split across two
+// writes is never double-converted. The world has no pty, so the three doors
+// (telnet / ssh / web) apply this at the transport boundary — exactly where a
+// real terminal would — leaving Shell.Out raw for tests and captures.
+type crlfWriter struct {
+	w      io.Writer
+	lastCR bool
+}
+
+// CRLF wraps a terminal transport so shell output carries proper line endings.
+func CRLF(w io.Writer) io.Writer { return &crlfWriter{w: w} }
+
+func (c *crlfWriter) Write(p []byte) (int, error) {
+	b := make([]byte, 0, len(p)+8)
+	for _, ch := range p {
+		if ch == '\n' && !c.lastCR {
+			b = append(b, '\r')
+		}
+		b = append(b, ch)
+		c.lastCR = ch == '\r'
+	}
+	if _, err := c.w.Write(b); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 // Shell: a game shell session bound to (device, user).
 type Shell struct {
 	// capture collects what a session's shell printed, so a detached tmux session

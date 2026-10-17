@@ -105,7 +105,10 @@ func RunSession(w *core.World, d *core.Device, u *core.User, c *Conn, opts Sessi
 	defer end()
 
 	c.SetIdleTimeout(opts.idle())
-	out := &wsOutput{s: s}
+	// ONLCR at the transport, like a real pty: the browser's terminal emulator
+	// gets \r\n for every bare \n the shell prints, so help text and tables do
+	// not staircase down the screen.
+	out := shell.CRLF(&wsOutput{s: s})
 
 	fmt.Fprintf(out, "\r\nWelcome, %s. NeoHome web terminal — %s as %s.\r\n", u.Name, d.Hostname, u.Name)
 	if ip, ok, _ := d.DNSAnswer("mirror.neohome.example"); ok {

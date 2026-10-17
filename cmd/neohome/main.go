@@ -110,34 +110,37 @@ func acceptLoop(ln net.Listener, serve func(net.Conn)) {
 func handle(conn net.Conn, w *core.World) {
 	defer conn.Close()
 	bufrd := bufio.NewReader(conn)
-	fmt.Fprint(conn, "\r\n=== NeoHome terminal (telnet) ===\r\n\n")
-	fmt.Fprint(conn, "login: ")
+	// the transport does the ONLCR translation a real pty would: bare \n from
+	// the shell becomes \r\n so the client's terminal does not staircase.
+	out := shell.CRLF(conn)
+	fmt.Fprint(out, "\r\n=== NeoHome terminal (telnet) ===\r\n\n")
+	fmt.Fprint(out, "login: ")
 	login, _ := bufrd.ReadString('\n')
 	login = strings.TrimSpace(login)
-	fmt.Fprint(conn, "password: ")
+	fmt.Fprint(out, "password: ")
 	pass, _ := bufrd.ReadString('\n')
 	pass = strings.TrimSpace(pass)
 
 	p := w.Players[login]
 	if p == nil || p.MCPOnly || p.Pass == "" || p.Pass != pass {
-		fmt.Fprintln(conn, "auth failed")
+		fmt.Fprintln(out, "auth failed")
 		return
 	}
 	w.Lock()
 	pc, u, note, err := w.LandPlayer(login)
 	w.Unlock()
 	if err != nil {
-		fmt.Fprintf(conn, "%v\r\n", err)
+		fmt.Fprintf(out, "%v\r\n", err)
 		return
 	}
 	if note != "" {
-		fmt.Fprintf(conn, "%s\r\n", note)
+		fmt.Fprintf(out, "%s\r\n", note)
 	}
-	fmt.Fprintf(conn, "Welcome, %s. Type `help` or just start typing.\r\n", login)
-	fmt.Fprintf(conn, "Your DNS is %s — try `dig mirror.neohome.example`.\r\n",
+	fmt.Fprintf(out, "Welcome, %s. Type `help` or just start typing.\r\n", login)
+	fmt.Fprintf(out, "Your DNS is %s — try `dig mirror.neohome.example`.\r\n",
 		must(pc.DNSAnswer("mirror.neohome.example")))
 
-	s := shell.NewShell(w, pc, u, conn, conn.RemoteAddr().String(), "xterm-256color")
+	s := shell.NewShell(w, pc, u, out, conn.RemoteAddr().String(), "xterm-256color")
 	s.RunLoop(bufrd)
 }
 

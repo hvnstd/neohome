@@ -2996,7 +2996,30 @@ Ownership: `internal/shell/shell.go`（`showIntro` + `introShown`）、
 - 5 个测试：欢迎横幅在玩家 PC 触发、在路由器不触发、`motd` 重放、
   `help` 逐命令（已知/未知/未装）、`assist guide` 状态化下一步。
 
+## 终端渲染修复（telnet/ssh/web 三门）
+
+Ownership: `internal/shell/shell.go`（`CRLF` ONLCR writer）、
+`cmd/neohome/main.go`（telnet 门）、`cmd/neohome/ssh.go`（ssh 门）、
+`internal/webtty/session.go`（web 门）、`internal/webtty/page.go`（登录聚焦）、
+`tests/onboarding_test.go`（+2 测试）。纯传输/前端层，不动 core/gob/tick。
+
+- 阶梯输出（staircase）：这个世界没有 pty，真实终端靠 pty 的 ONLCR 把裸
+  `\n` 翻成 `\r\n`；shell 直接往传输层写字节，裸 `\n` 原样到达终端模拟器
+  ——只下移一行、不回列 0，多行输出（`help` 最明显）就成阶梯。修复：
+  `shell.CRLF(w)` 在传输边界做 ONLCR（裸 `\n`→`\r\n`，已有 `\r\n` 透传，
+  跨 Write 拆开的 `\r`+`\n` 不重复转换），三个门各包一层；世界内嵌套
+  ssh/telnet 复用外层 `s.Out`（remote.go），一并覆盖。`Shell.Out` 本身保持
+  原始，测试/捕获不受影响。live 验证：telnet 抓字节 55/55 行皆 CRLF。
+- 网页登录框无法用鼠标聚焦：`#login` 是 `#screen` 的子元素，`#screen` 的
+  click 处理器无条件 `inputEl.focus()`（隐藏 textarea），于是点击账号/密码
+  框时事件冒泡到 `#screen`、立刻把焦点抢回隐藏 textarea，document 级 keydown
+  又因登录态早退吞掉按键——鼠标永远聚焦不了登录框（只有 Tab 能）。修复：
+  click 处理器在登录浮层可见时直接 return，且跳过 INPUT/TEXTAREA/BUTTON 等
+  交互元素；首屏焦点落到账号框而非隐藏 textarea。
+- 2 个测试：`TestCRLFWriterNormalizesLineEndings`（裸\n/已有\r\n/跨写拆分）、
+  `TestHelpOutputCarriesCRLFOverATerminal`（`help` 输出无裸 `\n` 残留）。
+
 ## 验证
 
-全量 `go test ./... -count=1` **431 pass / 0 fail**（~299s，`-timeout 1500s`），gofmt/vet
+全量 `go test ./... -count=1` **433 pass / 0 fail**（~303s，`-timeout 1500s`），gofmt/vet
 干净。

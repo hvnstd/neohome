@@ -137,6 +137,9 @@ func serveSSH(nConn net.Conn, w *core.World, cfg *ssh.ServerConfig) {
 // house is dark — is decided in one place in the world (core.LandPlayer), so
 // the three doors cannot land the same player in different places.
 func runPlayerSession(w *core.World, who, ip string, out io.Writer, in io.Reader) {
+	// ONLCR at the transport, like a real pty: bare \n from the shell becomes
+	// \r\n so the client's terminal does not staircase multi-line output.
+	out = shell.CRLF(out)
 	w.Lock()
 	pc, u, note, err := w.LandPlayer(who)
 	w.Unlock()
